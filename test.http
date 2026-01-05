@@ -3,10 +3,10 @@ POST http://localhost:3000/users
 Content-Type: application/json
 
 {
-  "email": "admin@church.com",
+  "email": "adminn@church.com",
   "password": "securepassword123",
-  "firstName": "John",
-  "lastName": "Doe"
+  "firstName": "Johnn",
+  "lastName": "Doen"
 }
 
 ### 2. Login (Get Token)
@@ -74,3 +74,15 @@ Content-Type: application/json
 
 ### 9. Get Sermon Library
 GET http://localhost:3000/media
+
+### 10. Start a Chat Conversation
+# You need two real User IDs here.
+# User ID 1: Copy from your "Login" response
+# User ID 2: Copy from your "Create User" response (create a second user if needed)
+POST http://localhost:3000/chat/start
+Content-Type: application/json
+
+{
+  "userId1": "9daa0bdb-6174-4580-9f9d-2f4304161c93",
+  "userId2": "c052ada7-0781-4994-8e3c-40940fbe6e9c"
+}

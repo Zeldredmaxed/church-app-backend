@@ -8,6 +8,8 @@ import { TagsModule } from './tags/tags.module';
 import { DonationsModule } from './donations/donations.module';
 import { MediaModule } from './media/media.module';
 import { PrismaService } from './prisma/prisma.service';
+import { ChatModule } from './chat/chat.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -16,7 +18,7 @@ import { PrismaService } from './prisma/prisma.service';
     EventsModule, 
     TagsModule, 
     DonationsModule, 
-    MediaModule // <--- MAKE SURE THIS IS HERE!
+    MediaModule, ChatModule, NotificationsModule // <--- MAKE SURE THIS IS HERE!
   ],
   controllers: [AppController],
   providers: [AppService, PrismaService],

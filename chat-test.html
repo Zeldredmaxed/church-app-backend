@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Church Chat Test</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        .box { border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
+        #messages { height: 300px; overflow-y: scroll; border: 1px solid #333; margin-top: 10px; padding: 10px;}
+        .msg { padding: 5px; border-bottom: 1px solid #eee; }
+    </style>
+</head>
+<body>
+    <h2>🔔 Real-Time Church Chat</h2>
+    
+    <div class="box">
+        <label>My User ID:</label>
+        <input type="text" id="userId" placeholder="Paste User ID here" style="width: 300px;">
+        <br><br>
+        <label>Conversation ID:</label>
+        <input type="text" id="convId" placeholder="Paste Conversation ID here" style="width: 300px;">
+        <br><br>
+        <button onclick="joinChat()">1. Join Room</button>
+    </div>
+
+    <div class="box">
+        <input type="text" id="messageInput" placeholder="Type a message..." style="width: 300px;">
+        <button onclick="sendMessage()">2. Send Message</button>
+    </div>
+
+    <div id="messages"></div>
+
+    <script>
+        const socket = io('http://localhost:3000');
+
+        socket.on('connect', () => {
+            console.log("Connected to server!");
+            addLog("🟢 Connected to Server");
+        });
+
+        socket.on('newMessage', (msg) => {
+            console.log("New Message received:", msg);
+            addLog(`📩 <b>${msg.sender.firstName}:</b> ${msg.content}`);
+        });
+
+        function joinChat() {
+            const convId = document.getElementById('convId').value;
+            socket.emit('joinRoom', convId);
+            addLog(`Try joining room: ${convId}`);
+        }
+
+        function sendMessage() {
+            const userId = document.getElementById('userId').value;
+            const convId = document.getElementById('convId').value;
+            const content = document.getElementById('messageInput').value;
+
+            socket.emit('sendMessage', {
+                conversationId: convId,
+                userId: userId,
+                content: content
+            });
+            document.getElementById('messageInput').value = '';
+        }
+
+        function addLog(text) {
+            const div = document.createElement('div');
+            div.className = 'msg';
+            div.innerHTML = text;
+            document.getElementById('messages').appendChild(div);
+        }
+    </script>
+</body>
+</html>

@@ -31,6 +31,9 @@ model User {
 
   tags        UserTag[]
 
+  conversations Participant[]
+  messages      Message[]
+
   // We will add relationships here later (like messages, donations, etc.)
 }
 
@@ -86,4 +89,35 @@ model Media {
   url         String   // e.g. "https://youtube.com/watch?v=..."
   speaker     String   // e.g. "Pastor John"
   publishedAt DateTime @default(now())
+}
+
+model Conversation {
+  id        String   @id @default(uuid())
+  name      String?  // Optional: "Youth Group Chat"
+  isGroup   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  
+  messages     Message[]
+  participants Participant[]
+}
+
+model Participant {
+  id             String   @id @default(uuid())
+  userId         String
+  conversationId String
+  joinedAt       DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id])
+  conversation Conversation @relation(fields: [conversationId], references: [id])
+}
+
+model Message {
+  id             String   @id @default(uuid())
+  content        String
+  senderId       String
+  conversationId String
+  createdAt      DateTime @default(now())
+
+  sender       User         @relation(fields: [senderId], references: [id])
+  conversation Conversation @relation(fields: [conversationId], references: [id])
 }
