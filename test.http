@@ -1,0 +1,76 @@
+### 1. Create a User (Register)
+POST http://localhost:3000/users
+Content-Type: application/json
+
+{
+  "email": "admin@church.com",
+  "password": "securepassword123",
+  "firstName": "John",
+  "lastName": "Doe"
+}
+
+### 2. Login (Get Token)
+POST http://localhost:3000/auth/login
+Content-Type: application/json
+
+{
+  "email": "pastor@church.com",
+  "password": "securepassword123"
+}
+
+### 3. Create an Event
+POST http://localhost:3000/events
+Content-Type: application/json
+
+{
+  "title": "Sunday Service",
+  "description": "Join us for worship and the word.",
+  "startTime": "2026-01-11T10:00:00Z",
+  "endTime": "2026-01-11T12:00:00Z",
+  "location": "Main Sanctuary"
+}
+
+### 4. Get All Events
+GET http://localhost:3000/events
+
+### 5. Create a Tag
+POST http://localhost:3000/tags
+Content-Type: application/json
+
+{
+  "name": "Worship Team",
+  "color": "#FF5733"
+}
+
+### 6. Assign User to Tag
+# REPLACE THE IDs BELOW with real IDs from your previous responses!
+# Tag ID comes from the response of request #5
+# User ID comes from the response of request #2 (Login)
+POST http://localhost:3000/tags/REPLACE_WITH_TAG_ID/users
+Content-Type: application/json
+
+{
+  "userId": "REPLACE_WITH_USER_ID"
+}
+
+### 7. Initiate a Guest Donation
+POST http://localhost:3000/donations
+Content-Type: application/json
+
+{
+  "amount": 50
+}
+
+### 8. Upload a Sermon
+POST http://localhost:3000/media
+Content-Type: application/json
+
+{
+  "title": "Walking in Faith",
+  "type": "SERMON",
+  "url": "https://www.youtube.com/watch?v=example123",
+  "speaker": "Pastor John"
+}
+
+### 9. Get Sermon Library
+GET http://localhost:3000/media

@@ -1,0 +1,89 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// 1. User Roles
+enum Role {
+  ADMIN     // Pastor / Staff
+  LEADER    // Ministry Leader
+  MEMBER    // Regular User
+  GUEST     // Non-registered or limited
+}
+
+// 2. The User Table
+model User {
+  id          String   @id @default(uuid()) // Unique ID like 'a1b2-c3d4'
+  email       String   @unique
+  password    String   // We will encrypt this later
+  firstName   String
+  lastName    String
+  role        Role     @default(MEMBER)
+  avatarUrl   String?  // The ? means it can be empty
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tags        UserTag[]
+
+  // We will add relationships here later (like messages, donations, etc.)
+}
+
+  // ... keep everything above this line ...
+
+model Event {
+  id          String   @id @default(uuid())
+  title       String
+  description String?
+  startTime   DateTime
+  endTime     DateTime
+  location    String
+  imageUrl    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Tag {
+  id    String @id @default(uuid())
+  name  String
+  color String // e.g., "#FF0000" for UI styling
+  
+  // A tag has many users
+  users UserTag[]
+}
+
+// This is the "Link" table connecting Users and Tags
+model UserTag {
+  userId String
+  tagId  String
+  
+  user   User @relation(fields: [userId], references: [id])
+  tag    Tag  @relation(fields: [tagId], references: [id])
+
+  @@id([userId, tagId]) // Prevents adding the same user to a tag twice
+}
+
+model Donation {
+  id        String   @id @default(uuid())
+  amount    Int      // Stored in CENTS (e.g. $10.00 = 1000)
+  currency  String   @default("usd")
+  status    String   // "pending", "succeeded"
+  paymentId String   // The Stripe ID (pi_123...)
+  userId    String?  // Optional: Guests can give without login
+  
+  createdAt DateTime @default(now())
+}
+
+model Media {
+  id          String   @id @default(uuid())
+  title       String
+  type        String   // "SERMON", "LIVESTREAM", "PODCAST"
+  url         String   // e.g. "https://youtube.com/watch?v=..."
+  speaker     String   // e.g. "Pastor John"
+  publishedAt DateTime @default(now())
+}
