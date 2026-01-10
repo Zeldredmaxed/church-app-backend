@@ -1,0 +1,12 @@
+POST http://localhost:3000/media
+Content-Type: application/json
+
+{
+  "title": "Sunday Worship Experience",
+  "type": "LIVESTREAM",
+  "url": "https://youtu.be/VuuNthX5ZxI?si=2IkE7_RcQmtMqux9",
+  "speaker": "Pastor John"
+}
+
+### Delete a Video (Replace ID below)
+DELETE http://localhost:3000/media/ac2b1cc8-af08-4146-8b5d-369842c1829b

@@ -31,4 +31,10 @@ export class EventsController {
   remove(@Param('id') id: string) {
     return this.eventsService.remove(id);
   }
+
+  // POST /events/:id/register
+  @Post(':id/register')
+  register(@Param('id') eventId: string, @Body() body: { userId: string; answer: string }) {
+    return this.eventsService.register(eventId, body.userId, body.answer);
+  }
 }

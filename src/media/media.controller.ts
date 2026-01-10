@@ -19,16 +19,19 @@ export class MediaController {
 
   @Get(':id')
   findOne(@Param('id') id: string) {
-    return this.mediaService.findOne(+id);
+    // REMOVED the "+" sign here
+    return this.mediaService.findOne(id);
   }
 
   @Patch(':id')
   update(@Param('id') id: string, @Body() updateMediaDto: UpdateMediaDto) {
-    return this.mediaService.update(+id, updateMediaDto);
+    // REMOVED the "+" sign here
+    return this.mediaService.update(id, updateMediaDto);
   }
 
   @Delete(':id')
   remove(@Param('id') id: string) {
-    return this.mediaService.remove(+id);
+    // REMOVED the "+" sign here
+    return this.mediaService.remove(id);
   }
 }

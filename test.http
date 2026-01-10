@@ -66,10 +66,10 @@ POST http://localhost:3000/media
 Content-Type: application/json
 
 {
-  "title": "Walking in Faith",
+  "title": "What Love Is",
   "type": "SERMON",
-  "url": "https://www.youtube.com/watch?v=example123",
-  "speaker": "Pastor John"
+  "url": "https://www.youtube.com/live/6H-qF_InLFE?si=IoRg3_u2kJphJli7",
+  "speaker": "Pastor Jeffrey Richards"
 }
 
 ### 9. Get Sermon Library
@@ -85,4 +85,17 @@ Content-Type: application/json
 {
   "userId1": "9daa0bdb-6174-4580-9f9d-2f4304161c93",
   "userId2": "c052ada7-0781-4994-8e3c-40940fbe6e9c"
+}
+
+### Create Event with Question
+POST http://localhost:3000/events
+Content-Type: application/json
+
+{
+  "title": "Family Picnic",
+  "description": "Food and fun.",
+  "startTime": "2026-06-12T12:00:00Z",
+  "endTime": "2026-06-12T16:00:00Z",
+  "location": "Central Park",
+  "registrationQuestion": "How many children are you bringing?"
 }

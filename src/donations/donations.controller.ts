@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query } from '@nestjs/common';
 import { DonationsService } from './donations.service';
 import { CreateDonationDto } from './dto/create-donation.dto';
 
@@ -8,11 +8,17 @@ export class DonationsController {
 
   @Post()
   create(@Body() createDonationDto: CreateDonationDto) {
-    return this.donationsService.createPaymentIntent(createDonationDto);
+    // Extract amount and userId from DTO
+    const amountInDollars = createDonationDto.amount || 0;
+    const userId = createDonationDto.userId || 'guest';
+    return this.donationsService.createPaymentIntent(amountInDollars, userId);
   }
 
   @Get()
-  findAll() {
+  findAll(@Query('userId') userId?: string) {
+    if (userId) {
+      return this.donationsService.findByUser(userId);
+    }
     return this.donationsService.findAll();
   }
 }

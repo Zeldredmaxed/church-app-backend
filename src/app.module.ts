@@ -10,6 +10,13 @@ import { MediaModule } from './media/media.module';
 import { PrismaService } from './prisma/prisma.service';
 import { ChatModule } from './chat/chat.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { AnnouncementsModule } from './announcements/announcements.module';
+import { PrismaModule } from './prisma/prisma.module';
+import { PrayerRequestsModule } from './prayer-requests/prayer-requests.module';
+import { SystemSettingsModule } from './system-settings/system-settings.module';
+import { FeedModule } from './feed/feed.module';
+import { BibleModule } from './bible/bible.module';
+import { AiModule } from './ai/ai.module';
 
 @Module({
   imports: [
@@ -18,7 +25,7 @@ import { NotificationsModule } from './notifications/notifications.module';
     EventsModule, 
     TagsModule, 
     DonationsModule, 
-    MediaModule, ChatModule, NotificationsModule // <--- MAKE SURE THIS IS HERE!
+    MediaModule, ChatModule, NotificationsModule, PrismaModule, AnnouncementsModule, PrayerRequestsModule, SystemSettingsModule, FeedModule, BibleModule, AiModule // <--- MAKE SURE THIS IS HERE!
   ],
   controllers: [AppController],
   providers: [AppService, PrismaService],
