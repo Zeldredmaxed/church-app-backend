@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Body, Patch, Param, Delete, UseInterceptors, UploadedFile, Query } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
+import { createClient } from '@supabase/supabase-js';
 import { extname } from 'path';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -8,7 +8,19 @@ import { UpdateUserDto } from './dto/update-user.dto';
 
 @Controller('users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  private supabase;
+
+  constructor(private readonly usersService: UsersService) {
+    // Initialize Supabase client
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
+    
+    if (!supabaseUrl || !supabaseServiceKey) {
+      console.warn('Supabase credentials not found. File uploads will fail.');
+    } else {
+      this.supabase = createClient(supabaseUrl, supabaseServiceKey);
+    }
+  }
 
   @Post()
   create(@Body() createUserDto: CreateUserDto) {
@@ -57,19 +69,37 @@ export class UsersController {
 
   // POST /users/upload
   @Post('upload')
-  @UseInterceptors(FileInterceptor('file', {
-    storage: diskStorage({
-      destination: './uploads', // Save to this folder
-      filename: (req, file, cb) => {
-        // Generate a random name (e.g. random123.jpg) so files don't clash
-        const randomName = Array(32).fill(null).map(() => (Math.round(Math.random() * 16)).toString(16)).join('');
-        cb(null, `${randomName}${extname(file.originalname)}`);
-      },
-    }),
-  }))
-  uploadFile(@UploadedFile() file: Express.Multer.File) {
-    // Return the URL so the frontend can save it
-    return { url: `/uploads/${file.filename}` };
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadFile(@UploadedFile() file: Express.Multer.File) {
+    if (!file) {
+      throw new Error('No file uploaded');
+    }
+
+    if (!this.supabase) {
+      throw new Error('Supabase not initialized. Please check SUPABASE_URL and SUPABASE_SERVICE_KEY environment variables.');
+    }
+
+    // Generate a unique filename (timestamp + random)
+    const timestamp = Date.now();
+    const randomStr = Array(32).fill(null).map(() => (Math.round(Math.random() * 16)).toString(16)).join('');
+    const filename = `${timestamp}-${randomStr}${extname(file.originalname)}`;
+
+    // Upload to Supabase Storage
+    const { data, error } = await this.supabase.storage
+      .from('uploads')
+      .upload(filename, file.buffer, {
+        contentType: file.mimetype,
+      });
+
+    if (error) {
+      throw new Error(`Failed to upload file: ${error.message}`);
+    }
+
+    // Construct the public URL
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const publicUrl = `${supabaseUrl}/storage/v1/object/public/uploads/${filename}`;
+
+    return { url: publicUrl };
   }
 
   // POST /users/push-token
