@@ -17,13 +17,19 @@ export class AdminAgentService {
   }
 
   async processCommand(adminId: string, command: string) {
-    // 1. Define the Tools the AI can use
+    // 1. LOOKUP: Find out who is asking (Get Real Name)
+    const adminUser = await this.usersService.findOne(adminId);
+    const realAuthorName = adminUser 
+      ? `${adminUser.firstName} ${adminUser.lastName}` 
+      : 'Admin';
+
+    // 2. Define the Tools
     const tools = [
       {
         type: 'function',
         function: {
           name: 'create_announcement',
-          description: 'Creates a public announcement for the church board.',
+          description: 'Creates a public announcement.',
           parameters: {
             type: 'object',
             properties: {
@@ -43,7 +49,7 @@ export class AdminAgentService {
           parameters: {
             type: 'object',
             properties: {
-              targetName: { type: 'string', description: 'The first or last name of the person' },
+              targetName: { type: 'string' },
               message: { type: 'string' },
             },
             required: ['targetName', 'message'],
@@ -52,11 +58,11 @@ export class AdminAgentService {
       },
     ];
 
-    // 2. Ask AI to plan the action
+    // 3. Ask AI
     const runner = await this.openai.chat.completions.create({
-      model: 'gpt-4o', // Smartest model for logic
+      model: 'gpt-4o', // or gpt-3.5-turbo
       messages: [
-        { role: 'system', content: 'You are a church admin assistant. Execute the user\'s request using the available tools.' },
+        { role: 'system', content: `You are a church admin assistant acting on behalf of ${realAuthorName}.` },
         { role: 'user', content: command },
       ],
       tools: tools as any,
@@ -69,42 +75,38 @@ export class AdminAgentService {
       return { success: false, message: "I didn't understand which action to take." };
     }
 
-    // 3. Execute the specific tool
+    // 4. Execute Logic
     const args = JSON.parse((toolCall as any).function.arguments);
     const actionName = (toolCall as any).function.name;
 
     if (actionName === 'create_announcement') {
       await this.announcementsService.create({
         ...args,
-        author: 'Pastor (AI)',
+        author: realAuthorName, // <--- HERE IS THE FIX (Uses real name)
         isPinned: args.isPinned || false,
       });
-      return { success: true, message: `Announcement "${args.title}" created.` };
+      return { success: true, message: `Announcement "${args.title}" created as ${realAuthorName}.` };
     }
 
     if (actionName === 'send_direct_message') {
-      // Step A: Find the user ID based on the name
-      const users = await this.usersService.findAll(); // In a real app, use a search query for efficiency
+      const users = await this.usersService.findAll();
       const targetUser = users.find(u => 
         u.firstName.toLowerCase().includes(args.targetName.toLowerCase()) || 
         u.lastName.toLowerCase().includes(args.targetName.toLowerCase())
       );
 
-      if (!targetUser) {
-        return { success: false, message: `Could not find a user named "${args.targetName}".` };
-      }
+      if (!targetUser) return { success: false, message: `User "${args.targetName}" not found.` };
 
-      // Step B: Create/Find Conversation
+      // Create/Get chat
       const conversation = await this.chatService.createConversation(adminId, targetUser.id);
+      const convId = (conversation as any).id || conversation; // Handle varying return types
       
-      // Step C: Send Message
-      // Check if conversation returned an ID or object (based on previous code structure)
-      const convId = (conversation as any).id || conversation; 
+      // Send message (This automatically uses adminId as sender, so name is correct in UI)
       await this.chatService.saveMessage(convId, adminId, args.message);
 
       return { success: true, message: `Message sent to ${targetUser.firstName}.` };
     }
 
-    return { success: false, message: "Action not implemented yet." };
+    return { success: false, message: "Action not implemented." };
   }
 }
