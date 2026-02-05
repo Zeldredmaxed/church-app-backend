@@ -7,26 +7,41 @@ export class NotificationsService implements OnModuleInit {
   constructor(private readonly prisma: PrismaService) {}
 
   onModuleInit() {
-    // Prevent double initialization
-    if (admin.apps.length) return;
+    console.log('[FIREBASE] Checking credentials...');
 
-    // THE FIX: Read from Env Vars and fix the "Newline" bug
-    const privateKey = process.env.FIREBASE_PRIVATE_KEY
-      ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') // Fix newlines
-      : undefined;
-
-    if (!privateKey || !process.env.FIREBASE_CLIENT_EMAIL) {
-      console.warn('⚠️ Firebase Credentials missing. Notifications will fail.');
+    // 1. Check if already running
+    if (admin.apps.length) {
+      console.log('[FIREBASE] ✅ App already initialized.');
       return;
     }
 
-    admin.initializeApp({
-      credential: admin.credential.cert({
-        projectId: process.env.FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: privateKey,
-      }),
-    });
+    // 2. Debug the variables (Don't print the full key for security!)
+    const hasEmail = !!process.env.FIREBASE_CLIENT_EMAIL;
+    const hasKey = !!process.env.FIREBASE_PRIVATE_KEY;
+    const hasProject = !!process.env.FIREBASE_PROJECT_ID;
+
+    console.log(`[FIREBASE] Vars present? Email: ${hasEmail}, Key: ${hasKey}, Project: ${hasProject}`);
+
+    if (!hasEmail || !hasKey || !hasProject) {
+      console.error('[FIREBASE] ❌ CRITICAL: Missing Environment Variables. Skipping Init.');
+      return;
+    }
+
+    // 3. Fix Newlines
+    const privateKey = process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n');
+
+    try {
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: privateKey,
+        }),
+      });
+      console.log('[FIREBASE] 🚀 Successfully Initialized!');
+    } catch (error) {
+      console.error('[FIREBASE] 💥 Initialization Failed:', error);
+    }
   }
 
   // 1. Save Token
