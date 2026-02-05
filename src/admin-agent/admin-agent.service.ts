@@ -120,12 +120,12 @@ export class AdminAgentService {
       // 3. Exact Match Found (Length is 1)
       const targetUser = matchingUsers[0];
 
-      // Create/Get chat
+      // Create/Get chat (Now guarantees participants exist)
       const conversation = await this.chatService.createConversation(adminId, targetUser.id);
-      const convId = (conversation as any).id || conversation; 
       
       // Send message
-      await this.chatService.saveMessage(convId, adminId, args.message);
+      // Note: We use conversation.id directly now, because our new function always returns the full object
+      await this.chatService.saveMessage(conversation.id, adminId, args.message);
 
       return { success: true, message: `Message sent to ${targetUser.firstName} ${targetUser.lastName}.` };
     }

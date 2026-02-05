@@ -1,36 +1,88 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class ChatService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notificationsService: NotificationsService,
+  ) {}
 
-  // 1. Save a message
-  async saveMessage(conversationId: string, userId: string, content: string) {
-    return this.prisma.message.create({
-      data: { conversationId, senderId: userId, content },
-      include: { sender: true }
+  // 1. Save a message (Updated with Notification)
+  async saveMessage(conversationId: string, senderId: string, content: string) {
+    // A. Save to DB
+    const message = await this.prisma.message.create({
+      data: { conversationId, senderId, content },
+      include: { sender: true },
     });
-  }
-  
-  // 2. Create 1-on-1 Chat
-  async createConversation(userId1: string, userId2: string) {
-    const participants = [userId1, userId2].sort();
-    return this.prisma.conversation.create({
-      data: {
-        id: `conv_${participants[0]}_${participants[1]}`,
-        isGroup: false,
-        participants: {
-          connectOrCreate: [
-            { where: { id: `p_${userId1}_${participants[0]}_${participants[1]}` }, create: { userId: userId1 } }, 
-             // Note: In a real app we'd do this cleaner, but this prevents errors for now
-          ]
+
+    // B. NOTIFY RECIPIENTS (The Fix)
+    // Find who else is in this conversation
+    const conversation = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      include: { participants: true },
+    });
+
+    if (conversation) {
+      for (const p of conversation.participants) {
+        // Don't notify the sender (the AI or Admin)
+        if (p.userId !== senderId) {
+          this.notificationsService.send(
+            p.userId,
+            'chat',
+            `New Message from ${message.sender.firstName}`,
+            content,
+          );
         }
       }
-    }).catch(e => { 
-        // If it exists, we just return the ID conceptually, or fetch it
-        return { id: `conv_${participants[0]}_${participants[1]}` };
+    }
+
+    return message;
+  }
+  
+  // 2. Create or Get 1-on-1 Chat (Bulletproof Version)
+  async createConversation(userId1: string, userId2: string) {
+    // Sort IDs to ensure A+B is the same as B+A
+    const sorted = [userId1, userId2].sort();
+    const conversationId = `conv_${sorted[0]}_${sorted[1]}`;
+
+    // A. Check if it exists
+    let conversation = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      include: { participants: true },
     });
+
+    // B. If not, create it with both participants
+    if (!conversation) {
+      conversation = await this.prisma.conversation.create({
+        data: {
+          id: conversationId,
+          isGroup: false,
+          participants: {
+            create: [
+              { userId: userId1 },
+              { userId: userId2 },
+            ],
+          },
+        },
+        include: { participants: true },
+      });
+    }
+
+    // C. SAFETY CHECK: Ensure both users are actually in the participant list
+    // (This fixes the bug where a chat exists but the user isn't linked)
+    const p1Exists = conversation.participants.some(p => p.userId === userId1);
+    const p2Exists = conversation.participants.some(p => p.userId === userId2);
+
+    if (!p1Exists) {
+      await this.prisma.participant.create({ data: { conversationId, userId: userId1 } });
+    }
+    if (!p2Exists) {
+      await this.prisma.participant.create({ data: { conversationId, userId: userId2 } });
+    }
+
+    return conversation;
   }
 
   // 3. Create GROUP Chat
