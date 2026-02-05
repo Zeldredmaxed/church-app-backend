@@ -33,6 +33,7 @@
     "@prisma/client": "^5.22.0",
     "@supabase/supabase-js": "^2.95.0",
     "bcrypt": "^6.0.0",
+    "expo-server-sdk": "^5.0.0",
     "firebase-admin": "^13.6.0",
     "openai": "^6.16.0",
     "passport": "^0.7.0",

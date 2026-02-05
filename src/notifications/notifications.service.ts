@@ -1,59 +1,28 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import * as admin from 'firebase-admin';
+import { Expo } from 'expo-server-sdk';
 
 @Injectable()
-export class NotificationsService implements OnModuleInit {
+export class NotificationsService {
+  private expo = new Expo();
+
   constructor(private readonly prisma: PrismaService) {}
 
-  onModuleInit() {
-    console.log('[FIREBASE] Checking credentials...');
-
-    // 1. Check if already running
-    if (admin.apps.length) {
-      console.log('[FIREBASE] ✅ App already initialized.');
-      return;
-    }
-
-    // 2. Debug the variables (Don't print the full key for security!)
-    const hasEmail = !!process.env.FIREBASE_CLIENT_EMAIL;
-    const hasKey = !!process.env.FIREBASE_PRIVATE_KEY;
-    const hasProject = !!process.env.FIREBASE_PROJECT_ID;
-
-    console.log(`[FIREBASE] Vars present? Email: ${hasEmail}, Key: ${hasKey}, Project: ${hasProject}`);
-
-    if (!hasEmail || !hasKey || !hasProject) {
-      console.error('[FIREBASE] ❌ CRITICAL: Missing Environment Variables. Skipping Init.');
-      return;
-    }
-
-    // 3. Fix Newlines
-    // We add ( || '' ) to tell TypeScript: "If it's undefined, treat it as an empty string"
-    const privateKey = (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
-
-    try {
-      admin.initializeApp({
-        credential: admin.credential.cert({
-          projectId: process.env.FIREBASE_PROJECT_ID,
-          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-          privateKey: privateKey,
-        }),
-      });
-      console.log('[FIREBASE] 🚀 Successfully Initialized!');
-    } catch (error) {
-      console.error('[FIREBASE] 💥 Initialization Failed:', error);
-    }
-  }
-
-  // 1. Save Token
+  // 1. Save Token (No change)
   async saveToken(userId: string, token: string) {
+    // Ensure we only save Expo tokens
+    if (!Expo.isExpoPushToken(token)) {
+      console.error(`[NOTIFY] ❌ Invalid Expo Push Token: ${token}`);
+      return;
+    }
+    
     return this.prisma.user.update({
       where: { id: userId },
-      data: { fcmToken: token }
+      data: { fcmToken: token } // We store the Expo token in this column
     });
   }
 
-  // 2. Update User Preferences
+  // 2. Update Preferences (No change)
   async updatePreferences(userId: string, settings: any) {
     return this.prisma.user.update({
       where: { id: userId },
@@ -61,49 +30,61 @@ export class NotificationsService implements OnModuleInit {
     });
   }
 
-  // 3. Send Notification (Debug Version)
+  // 3. Send Notification (Using Expo SDK)
   async send(userId: string, type: 'chat' | 'sermons' | 'announcements', title: string, body: string) {
-    console.log(`[NOTIFY] Attempting to send '${type}' to User ${userId}`);
+    console.log(`[NOTIFY] Preparing to send '${type}' to User ${userId}`);
 
     // A. Get User
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) {
-      console.log(`[NOTIFY] ❌ User not found: ${userId}`);
+    
+    if (!user || !user.fcmToken) {
+      console.log(`[NOTIFY] ❌ User missing or no token.`);
       return;
     }
 
-    // B. Check Token
-    if (!user.fcmToken) {
-      console.log(`[NOTIFY] ❌ User ${user.firstName} has NO FCM Token. Cannot send.`);
-      return;
-    }
-    console.log(`[NOTIFY] ✅ Token found: ${user.fcmToken.substring(0, 10)}...`);
-
-    // C. Check Permissions
+    // B. Check Permissions
     const rules = await this.prisma.systemSetting.findUnique({ where: { key: 'notification_rules' } });
     const adminRules = rules?.value as any;
     const userSettings = user.notificationSettings as any;
 
     const adminForced = adminRules ? adminRules[type] === true : false;
-    const userWanted = userSettings ? userSettings[type] === true : true; // Default to true
-
-    console.log(`[NOTIFY] Permissions - AdminForced: ${adminForced}, UserWanted: ${userWanted}`);
+    const userWanted = userSettings ? userSettings[type] === true : true;
 
     if (!adminForced && !userWanted) {
       console.log(`[NOTIFY] 🔕 Blocked by preferences.`);
       return;
     }
 
-    // D. Send via Firebase
+    // C. Construct Message
+    const messages = [];
+    if (!Expo.isExpoPushToken(user.fcmToken)) {
+      console.error(`[NOTIFY] ❌ Token is not a valid Expo token: ${user.fcmToken}`);
+      return;
+    }
+
+    messages.push({
+      to: user.fcmToken,
+      sound: 'default',
+      title: title,
+      body: body,
+      data: { type }, // Helps app know where to click
+    });
+
+    // D. Send via Expo
     try {
-      await admin.messaging().send({
-        token: user.fcmToken,
-        notification: { title, body },
-        data: { type },
-      });
-      console.log(`[NOTIFY] 🚀 SUCCESS! Sent to ${user.firstName}`);
-    } catch (e: any) {
-      console.log(`[NOTIFY] 💥 FIREBASE ERROR:`, e.message);
+      // expo.sendPushNotificationsAsync handles the batching and http request
+      const chunks = this.expo.chunkPushNotifications(messages);
+      
+      for (const chunk of chunks) {
+        try {
+          const ticketChunk = await this.expo.sendPushNotificationsAsync(chunk);
+          console.log(`[NOTIFY] 🚀 Sent successfully!`, ticketChunk);
+        } catch (error) {
+          console.error(`[NOTIFY] Error sending chunk`, error);
+        }
+      }
+    } catch (e) {
+      console.log(`[NOTIFY] 💥 EXPO ERROR:`, e);
     }
   }
 }
