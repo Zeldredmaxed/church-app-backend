@@ -18,6 +18,7 @@ import { FeedModule } from './feed/feed.module';
 import { BibleModule } from './bible/bible.module';
 import { AiModule } from './ai/ai.module';
 import { AdminAgentModule } from './admin-agent/admin-agent.module';
+import { SupportModule } from './support/support.module';
 
 @Module({
   imports: [
@@ -26,7 +27,7 @@ import { AdminAgentModule } from './admin-agent/admin-agent.module';
     EventsModule, 
     TagsModule, 
     DonationsModule, 
-    MediaModule, ChatModule, NotificationsModule, PrismaModule, AnnouncementsModule, PrayerRequestsModule, SystemSettingsModule, FeedModule, BibleModule, AiModule, AdminAgentModule
+    MediaModule, ChatModule, NotificationsModule, PrismaModule, AnnouncementsModule, PrayerRequestsModule, SystemSettingsModule, FeedModule, BibleModule, AiModule, AdminAgentModule, SupportModule
   ],
   controllers: [AppController],
   providers: [AppService, PrismaService],

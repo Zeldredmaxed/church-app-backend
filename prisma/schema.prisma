@@ -32,6 +32,54 @@ model User {
   notificationSettings Json?   @default("{\"chat\": true, \"sermons\": true, \"announcements\": true}")
   streak      Int      @default(0)
   habitData   Json?    @default("{\"date\": \"\", \"word\": false, \"prayer\": false, \"service\": false}")
+  gender        String?
+  maritalStatus String?
+  dateOfBirth   DateTime?
+  isBaptized    Boolean? @default(false)
+  children      Json?    @default("[]")
+  
+  // Extended Demographics
+  spouseName       String?
+  householdId      String?
+  
+  // Spiritual
+  membershipStatus String?
+  membershipDate   DateTime?
+  baptismDate      DateTime?
+  salvationDate    DateTime?
+  
+  // Lists (Postgres Arrays)
+  ministryInterests String[]
+  careNeeds         String[]
+  lifeEvents        String[]
+  
+  // Engagement
+  attendanceFreq    String?
+  lastAttended      DateTime?
+  communicationPref String?
+  
+  // Family
+  parentingStage    String?  // Expecting, Young Children, Teens, Empty Nester
+  singleParent      Boolean? @default(false)
+  
+  // Ministry & Discipleship
+  leadershipRole    Boolean? @default(false)
+  volunteerStatus   String?  // Active, Inactive
+  ministrySkills    String[] // Array of skills
+  smallGroupMember  Boolean? @default(false)
+  discipleshipStage String?  // New Believer, Growing, Mature, Leader
+  
+  // Care & Life
+  pastoralCareNeeded Boolean? @default(false)
+  careTypes          String[] // Counseling, Grief, Financial, etc.
+  
+  // Communication
+  preferredContact   String?  // Email, Text, Call
+  
+  // Giving (Cached status)
+  giverStatus        Boolean? @default(false)
+  givingFrequency    String?  // One-time, Recurring
+  
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -45,6 +93,7 @@ model User {
   comments        Comment[]
   postReactions   PostReaction[]
   postMentions    PostMention[]
+  supportTickets  SupportTicket[]
 
   // We will add relationships here later (like messages, donations, etc.)
 }
@@ -254,4 +303,15 @@ model BibleHighlight {
   color     String?  @default("yellow")
   note      String?
   createdAt DateTime @default(now())
+}
+
+model SupportTicket {
+  id        String   @id @default(uuid())
+  type      String   // BUG, FEATURE
+  message   String
+  status    String   @default("OPEN")
+  userId    String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id])
 }

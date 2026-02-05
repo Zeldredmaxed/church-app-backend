@@ -1,26 +1,31 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseInterceptors, UploadedFile, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  UseInterceptors,
+  UploadedFile,
+  Query,
+  BadRequestException,
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { createClient } from '@supabase/supabase-js';
-import { extname } from 'path';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 
 @Controller('users')
 export class UsersController {
-  private supabase;
+  // Initialize Supabase Client
+  private supabase = createClient(
+    process.env.SUPABASE_URL ?? '',
+    process.env.SUPABASE_SERVICE_KEY ?? '',
+  );
 
-  constructor(private readonly usersService: UsersService) {
-    // Initialize Supabase client
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
-    
-    if (!supabaseUrl || !supabaseServiceKey) {
-      console.warn('Supabase credentials not found. File uploads will fail.');
-    } else {
-      this.supabase = createClient(supabaseUrl, supabaseServiceKey);
-    }
-  }
+  constructor(private readonly usersService: UsersService) {}
 
   @Post()
   create(@Body() createUserDto: CreateUserDto) {
@@ -67,39 +72,56 @@ export class UsersController {
     return this.usersService.remove(id);
   }
 
-  // POST /users/upload
-  @Post('upload')
-  @UseInterceptors(FileInterceptor('file'))
-  async uploadFile(@UploadedFile() file: Express.Multer.File) {
-    if (!file) {
-      throw new Error('No file uploaded');
+  @Post(':id/upload-avatar') // We need the ID to know who to delete
+  @UseInterceptors(FileInterceptor('file')) // Uses MemoryStorage by default (Good for Cloud)
+  async uploadAvatar(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException('No file uploaded');
+
+    // 1. Get current user to check for old photo
+    const user = await this.usersService.findOne(id);
+
+    // 2. Delete Old Photo (If exists)
+    if (user?.avatarUrl) {
+      try {
+        // Extract filename from the full URL
+        // URL format: https://[...]/storage/v1/object/public/uploads/FILENAME.jpg
+        const oldFileName = user.avatarUrl.split('/uploads/').pop();
+        if (oldFileName) {
+          await this.supabase.storage.from('uploads').remove([oldFileName]);
+          console.log('Deleted old image:', oldFileName);
+        }
+      } catch (e) {
+        console.error('Error deleting old image:', e);
+      }
     }
 
-    if (!this.supabase) {
-      throw new Error('Supabase not initialized. Please check SUPABASE_URL and SUPABASE_SERVICE_KEY environment variables.');
-    }
+    // 3. Upload New Photo
+    const fileExt = file.originalname.split('.').pop();
+    const fileName = `${id}-${Date.now()}.${fileExt}`; // Unique name
 
-    // Generate a unique filename (timestamp + random)
-    const timestamp = Date.now();
-    const randomStr = Array(32).fill(null).map(() => (Math.round(Math.random() * 16)).toString(16)).join('');
-    const filename = `${timestamp}-${randomStr}${extname(file.originalname)}`;
-
-    // Upload to Supabase Storage
-    const { data, error } = await this.supabase.storage
+    const { error } = await this.supabase.storage
       .from('uploads')
-      .upload(filename, file.buffer, {
+      .upload(fileName, file.buffer, {
         contentType: file.mimetype,
+        upsert: true,
       });
 
-    if (error) {
-      throw new Error(`Failed to upload file: ${error.message}`);
-    }
+    if (error) throw new BadRequestException('Upload failed: ' + error.message);
 
-    // Construct the public URL
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const publicUrl = `${supabaseUrl}/storage/v1/object/public/uploads/${filename}`;
+    // 4. Get Public URL
+    const { data: publicUrlData } = this.supabase.storage
+      .from('uploads')
+      .getPublicUrl(fileName);
 
-    return { url: publicUrl };
+    const fullUrl = publicUrlData.publicUrl;
+
+    // 5. Update Database with FULL URL
+    await this.usersService.update(id, { avatarUrl: fullUrl });
+
+    return { url: fullUrl };
   }
 
   // POST /users/push-token
@@ -115,5 +137,11 @@ export class UsersController {
   @Post(':id/habit')
   async toggleHabit(@Param('id') id: string, @Body('type') type: 'word' | 'prayer' | 'service') {
     return this.usersService.toggleHabit(id, type);
+  }
+
+  // Search Filter
+  @Post('filter')
+  filter(@Body() body: any) {
+    return this.usersService.filterUsers(body);
   }
 }
