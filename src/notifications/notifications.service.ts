@@ -28,7 +28,8 @@ export class NotificationsService implements OnModuleInit {
     }
 
     // 3. Fix Newlines
-    const privateKey = process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n');
+    // We add ( || '' ) to tell TypeScript: "If it's undefined, treat it as an empty string"
+    const privateKey = (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
 
     try {
       admin.initializeApp({
