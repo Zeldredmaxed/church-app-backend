@@ -36,39 +36,49 @@ export class NotificationsService implements OnModuleInit {
     });
   }
 
-  // 3. Send Notification (The Smart Filter)
+  // 3. Send Notification (Debug Version)
   async send(userId: string, type: 'chat' | 'sermons' | 'announcements', title: string, body: string) {
-    // A. Get User & Admin Rules
+    console.log(`[NOTIFY] Attempting to send '${type}' to User ${userId}`);
+
+    // A. Get User
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    const rules = await this.prisma.systemSetting.findUnique({ where: { key: 'notification_rules' } });
-    
-    if (!user || !user.fcmToken) return;
-
-    // B. Check Permissions (With Safety Checks)
-    // We cast to 'any' to stop TypeScript from complaining about JSON types
-    const adminRules = rules?.value as any;
-    const userSettings = user.notificationSettings as any;
-
-    // Safely check values (default to false if missing)
-    const adminForced = adminRules ? adminRules[type] === true : false;
-    const userWanted = userSettings ? userSettings[type] === true : true; // Default to true if user hasn't set preference
-
-    // If Admin didn't force it, AND User turned it off -> Don't send
-    if (!adminForced && !userWanted) {
-      console.log(`🔕 Notification blocked by user preference: ${type}`);
+    if (!user) {
+      console.log(`[NOTIFY] ❌ User not found: ${userId}`);
       return;
     }
 
-    // C. Send via Firebase
+    // B. Check Token
+    if (!user.fcmToken) {
+      console.log(`[NOTIFY] ❌ User ${user.firstName} has NO FCM Token. Cannot send.`);
+      return;
+    }
+    console.log(`[NOTIFY] ✅ Token found: ${user.fcmToken.substring(0, 10)}...`);
+
+    // C. Check Permissions
+    const rules = await this.prisma.systemSetting.findUnique({ where: { key: 'notification_rules' } });
+    const adminRules = rules?.value as any;
+    const userSettings = user.notificationSettings as any;
+
+    const adminForced = adminRules ? adminRules[type] === true : false;
+    const userWanted = userSettings ? userSettings[type] === true : true; // Default to true
+
+    console.log(`[NOTIFY] Permissions - AdminForced: ${adminForced}, UserWanted: ${userWanted}`);
+
+    if (!adminForced && !userWanted) {
+      console.log(`[NOTIFY] 🔕 Blocked by preferences.`);
+      return;
+    }
+
+    // D. Send via Firebase
     try {
       await admin.messaging().send({
         token: user.fcmToken,
         notification: { title, body },
-        data: { type }
+        data: { type },
       });
-      console.log(`🔔 Sent ${type} notification to ${user.firstName}`);
+      console.log(`[NOTIFY] 🚀 SUCCESS! Sent to ${user.firstName}`);
     } catch (e: any) {
-      console.log("FCM Error (Simulated if no real creds):", e.message);
+      console.log(`[NOTIFY] 💥 FIREBASE ERROR:`, e.message);
     }
   }
 }
