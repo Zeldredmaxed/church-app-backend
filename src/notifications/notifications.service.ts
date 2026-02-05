@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Expo } from 'expo-server-sdk';
+import { Expo, ExpoPushMessage } from 'expo-server-sdk';
 
 @Injectable()
 export class NotificationsService {
@@ -8,9 +8,8 @@ export class NotificationsService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  // 1. Save Token (No change)
+  // 1. Save Token
   async saveToken(userId: string, token: string) {
-    // Ensure we only save Expo tokens
     if (!Expo.isExpoPushToken(token)) {
       console.error(`[NOTIFY] ❌ Invalid Expo Push Token: ${token}`);
       return;
@@ -18,11 +17,11 @@ export class NotificationsService {
     
     return this.prisma.user.update({
       where: { id: userId },
-      data: { fcmToken: token } // We store the Expo token in this column
+      data: { fcmToken: token }
     });
   }
 
-  // 2. Update Preferences (No change)
+  // 2. Update Preferences
   async updatePreferences(userId: string, settings: any) {
     return this.prisma.user.update({
       where: { id: userId },
@@ -30,7 +29,7 @@ export class NotificationsService {
     });
   }
 
-  // 3. Send Notification (Using Expo SDK)
+  // 3. Send Notification
   async send(userId: string, type: 'chat' | 'sermons' | 'announcements', title: string, body: string) {
     console.log(`[NOTIFY] Preparing to send '${type}' to User ${userId}`);
 
@@ -56,7 +55,9 @@ export class NotificationsService {
     }
 
     // C. Construct Message
-    const messages = [];
+    // FIX: We explicitly tell TypeScript this array holds Expo messages
+    const messages: ExpoPushMessage[] = []; 
+
     if (!Expo.isExpoPushToken(user.fcmToken)) {
       console.error(`[NOTIFY] ❌ Token is not a valid Expo token: ${user.fcmToken}`);
       return;
@@ -67,12 +68,11 @@ export class NotificationsService {
       sound: 'default',
       title: title,
       body: body,
-      data: { type }, // Helps app know where to click
+      data: { type },
     });
 
     // D. Send via Expo
     try {
-      // expo.sendPushNotificationsAsync handles the batching and http request
       const chunks = this.expo.chunkPushNotifications(messages);
       
       for (const chunk of chunks) {
