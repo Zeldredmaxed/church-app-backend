@@ -1,23 +1,32 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as admin from 'firebase-admin';
-import * as path from 'path';
 
 @Injectable()
 export class NotificationsService implements OnModuleInit {
   constructor(private readonly prisma: PrismaService) {}
 
   onModuleInit() {
-    // Initialize Firebase Admin if not already initialized
-    if (!admin.apps.length) {
-      try {
-        admin.initializeApp({
-          credential: admin.credential.cert(path.join(process.cwd(), 'firebase-key.json')),
-        });
-      } catch (error) {
-        console.log('⚠️ Firebase Admin initialization skipped (no credentials):', error.message);
-      }
+    // Prevent double initialization
+    if (admin.apps.length) return;
+
+    // THE FIX: Read from Env Vars and fix the "Newline" bug
+    const privateKey = process.env.FIREBASE_PRIVATE_KEY
+      ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') // Fix newlines
+      : undefined;
+
+    if (!privateKey || !process.env.FIREBASE_CLIENT_EMAIL) {
+      console.warn('⚠️ Firebase Credentials missing. Notifications will fail.');
+      return;
     }
+
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: privateKey,
+      }),
+    });
   }
 
   // 1. Save Token
