@@ -90,21 +90,44 @@ export class AdminAgentService {
 
     if (actionName === 'send_direct_message') {
       const users = await this.usersService.findAll();
-      const targetUser = users.find(u => 
-        u.firstName.toLowerCase().includes(args.targetName.toLowerCase()) || 
-        u.lastName.toLowerCase().includes(args.targetName.toLowerCase())
-      );
+      const searchName = args.targetName.toLowerCase().trim();
 
-      if (!targetUser) return { success: false, message: `User "${args.targetName}" not found.` };
+      // 1. Find ALL matches (not just the first one)
+      const matchingUsers = users.filter(u => {
+        const first = u.firstName.toLowerCase();
+        const last = u.lastName.toLowerCase();
+        const full = `${first} ${last}`;
+        
+        return first.includes(searchName) || 
+               last.includes(searchName) || 
+               full.includes(searchName);
+      });
+
+      // 2. Handle the results
+      if (matchingUsers.length === 0) {
+        return { success: false, message: `Could not find any user matching "${args.targetName}".` };
+      }
+
+      if (matchingUsers.length > 1) {
+        // Create a list of names to show the admin
+        const names = matchingUsers.map(u => `${u.firstName} ${u.lastName}`).join(', ');
+        return { 
+          success: false, 
+          message: `I found ${matchingUsers.length} people matching that name: ${names}. Please type the full name.` 
+        };
+      }
+
+      // 3. Exact Match Found (Length is 1)
+      const targetUser = matchingUsers[0];
 
       // Create/Get chat
       const conversation = await this.chatService.createConversation(adminId, targetUser.id);
-      const convId = (conversation as any).id || conversation; // Handle varying return types
+      const convId = (conversation as any).id || conversation; 
       
-      // Send message (This automatically uses adminId as sender, so name is correct in UI)
+      // Send message
       await this.chatService.saveMessage(convId, adminId, args.message);
 
-      return { success: true, message: `Message sent to ${targetUser.firstName}.` };
+      return { success: true, message: `Message sent to ${targetUser.firstName} ${targetUser.lastName}.` };
     }
 
     return { success: false, message: "Action not implemented." };
