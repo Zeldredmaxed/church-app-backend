@@ -7,6 +7,7 @@ export class CreateUserDto {
   phone?: string;
   address?: string;
   role?: string; // <--- The missing piece!
+  adminPermissions?: string[];
   
   // Basic Demographics
   gender?: string;

@@ -298,12 +298,19 @@ export class UsersService {
       streak += 1;
     }
 
-    // D. Save
+    // D. Calculate Best Streak
+    // If the new current streak is higher than the old best, update the best.
+    // (Note: user.bestStreak might be null for old users, so default to 0)
+    const currentBest = user.bestStreak || 0;
+    const newBest = streak > currentBest ? streak : currentBest;
+
+    // E. Save
     return this.prisma.user.update({
       where: { id: userId },
       data: { 
         habitData: data as any,
-        streak: streak as any
+        streak: streak as any,
+        bestStreak: newBest // <--- Saving the new high score
       } as any
     });
   }

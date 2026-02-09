@@ -6,7 +6,7 @@ export class SupportService {
   constructor(private readonly prisma: PrismaService) {}
 
   // Create Ticket
-  create(data: { type: string; message: string; userId: string }) {
+  create(data: { type: string; message: string; userId: string; screenshotUrl?: string; area?: string }) {
     return this.prisma.supportTicket.create({ data });
   }
 

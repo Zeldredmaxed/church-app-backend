@@ -1,24 +1,17 @@
-import { Controller, Get, Post, Body, Param, Query, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { createClient } from '@supabase/supabase-js';
-import { extname } from 'path';
 import { FeedService } from './feed.service';
 
 @Controller('feed')
 export class FeedController {
-  private supabase;
+  // Initialize Supabase Client
+  private supabase = createClient(
+    process.env.SUPABASE_URL ?? '',
+    process.env.SUPABASE_SERVICE_KEY ?? '',
+  );
 
-  constructor(private readonly feedService: FeedService) {
-    // Initialize Supabase client
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
-    
-    if (!supabaseUrl || !supabaseServiceKey) {
-      console.warn('Supabase credentials not found. File uploads will fail.');
-    } else {
-      this.supabase = createClient(supabaseUrl, supabaseServiceKey);
-    }
-  }
+  constructor(private readonly feedService: FeedService) {}
 
   @Post()
   create(@Body() body: { userId: string; content: string; imageUrl?: string; videoUrl?: string; location?: string; taggedUserIds?: string[] }) {
@@ -53,33 +46,30 @@ export class FeedController {
   @UseInterceptors(FileInterceptor('file'))
   async uploadFile(@UploadedFile() file: Express.Multer.File) {
     if (!file) {
-      throw new Error('No file uploaded');
+      throw new BadRequestException('No file uploaded');
     }
 
-    if (!this.supabase) {
-      throw new Error('Supabase not initialized. Please check SUPABASE_URL and SUPABASE_SERVICE_KEY environment variables.');
-    }
+    // Generate unique filename with timestamp
+    const fileExt = file.originalname.split('.').pop();
+    const fileName = `feed-${Date.now()}.${fileExt}`;
 
-    // Generate a unique filename (timestamp + random)
-    const timestamp = Date.now();
-    const randomStr = Array(32).fill(null).map(() => (Math.round(Math.random() * 16)).toString(16)).join('');
-    const filename = `${timestamp}-${randomStr}${extname(file.originalname)}`;
-
-    // Upload to Supabase Storage
-    const { data, error } = await this.supabase.storage
+    // Upload to Supabase 'uploads' bucket
+    const { error } = await this.supabase.storage
       .from('uploads')
-      .upload(filename, file.buffer, {
+      .upload(fileName, file.buffer, {
         contentType: file.mimetype,
+        upsert: false,
       });
 
     if (error) {
-      throw new Error(`Failed to upload file: ${error.message}`);
+      throw new BadRequestException('Upload failed: ' + error.message);
     }
 
-    // Construct the public URL
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const publicUrl = `${supabaseUrl}/storage/v1/object/public/uploads/${filename}`;
+    // Get Public URL
+    const { data: publicUrlData } = this.supabase.storage
+      .from('uploads')
+      .getPublicUrl(fileName);
 
-    return { url: publicUrl };
+    return { url: publicUrlData.publicUrl };
   }
 }

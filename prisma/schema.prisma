@@ -27,10 +27,12 @@ model User {
   phone       String?
   address     String?
   role        Role     @default(MEMBER)
+  adminPermissions String[] // List of allowed features
   avatarUrl   String?  // The ? means it can be empty
   fcmToken             String?
   notificationSettings Json?   @default("{\"chat\": true, \"sermons\": true, \"announcements\": true}")
   streak      Int      @default(0)
+  bestStreak  Int      @default(0)
   habitData   Json?    @default("{\"date\": \"\", \"word\": false, \"prayer\": false, \"service\": false}")
   gender        String?
   maritalStatus String?
@@ -306,12 +308,14 @@ model BibleHighlight {
 }
 
 model SupportTicket {
-  id        String   @id @default(uuid())
-  type      String   // BUG, FEATURE
-  message   String
-  status    String   @default("OPEN")
-  userId    String
-  createdAt DateTime @default(now())
+  id           String   @id @default(uuid())
+  type         String   // BUG, FEATURE
+  message      String
+  status       String   @default("OPEN")
+  userId       String
+  screenshotUrl String?
+  area         String?
+  createdAt    DateTime @default(now())
 
-  user      User     @relation(fields: [userId], references: [id])
+  user         User     @relation(fields: [userId], references: [id])
 }
