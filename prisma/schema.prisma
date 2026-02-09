@@ -96,6 +96,7 @@ model User {
   postReactions   PostReaction[]
   postMentions    PostMention[]
   supportTickets  SupportTicket[]
+  donations       Donation[]
 
   // We will add relationships here later (like messages, donations, etc.)
 }
@@ -136,7 +137,7 @@ model UserTag {
   userId String
   tagId  String
   
-  user   User @relation(fields: [userId], references: [id])
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
   tag    Tag  @relation(fields: [tagId], references: [id])
 
   @@id([userId, tagId]) // Prevents adding the same user to a tag twice
@@ -149,6 +150,8 @@ model Donation {
   status    String   // "pending", "succeeded"
   paymentId String   // The Stripe ID (pi_123...)
   userId    String?  // Optional: Guests can give without login
+  
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   
   createdAt DateTime @default(now())
 }
@@ -182,7 +185,7 @@ model Participant {
   conversationId String
   joinedAt       DateTime @default(now())
 
-  user         User         @relation(fields: [userId], references: [id])
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   conversation Conversation @relation(fields: [conversationId], references: [id])
 }
 
@@ -193,7 +196,7 @@ model Message {
   conversationId String
   createdAt      DateTime @default(now())
 
-  sender       User         @relation(fields: [senderId], references: [id])
+  sender       User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
   conversation Conversation @relation(fields: [conversationId], references: [id])
 }
 
@@ -215,7 +218,7 @@ model Registration {
   createdAt DateTime @default(now())
 
   event     Event    @relation(fields: [eventId], references: [id])
-  user      User     @relation(fields: [userId], references: [id])
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([eventId, userId]) // User can only register once per event
 }
@@ -229,7 +232,7 @@ model PrayerRequest {
   prayCount   Int      @default(0)
   createdAt   DateTime @default(now())
 
-  user        User?    @relation(fields: [userId], references: [id])
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
   interactions PrayerInteraction[]
 }
 
@@ -239,7 +242,7 @@ model PrayerInteraction {
   prayerId  String
   createdAt DateTime @default(now())
 
-  user      User          @relation(fields: [userId], references: [id])
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   prayer    PrayerRequest @relation(fields: [prayerId], references: [id])
 
   @@unique([userId, prayerId]) // One prayer per user per request
@@ -258,8 +261,9 @@ model Post {
   location  String?
   userId    String
   createdAt DateTime @default(now())
+  lastInteractionAt DateTime @default(now())
 
-  user      User     @relation(fields: [userId], references: [id])
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   comments  Comment[]
   reactions PostReaction[]
   mentions  PostMention[]
@@ -273,7 +277,7 @@ model Comment {
   createdAt DateTime @default(now())
 
   post      Post     @relation(fields: [postId], references: [id])
-  user      User     @relation(fields: [userId], references: [id])
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model PostReaction {
@@ -283,7 +287,7 @@ model PostReaction {
   userId String
 
   post   Post   @relation(fields: [postId], references: [id])
-  user   User   @relation(fields: [userId], references: [id])
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, postId])
 }
@@ -294,7 +298,7 @@ model PostMention {
   userId String
 
   post   Post @relation(fields: [postId], references: [id])
-  user   User @relation(fields: [userId], references: [id])
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model BibleHighlight {
@@ -317,5 +321,5 @@ model SupportTicket {
   area         String?
   createdAt    DateTime @default(now())
 
-  user         User     @relation(fields: [userId], references: [id])
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

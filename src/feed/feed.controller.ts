@@ -28,6 +28,13 @@ export class FeedController {
     return this.feedService.findOne(id);
   }
 
+  @Post(':id/view')
+  async viewPost(@Param('id') id: string) {
+    // Just bump the timestamp
+    await this.feedService.bumpPost(id);
+    return { status: 'bumped' };
+  }
+
   @Post(':id/react')
   toggleReaction(
     @Param('id') postId: string,
