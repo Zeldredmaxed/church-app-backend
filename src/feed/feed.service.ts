@@ -80,6 +80,20 @@ export class FeedService {
     });
   }
 
+  // 3. Find One Post (The Missing Piece)
+  async findOne(id: string) {
+    return this.prisma.post.findUnique({
+      where: { id },
+      include: {
+        user: true,
+        mentions: { include: { user: true } },
+        _count: { select: { comments: true, reactions: true } },
+        reactions: true,
+        comments: { include: { user: true }, orderBy: { createdAt: 'asc' } }
+      }
+    });
+  }
+
   async toggleReaction(userId: string, postId: string, type: string) {
     // 1. Bump the post!
     await this.bumpPost(postId);
