@@ -33,7 +33,10 @@ export class AuthService {
         id: user.id,
         email: user.email,
         firstName: user.firstName,
-        role: user.role
+        lastName: user.lastName,
+        role: user.role,
+        avatarUrl: user.avatarUrl || null,
+        adminPermissions: (user as any).adminPermissions || [],
       }
     };
   }

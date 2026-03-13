@@ -72,6 +72,31 @@ export class UsersController {
     return this.usersService.remove(id);
   }
 
+  // POST /users/upload - Generic file upload (used during registration before user exists)
+  @Post('upload')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadFile(@UploadedFile() file: Express.Multer.File) {
+    if (!file) throw new BadRequestException('No file uploaded');
+
+    const fileExt = file.originalname.split('.').pop();
+    const fileName = `registration-${Date.now()}.${fileExt}`;
+
+    const { error } = await this.supabase.storage
+      .from('uploads')
+      .upload(fileName, file.buffer, {
+        contentType: file.mimetype,
+        upsert: true,
+      });
+
+    if (error) throw new BadRequestException('Upload failed: ' + error.message);
+
+    const { data: publicUrlData } = this.supabase.storage
+      .from('uploads')
+      .getPublicUrl(fileName);
+
+    return { url: publicUrlData.publicUrl };
+  }
+
   @Post(':id/upload-avatar') // We need the ID to know who to delete
   @UseInterceptors(FileInterceptor('file')) // Uses MemoryStorage by default (Good for Cloud)
   async uploadAvatar(
