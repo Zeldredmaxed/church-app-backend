@@ -20,6 +20,7 @@ import { BibleModule } from './bible/bible.module';
 import { AiModule } from './ai/ai.module';
 import { AdminAgentModule } from './admin-agent/admin-agent.module';
 import { SupportModule } from './support/support.module';
+import { YouTubeSyncModule } from './youtube-sync/youtube-sync.module';
 
 @Module({
   imports: [
@@ -29,7 +30,7 @@ import { SupportModule } from './support/support.module';
     EventsModule, 
     TagsModule, 
     DonationsModule, 
-    MediaModule, ChatModule, NotificationsModule, PrismaModule, AnnouncementsModule, PrayerRequestsModule, SystemSettingsModule, FeedModule, BibleModule, AiModule, AdminAgentModule, SupportModule
+    MediaModule, ChatModule, NotificationsModule, PrismaModule, AnnouncementsModule, PrayerRequestsModule, SystemSettingsModule, FeedModule, BibleModule, AiModule, AdminAgentModule, SupportModule, YouTubeSyncModule
   ],
   controllers: [AppController],
   providers: [AppService, PrismaService],
