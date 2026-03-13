@@ -29,10 +29,16 @@ export class ChatController {
     return this.chatService.getMyConversations(userId);
   }
 
-  // 4. Search Directory
+  // 4. Search Directory / User Directory
+  // GET /chat/users?q=searchTerm&excludeMe=userId
+  // If q is empty, returns ALL users (full directory).
+  // Pass excludeMe to hide the current user from results.
   @Get('users')
-  async searchUsers(@Query('q') q: string) {
-    return this.chatService.searchUsers(q || '');
+  async searchUsers(
+    @Query('q') q: string,
+    @Query('excludeMe') excludeMe: string,
+  ) {
+    return this.chatService.searchUsers(q || '', excludeMe || undefined);
   }
 
   // 5. Add Participant (THIS WAS MISSING!)

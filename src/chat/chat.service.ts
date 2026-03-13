@@ -38,12 +38,13 @@ export class ChatService {
       }
     }
 
-    return message;
+    return conversation;
   }
-  
+
   // 2. Create or Get 1-on-1 Chat (Bulletproof Version)
-  async createConversation(userId1: string, userId2: string) {
-    // Sort IDs to ensure A+B is the same as B+A
+  // Returns the conversation with participants (including user details) so the
+  // mobile app can immediately navigate to the chat screen.
+  async createConversation(userId1: string, userId2: string) {  // Sort IDs to ensure A+B is the same as B+A
     const sorted = [userId1, userId2].sort();
     const conversationId = `conv_${sorted[0]}_${sorted[1]}`;
 
@@ -82,22 +83,32 @@ export class ChatService {
       await this.prisma.participant.create({ data: { conversationId, userId: userId2 } });
     }
 
-    return conversation;
+    // Re-fetch with full user data so the mobile app has everything it needs
+    return this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      include: {
+        participants: { include: { user: true } },
+        messages: { take: 1, orderBy: { createdAt: 'desc' } },
+      },
+    });
   }
 
   // 3. Create GROUP Chat
   async createGroup(name: string, adminId: string, memberIds: string[], isLocked: boolean = false) {
+    // Deduplicate member IDs and ensure admin is included
+    const uniqueMembers = [...new Set([adminId, ...memberIds])];
+
     return this.prisma.conversation.create({
       data: {
         isGroup: true,
         name: name,
         participants: {
-          create: [
-            { userId: adminId },
-            ...memberIds.map(id => ({ userId: id }))
-          ]
-        }
-      }
+          create: uniqueMembers.map(id => ({ userId: id })),
+        },
+      },
+      include: {
+        participants: { include: { user: true } },
+      },
     });
   }
 
@@ -115,16 +126,35 @@ export class ChatService {
     });
   }
 
-  // 5. Search Users
-  async searchUsers(query: string) {
+  // 5. Search Users / User Directory
+  async searchUsers(query: string, excludeUserId?: string) {
+    const where: any = {};
+
+    // If a search query is provided, filter by name or email
+    if (query && query.trim().length > 0) {
+      where.OR = [
+        { firstName: { contains: query, mode: 'insensitive' } },
+        { lastName: { contains: query, mode: 'insensitive' } },
+        { email: { contains: query, mode: 'insensitive' } },
+      ];
+    }
+
+    // Exclude the current user from results
+    if (excludeUserId) {
+      where.id = { not: excludeUserId };
+    }
+
     return this.prisma.user.findMany({
-      where: {
-        OR: [
-          { firstName: { contains: query, mode: 'insensitive' } },
-          { lastName: { contains: query, mode: 'insensitive' } }
-        ]
+      where,
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        avatarUrl: true,
+        role: true,
       },
-      select: { id: true, firstName: true, lastName: true, email: true, avatarUrl: true }
+      orderBy: { firstName: 'asc' },
     });
   }
 
