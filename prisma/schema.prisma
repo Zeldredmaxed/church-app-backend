@@ -38,6 +38,12 @@ model User {
   maritalStatus String?
   dateOfBirth   DateTime?
   isBaptized    Boolean? @default(false)
+  
+  // Subscription & Billing (OTA controlled)
+  subscriptionStatus   String?  @default("ACTIVE")   // ACTIVE, INACTIVE, BLOCKED, PAST_DUE
+  subscriptionPlan     String?                            // "monthly" or "yearly"
+  subscriptionExpiresAt DateTime?                         // When subscription ends
+  subscriptionCanceled  Boolean? @default(false)         // If manually canceled
   children      Json?    @default("[]")
   
   // Extended Demographics
