@@ -64,8 +64,8 @@ export class SubscriptionsService {
         },
       ],
       mode: 'subscription',
-      success_url: `${process.env.FRONTEND_URL || 'https://cornerstone-legacy.com'}/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.FRONTEND_URL || 'https://cornerstone-legacy.com'}/cancel`,
+      success_url: `${process.env.FRONTEND_URL || 'https://Zeldredmaxed.github.io/cornerstone-legacy'}/success.html`,
+      cancel_url: `${process.env.FRONTEND_URL || 'https://Zeldredmaxed.github.io/cornerstone-legacy'}/cancel.html`,
       metadata: {
         churchId,
         churchName
