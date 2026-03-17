@@ -32,6 +32,7 @@
     "@nestjs/swagger": "^11.2.4",
     "@nestjs/websockets": "^11.1.11",
     "@prisma/client": "^5.22.0",
+    "@stripe/stripe-js": "^8.10.0",
     "@supabase/supabase-js": "^2.95.0",
     "bcrypt": "^6.0.0",
     "expo-server-sdk": "^5.0.0",
@@ -43,7 +44,7 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "socket.io": "^4.8.3",
-    "stripe": "^20.1.2"
+    "stripe": "^20.4.1"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

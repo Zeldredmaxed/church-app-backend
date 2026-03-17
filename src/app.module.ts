@@ -21,6 +21,7 @@ import { AiModule } from './ai/ai.module';
 import { AdminAgentModule } from './admin-agent/admin-agent.module';
 import { SupportModule } from './support/support.module';
 import { YouTubeSyncModule } from './youtube-sync/youtube-sync.module';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 
 @Module({
   imports: [
@@ -30,7 +31,7 @@ import { YouTubeSyncModule } from './youtube-sync/youtube-sync.module';
     EventsModule, 
     TagsModule, 
     DonationsModule, 
-    MediaModule, ChatModule, NotificationsModule, PrismaModule, AnnouncementsModule, PrayerRequestsModule, SystemSettingsModule, FeedModule, BibleModule, AiModule, AdminAgentModule, SupportModule, YouTubeSyncModule
+    MediaModule, ChatModule, NotificationsModule, PrismaModule, AnnouncementsModule, PrayerRequestsModule, SystemSettingsModule, FeedModule, BibleModule, AiModule, AdminAgentModule, SupportModule, YouTubeSyncModule, SubscriptionsModule
   ],
   controllers: [AppController],
   providers: [AppService, PrismaService],
