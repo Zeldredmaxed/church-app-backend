@@ -124,7 +124,9 @@ export class AdminAgentService {
       const conversation = await this.chatService.createConversation(adminId, targetUser.id);
       
       // Send message
-      // Note: We use conversation.id directly now, because our new function always returns the full object
+      if (!conversation) {
+        return { success: false, message: "Failed to create conversation." };
+      }
       await this.chatService.saveMessage(conversation.id, adminId, args.message);
 
       return { success: true, message: `Message sent to ${targetUser.firstName} ${targetUser.lastName}.` };

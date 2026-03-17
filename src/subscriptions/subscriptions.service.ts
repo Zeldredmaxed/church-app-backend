@@ -9,7 +9,7 @@ export class SubscriptionsService {
     // Initialize Stripe with your secret key
     // Get this from Stripe Dashboard: https://dashboard.stripe.com/apikeys
     this.stripe = new Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_your_key_here', {
-      apiVersion: '2025-01-27.acacia',
+      apiVersion: '2026-02-25.clover',
     });
   }
 
