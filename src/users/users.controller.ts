@@ -10,12 +10,14 @@ import {
   UploadedFile,
   Query,
   BadRequestException,
+  UseGuards,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { createClient } from '@supabase/supabase-js';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('users')
 export class UsersController {
@@ -33,11 +35,13 @@ export class UsersController {
   }
 
   @Get()
+  @UseGuards(JwtAuthGuard)
   findAll() {
     return this.usersService.findAll();
   }
 
   @Get('me')
+  @UseGuards(JwtAuthGuard)
   async getMe(@Query('userId') userId?: string) {
     // Extract userId from query parameter (sent by frontend)
     // In production, you'd extract this from JWT token
@@ -48,6 +52,7 @@ export class UsersController {
   }
 
   @Patch('me')
+  @UseGuards(JwtAuthGuard)
   async updateMe(@Body() body: { userId: string; notificationSettings?: any }) {
     // Update current user's notification settings
     if (!body?.userId) {
@@ -58,16 +63,19 @@ export class UsersController {
   }
 
   @Get(':id')
+  @UseGuards(JwtAuthGuard)
   findOne(@Param('id') id: string) {
     return this.usersService.findOne(id);
   }
 
   @Patch(':id')
+  @UseGuards(JwtAuthGuard)
   update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
     return this.usersService.update(id, updateUserDto);
   }
 
   @Delete(':id')
+  @UseGuards(JwtAuthGuard)
   remove(@Param('id') id: string) {
     return this.usersService.remove(id);
   }
@@ -75,6 +83,7 @@ export class UsersController {
   // POST /users/upload - Generic file upload (used during registration before user exists)
   @Post('upload')
   @UseInterceptors(FileInterceptor('file'))
+  // Note: No auth guard - allows upload before registration completes
   async uploadFile(@UploadedFile() file: Express.Multer.File) {
     if (!file) throw new BadRequestException('No file uploaded');
 
@@ -98,6 +107,7 @@ export class UsersController {
   }
 
   @Post(':id/upload-avatar') // We need the ID to know who to delete
+  @UseGuards(JwtAuthGuard)
   @UseInterceptors(FileInterceptor('file')) // Uses MemoryStorage by default (Good for Cloud)
   async uploadAvatar(
     @Param('id') id: string,
@@ -151,6 +161,7 @@ export class UsersController {
 
   // POST /users/push-token
   @Post('push-token')
+  @UseGuards(JwtAuthGuard)
   async savePushToken(@Body() body: { userId: string; token: string }) {
     if (!body?.userId || !body?.token) {
       throw new Error('User ID and token required');
@@ -160,12 +171,14 @@ export class UsersController {
 
   // POST /users/:id/habit
   @Post(':id/habit')
+  @UseGuards(JwtAuthGuard)
   async toggleHabit(@Param('id') id: string, @Body('type') type: 'word' | 'prayer' | 'service') {
     return this.usersService.toggleHabit(id, type);
   }
 
   // Search Filter
   @Post('filter')
+  @UseGuards(JwtAuthGuard)
   filter(@Body() body: any) {
     return this.usersService.filterUsers(body);
   }

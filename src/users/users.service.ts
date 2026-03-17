@@ -260,7 +260,13 @@ export class UsersService {
     if (!user) {
       throw new Error('User not found');
     }
-    const today = new Date().toISOString().split('T')[0]; // "2026-01-10"
+    
+    // Use local timezone instead of UTC
+    const now = new Date();
+    const today = now.toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toLocaleDateString('en-CA');
     
     let data = (user as any).habitData || { date: "", word: false, prayer: false, service: false };
     let streak = (user as any).streak || 0;
@@ -268,17 +274,16 @@ export class UsersService {
     // A. New Day Check?
     if (data.date !== today) {
       // It's a new day! 
-      // 1. Check if they missed yesterday?
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStr = yesterday.toISOString().split('T')[0];
-
+      // 1. Check if they were active yesterday
       if (data.date === yesterdayStr) {
         // They were active yesterday. Streak continues!
         // (We don't increment yet, we wait for them to do 1 thing today)
       } else {
-        // They missed a day. Streak resets.
-        streak = 0;
+        // They missed a day OR it's their first time OR data.date is empty
+        // Reset streak only if they had a previous streak and missed yesterday
+        if (data.date !== "" && data.date !== yesterdayStr) {
+          streak = 0;
+        }
       }
 
       // 2. Reset the checkboxes for today

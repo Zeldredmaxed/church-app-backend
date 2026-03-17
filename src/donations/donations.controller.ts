@@ -1,12 +1,14 @@
-import { Controller, Get, Post, Body, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, UseGuards } from '@nestjs/common';
 import { DonationsService } from './donations.service';
 import { CreateDonationDto } from './dto/create-donation.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('donations')
 export class DonationsController {
   constructor(private readonly donationsService: DonationsService) {}
 
   @Post()
+  @UseGuards(JwtAuthGuard)
   create(@Body() createDonationDto: CreateDonationDto) {
     // Extract amount and userId from DTO
     const amountInDollars = createDonationDto.amount || 0;
@@ -15,6 +17,7 @@ export class DonationsController {
   }
 
   @Get()
+  @UseGuards(JwtAuthGuard)
   findAll(@Query('userId') userId?: string) {
     if (userId) {
       return this.donationsService.findByUser(userId);

@@ -1,8 +1,9 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseInterceptors, UploadedFile, BadRequestException, UseGuards } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { createClient } from '@supabase/supabase-js';
 import { SupportService } from './support.service';
 import { CreateSupportDto } from './dto/create-support.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('support')
 export class SupportController {
@@ -15,11 +16,13 @@ export class SupportController {
   constructor(private readonly supportService: SupportService) {}
 
   @Post()
+  @UseGuards(JwtAuthGuard)
   create(@Body() body: CreateSupportDto) {
     return this.supportService.create(body);
   }
 
   @Post('upload')
+  @UseGuards(JwtAuthGuard)
   @UseInterceptors(FileInterceptor('file'))
   async uploadFile(@UploadedFile() file: Express.Multer.File) {
     if (!file) {
@@ -51,16 +54,19 @@ export class SupportController {
   }
 
   @Get()
+  @UseGuards(JwtAuthGuard)
   findAll() {
     return this.supportService.findAll();
   }
 
   @Patch(':id')
+  @UseGuards(JwtAuthGuard)
   update(@Param('id') id: string, @Body() body: { status: string }) {
     return this.supportService.update(id, body);
   }
 
   @Delete(':id')
+  @UseGuards(JwtAuthGuard)
   remove(@Param('id') id: string) {
     return this.supportService.remove(id);
   }

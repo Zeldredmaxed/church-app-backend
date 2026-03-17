@@ -79,4 +79,17 @@ export class DonationsService {
       orderBy: { createdAt: 'desc' }
     });
   }
+
+  // 4. Update Donation Status (Called by Webhook)
+  async updateDonationStatus(paymentId: string, status: string) {
+    try {
+      return await this.prisma.donation.updateMany({
+        where: { paymentId },
+        data: { status }
+      });
+    } catch (error) {
+      console.error('Error updating donation status:', error);
+      throw new InternalServerErrorException('Failed to update donation status');
+    }
+  }
 }

@@ -1,5 +1,6 @@
-import { Controller, Get, Post } from '@nestjs/common';
+import { Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { YouTubeSyncService } from './youtube-sync.service';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 /**
  * YouTubeSyncController
@@ -16,6 +17,7 @@ export class YouTubeSyncController {
    * Returns the current sync status (is a live stream active, etc.)
    */
   @Get('status')
+  @UseGuards(JwtAuthGuard)
   getStatus() {
     return {
       configured:
@@ -31,6 +33,7 @@ export class YouTubeSyncController {
    * Manually triggers a live stream check (useful for testing)
    */
   @Post('check-live')
+  @UseGuards(JwtAuthGuard)
   async triggerLiveCheck() {
     await this.youtubeSyncService.checkForLiveStream();
     return { message: 'Live stream check completed.' };
@@ -41,6 +44,7 @@ export class YouTubeSyncController {
    * Manually triggers a new video check (useful for testing)
    */
   @Post('check-videos')
+  @UseGuards(JwtAuthGuard)
   async triggerVideoCheck() {
     await this.youtubeSyncService.checkForNewVideos();
     return { message: 'New video check completed.' };

@@ -118,4 +118,26 @@ export class FeedService {
       include: { user: true }
     });
   }
+
+  async delete(postId: string, userId: string) {
+    // Find the post first
+    const post = await this.prisma.post.findUnique({ where: { id: postId } });
+    
+    if (!post) {
+      throw new Error('Post not found');
+    }
+
+    // Check if user is the author or an admin
+    // Note: We'd need to check user's role - for now, allow author to delete
+    if (post.userId !== userId) {
+      // Check if user is admin - we'd need to fetch the user
+      const user = await this.prisma.user.findUnique({ where: { id: userId } });
+      if (!user || (user.role !== 'ADMIN' && user.role !== 'LEADER')) {
+        throw new Error('You can only delete your own posts');
+      }
+    }
+
+    // Delete the post (cascades to reactions and comments)
+    return this.prisma.post.delete({ where: { id: postId } });
+  }
 }
