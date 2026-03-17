@@ -6,30 +6,71 @@ export class SubscriptionsService {
   private stripe: Stripe;
 
   constructor() {
-    // Initialize Stripe with your secret key
-    // Get this from Stripe Dashboard: https://dashboard.stripe.com/apikeys
     this.stripe = new Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_your_key_here', {
       apiVersion: '2026-02-25.clover',
     });
   }
 
   // Create a checkout session for subscription
-  async createCheckoutSession(priceId: string, churchId: string, churchName: string) {
+  async createCheckoutSession(
+    priceId: string, 
+    churchId: string, 
+    churchName: string,
+    email?: string,
+    phone?: string
+  ) {
+    // Create or get customer
+    let customerId: string;
+    
+    // Check if customer already exists by email
+    if (email) {
+      const existingCustomers = await this.stripe.customers.list({
+        email,
+        limit: 1
+      });
+      
+      if (existingCustomers.data.length > 0) {
+        customerId = existingCustomers.data[0].id;
+      } else {
+        const customer = await this.stripe.customers.create({
+          email,
+          name: churchName,
+          phone: phone || undefined,
+          metadata: {
+            churchId,
+            churchName
+          }
+        });
+        customerId = customer.id;
+      }
+    } else {
+      const customer = await this.stripe.customers.create({
+        name: churchName,
+        metadata: {
+          churchId,
+          churchName
+        }
+      });
+      customerId = customer.id;
+    }
+
     const session = await this.stripe.checkout.sessions.create({
       payment_method_types: ['card'],
+      customer: customerId,
       line_items: [
         {
-          price: priceId, // Create this in Stripe Dashboard
+          price: priceId,
           quantity: 1,
         },
       ],
       mode: 'subscription',
-      success_url: `${process.env.FRONTEND_URL || 'https://newbirthpwc.org'}/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.FRONTEND_URL || 'https://newbirthpwc.org'}/cancel`,
+      success_url: `${process.env.FRONTEND_URL || 'https://cornerstone-legacy.com'}/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.FRONTEND_URL || 'https://cornerstone-legacy.com'}/cancel`,
       metadata: {
         churchId,
-        churchName,
+        churchName
       },
+      allow_promotion_codes: true,
     });
 
     return { url: session.url, sessionId: session.id };

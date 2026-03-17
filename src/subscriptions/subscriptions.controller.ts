@@ -1,29 +1,41 @@
-import { Controller, Post, Get, Body, Param, UseGuards, Headers, RawBodyRequest, Req } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param, UseGuards, Headers } from '@nestjs/common';
 import { SubscriptionsService } from './subscriptions.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
-// Stripe price IDs - Create these in Stripe Dashboard
-// Example: $29/month for church subscription
-const CHURCH_SUBSCRIPTION_PRICE_ID = 'price_1234567890'; // Replace with real Stripe price ID
+// Stripe price IDs - Replace with your real Stripe Price IDs
+const DEFAULT_PRICE_ID = 'price_1234567890';
 
 @Controller('subscriptions')
 export class SubscriptionsController {
   constructor(private readonly subscriptionsService: SubscriptionsService) {}
 
   // POST /subscriptions/create-checkout
-  // Create a checkout session for the church to subscribe
+  // Create a checkout session - NO AUTH REQUIRED (public checkout)
   @Post('create-checkout')
-  @UseGuards(JwtAuthGuard)
   async createCheckout(
-    @Body() body: { churchId: string; churchName: string; priceId?: string }
+    @Body() body: { 
+      churchName: string; 
+      email: string; 
+      phone?: string;
+      priceId?: string 
+    }
   ) {
-    const priceId = body.priceId || CHURCH_SUBSCRIPTION_PRICE_ID;
+    // Generate a simple ID from church name
+    const churchId = body.churchName
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '') + '-' + Date.now();
+    
+    const priceId = body.priceId || DEFAULT_PRICE_ID;
     
     try {
       const result = await this.subscriptionsService.createCheckoutSession(
         priceId,
-        body.churchId,
+        churchId,
         body.churchName,
+        body.email,
+        body.phone
       );
       return result;
     } catch (error) {
@@ -33,15 +45,9 @@ export class SubscriptionsController {
   }
 
   // POST /subscriptions/webhook
-  // Handle Stripe webhooks (payment succeeded, failed, etc.)
+  // Handle Stripe webhooks
   @Post('webhook')
-  async handleWebhook(
-    @Body() body: any,
-    @Headers('stripe-signature') signature: string
-  ) {
-    // Note: In production, verify the webhook signature
-    // For now, we'll handle basic events
-    
+  async handleWebhook(@Body() body: any) {
     const eventType = body.type;
     const data = body.data?.object;
 
@@ -49,19 +55,16 @@ export class SubscriptionsController {
 
     switch (eventType) {
       case 'checkout.session.completed':
-        // Payment successful - grant access
         console.log('Payment completed for:', data?.metadata?.churchId);
-        // TODO: Update church subscription status in database
+        // TODO: Update church subscription in database
         break;
 
       case 'customer.subscription.deleted':
-        // Subscription cancelled - revoke access
         console.log('Subscription cancelled for:', data?.customer);
-        // TODO: Update church subscription status in database
+        // TODO: Update church subscription in database
         break;
 
       case 'invoice.payment_failed':
-        // Payment failed - notify church
         console.log('Payment failed for:', data?.customer);
         // TODO: Send notification to church
         break;
@@ -76,13 +79,11 @@ export class SubscriptionsController {
   // GET /subscriptions/status/:churchId
   // Check if church has active subscription
   @Get('status/:churchId')
-  @UseGuards(JwtAuthGuard)
   async getSubscriptionStatus(@Param('churchId') churchId: string) {
     // TODO: Query database for church subscription status
-    // For now, return placeholder
     return {
       churchId,
-      status: 'active', // or 'inactive', 'past_due', etc.
+      status: 'active',
       currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
     };
   }
@@ -90,7 +91,6 @@ export class SubscriptionsController {
   // POST /subscriptions/cancel
   // Cancel subscription
   @Post('cancel')
-  @UseGuards(JwtAuthGuard)
   async cancelSubscription(@Body() body: { subscriptionId: string }) {
     try {
       const result = await this.subscriptionsService.cancelSubscription(body.subscriptionId);
