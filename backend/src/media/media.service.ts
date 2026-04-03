@@ -35,20 +35,25 @@ export interface PresignedUrlResponse {
 @Injectable()
 export class MediaService {
   private readonly logger = new Logger(MediaService.name);
-  private readonly s3: S3Client;
+  private readonly s3: S3Client | null;
   private readonly bucket: string;
   private readonly presignTtlSeconds = 300; // 5 minutes
 
   constructor(private readonly config: ConfigService) {
-    this.bucket = this.config.getOrThrow<string>('S3_BUCKET');
+    this.bucket = this.config.get<string>('S3_BUCKET', '');
+    const region = this.config.get<string>('S3_REGION', 'us-east-1');
+    const accessKeyId = this.config.get<string>('AWS_ACCESS_KEY_ID', '');
+    const secretAccessKey = this.config.get<string>('AWS_SECRET_ACCESS_KEY', '');
 
-    this.s3 = new S3Client({
-      region: this.config.getOrThrow<string>('S3_REGION'),
-      credentials: {
-        accessKeyId: this.config.getOrThrow<string>('AWS_ACCESS_KEY_ID'),
-        secretAccessKey: this.config.getOrThrow<string>('AWS_SECRET_ACCESS_KEY'),
-      },
-    });
+    if (accessKeyId && !accessKeyId.includes('placeholder')) {
+      this.s3 = new S3Client({
+        region,
+        credentials: { accessKeyId, secretAccessKey },
+      });
+    } else {
+      this.s3 = null;
+      this.logger.warn('AWS credentials not configured — media uploads disabled');
+    }
   }
 
   /**
@@ -63,6 +68,11 @@ export class MediaService {
    *   4. The URL expires after 5 minutes — limits the window for misuse.
    *   5. Only authenticated users with an active tenant context can request URLs.
    */
+  private ensureS3(): S3Client {
+    if (!this.s3) throw new InternalServerErrorException('S3 is not configured');
+    return this.s3;
+  }
+
   async generatePresignedUrl(
     dto: PresignedUrlDto,
     tenantId: string,
@@ -85,7 +95,7 @@ export class MediaService {
     });
 
     try {
-      const uploadUrl = await getSignedUrl(this.s3, command, {
+      const uploadUrl = await getSignedUrl(this.ensureS3(), command, {
         expiresIn: this.presignTtlSeconds,
       });
 
@@ -125,7 +135,7 @@ export class MediaService {
         let continuationToken: string | undefined;
 
         do {
-          const listResult = await this.s3.send(
+          const listResult = await this.ensureS3().send(
             new ListObjectsV2Command({
               Bucket: this.bucket,
               Prefix: prefix,
@@ -137,7 +147,7 @@ export class MediaService {
           if (!objects || objects.length === 0) break;
 
           // Batch delete (S3 supports up to 1000 objects per request)
-          await this.s3.send(
+          await this.ensureS3().send(
             new DeleteObjectsCommand({
               Bucket: this.bucket,
               Delete: {

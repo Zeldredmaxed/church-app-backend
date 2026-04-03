@@ -14,30 +14,31 @@ import Stripe from 'stripe';
 @Injectable()
 export class StripeService {
   private readonly logger = new Logger(StripeService.name);
-  readonly stripe: Stripe;
+  readonly stripe: Stripe | null;
   readonly webhookSecret: string;
 
   constructor(private readonly config: ConfigService) {
-    this.stripe = new Stripe(
-      this.config.getOrThrow<string>('STRIPE_SECRET_KEY'),
-      {
+    const stripeKey = this.config.get<string>('STRIPE_SECRET_KEY');
+    if (stripeKey && !stripeKey.includes('placeholder')) {
+      this.stripe = new Stripe(stripeKey, {
         apiVersion: '2024-06-20',
-        appInfo: {
-          name: 'ChurchApp Platform',
-          version: '1.0.0',
-        },
-      },
-    );
+        appInfo: { name: 'ChurchApp Platform', version: '1.0.0' },
+      });
+    } else {
+      this.stripe = null;
+      this.logger.warn('STRIPE_SECRET_KEY not configured — Stripe features disabled');
+    }
 
-    this.webhookSecret = this.config.getOrThrow<string>('STRIPE_WEBHOOK_SECRET');
+    this.webhookSecret = this.config.get<string>('STRIPE_WEBHOOK_SECRET', '');
   }
 
-  /**
-   * Creates a Stripe Connect account for a church tenant.
-   * Uses the Standard Connect type — churches manage their own Stripe dashboard.
-   */
+  private ensureStripe(): Stripe {
+    if (!this.stripe) throw new Error('Stripe is not configured');
+    return this.stripe;
+  }
+
   async createConnectAccount(tenantName: string): Promise<Stripe.Account> {
-    return this.stripe.accounts.create({
+    return this.ensureStripe().accounts.create({
       type: 'standard',
       business_profile: {
         name: tenantName,
@@ -54,7 +55,7 @@ export class StripeService {
     refreshUrl: string,
     returnUrl: string,
   ): Promise<Stripe.AccountLink> {
-    return this.stripe.accountLinks.create({
+    return this.ensureStripe().accountLinks.create({
       account: accountId,
       refresh_url: refreshUrl,
       return_url: returnUrl,
@@ -66,7 +67,7 @@ export class StripeService {
    * Retrieves a Stripe Connect account to check onboarding status.
    */
   async getAccount(accountId: string): Promise<Stripe.Account> {
-    return this.stripe.accounts.retrieve(accountId);
+    return this.ensureStripe().accounts.retrieve(accountId);
   }
 
   /**
@@ -86,7 +87,7 @@ export class StripeService {
     destinationAccountId: string,
     platformFeeCents: number,
   ): Promise<Stripe.PaymentIntent> {
-    return this.stripe.paymentIntents.create({
+    return this.ensureStripe().paymentIntents.create({
       amount: amountCents,
       currency,
       application_fee_amount: platformFeeCents,
@@ -104,7 +105,7 @@ export class StripeService {
     rawBody: Buffer,
     signature: string,
   ): Stripe.Event {
-    return this.stripe.webhooks.constructEvent(
+    return this.ensureStripe().webhooks.constructEvent(
       rawBody,
       signature,
       this.webhookSecret,

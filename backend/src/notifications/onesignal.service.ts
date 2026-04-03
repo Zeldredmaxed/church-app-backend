@@ -15,18 +15,20 @@ import * as OneSignal from '@onesignal/node-onesignal';
 @Injectable()
 export class OneSignalService {
   private readonly logger = new Logger(OneSignalService.name);
-  private readonly client: OneSignal.DefaultApi;
+  private readonly client: OneSignal.DefaultApi | null;
   private readonly appId: string;
 
   constructor(private readonly config: ConfigService) {
-    this.appId = this.config.getOrThrow<string>('ONESIGNAL_APP_ID');
-    const restApiKey = this.config.getOrThrow<string>('ONESIGNAL_REST_API_KEY');
+    this.appId = this.config.get<string>('ONESIGNAL_APP_ID', '');
+    const restApiKey = this.config.get<string>('ONESIGNAL_REST_API_KEY', '');
 
-    const configuration = OneSignal.createConfiguration({
-      restApiKey,
-    });
-
-    this.client = new OneSignal.DefaultApi(configuration);
+    if (this.appId && restApiKey && !this.appId.includes('placeholder')) {
+      const configuration = OneSignal.createConfiguration({ restApiKey });
+      this.client = new OneSignal.DefaultApi(configuration);
+    } else {
+      this.client = null;
+      this.logger.warn('OneSignal not configured — push notifications disabled');
+    }
   }
 
   /**
@@ -60,6 +62,10 @@ export class OneSignalService {
         notification.data = data;
       }
 
+      if (!this.client) {
+        this.logger.debug('OneSignal not configured — skipping push notification');
+        return;
+      }
       const response = await this.client.createNotification(notification);
       this.logger.log(
         `Push sent to user ${externalUserId}: ${response.id ?? 'queued'}`,

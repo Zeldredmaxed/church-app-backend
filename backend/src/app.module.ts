@@ -60,9 +60,7 @@ import { Notification } from './notifications/entities/notification.entity';
         // Setting this to true would let TypeORM overwrite or drop columns.
         synchronize: false,
 
-        ssl: config.get('NODE_ENV') === 'production'
-          ? { rejectUnauthorized: true }
-          : { rejectUnauthorized: false },
+        ssl: { rejectUnauthorized: false },
 
         // Connection pool configuration.
         // Keep extra connections low — Supabase free/pro plans have connection limits.
@@ -75,48 +73,43 @@ import { Notification } from './notifications/entities/notification.entity';
     }),
 
     // BullMQ — Redis-backed job queue for async notification processing.
-    // All modules that enqueue jobs register their own queues via BullModule.registerQueue().
-    // This forRootAsync provides the shared Redis connection config.
+    // Gracefully uses localhost if REDIS_HOST is not configured.
     BullModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         connection: {
-          host: config.getOrThrow<string>('REDIS_HOST'),
+          host: config.get<string>('REDIS_HOST', 'localhost'),
           port: config.get<number>('REDIS_PORT', 6379),
           password: config.get<string>('REDIS_PASSWORD'),
+          maxRetriesPerRequest: 3,
         },
       }),
     }),
 
-    // Rate Limiting — Redis-backed, per-IP + per-tenant throttling.
-    // Two named throttlers:
-    //   - 'default': 100 requests/minute per IP (all endpoints)
-    //   - 'auth':    5 requests/minute per IP (auth endpoints only, via @Throttle decorator)
-    // Redis storage ensures rate-limit state is shared across all backend instances.
-    // Webhook endpoints are excluded via @SkipThrottle() decorator.
+    // Rate Limiting — Redis-backed when REDIS_HOST is set, in-memory otherwise.
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        throttlers: [
-          {
-            name: 'default',
-            ttl: 60000,
-            limit: 100,
-          },
-          {
-            name: 'auth',
-            ttl: 60000,
-            limit: 5,
-          },
-        ],
-        storage: new RedisThrottlerStorage(
-          config.getOrThrow<string>('REDIS_HOST'),
-          config.get<number>('REDIS_PORT', 6379),
-          config.get<string>('REDIS_PASSWORD'),
-        ),
-      }),
+      useFactory: (config: ConfigService) => {
+        const redisHost = config.get<string>('REDIS_HOST');
+        const hasRedis = redisHost && !redisHost.includes('placeholder');
+        return {
+          throttlers: [
+            { name: 'default', ttl: 60000, limit: 100 },
+            { name: 'auth', ttl: 60000, limit: 5 },
+          ],
+          ...(hasRedis
+            ? {
+                storage: new RedisThrottlerStorage(
+                  redisHost,
+                  config.get<number>('REDIS_PORT', 6379),
+                  config.get<string>('REDIS_PASSWORD'),
+                ),
+              }
+            : {}),
+        };
+      },
     }),
 
     // GraphQL — Apollo Driver (code-first)

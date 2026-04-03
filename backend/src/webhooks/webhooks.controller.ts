@@ -23,7 +23,10 @@ export class WebhooksController {
   private readonly muxWebhookSecret: string;
 
   constructor(private readonly config: ConfigService) {
-    this.muxWebhookSecret = this.config.getOrThrow<string>('MUX_WEBHOOK_SECRET');
+    this.muxWebhookSecret = this.config.get<string>('MUX_WEBHOOK_SECRET', '');
+    if (!this.muxWebhookSecret) {
+      new Logger(WebhooksController.name).warn('MUX_WEBHOOK_SECRET not configured — Mux webhooks will reject all requests');
+    }
   }
 
   @Post('mux')
