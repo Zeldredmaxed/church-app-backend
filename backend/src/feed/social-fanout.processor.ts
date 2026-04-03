@@ -44,10 +44,12 @@ export class SocialFanoutProcessor extends WorkerHost {
     @InjectQueue('notifications') private readonly notificationsQueue: Queue<NotificationJobData>,
   ) {
     super();
+    const redisHost = this.config.get<string>('REDIS_HOST', 'localhost');
     this.redis = new Redis({
-      host: this.config.getOrThrow<string>('REDIS_HOST'),
+      host: redisHost,
       port: this.config.get<number>('REDIS_PORT', 6379),
       password: this.config.get<string>('REDIS_PASSWORD'),
+      tls: redisHost.includes('upstash.io') ? {} : undefined,
     });
   }
 

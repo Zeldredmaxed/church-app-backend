@@ -8,7 +8,10 @@ export class RedisThrottlerStorage implements ThrottlerStorage, OnModuleDestroy 
   private redis: Redis;
 
   constructor(host: string, port: number, password?: string) {
-    this.redis = new Redis({ host, port, password, lazyConnect: true });
+    this.redis = new Redis({
+      host, port, password, lazyConnect: true,
+      tls: host.includes('upstash.io') ? {} : undefined,
+    });
     this.redis.connect().catch(() => {});
   }
 

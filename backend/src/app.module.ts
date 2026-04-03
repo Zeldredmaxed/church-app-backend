@@ -83,6 +83,7 @@ import { Notification } from './notifications/entities/notification.entity';
           port: config.get<number>('REDIS_PORT', 6379),
           password: config.get<string>('REDIS_PASSWORD'),
           maxRetriesPerRequest: 3,
+          tls: config.get<string>('REDIS_HOST', '').includes('upstash.io') ? {} : undefined,
         },
       }),
     }),
