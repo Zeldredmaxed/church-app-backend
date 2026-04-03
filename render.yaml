@@ -1,0 +1,68 @@
+services:
+  - type: web
+    name: church-app-backend
+    runtime: node
+    plan: starter
+    region: ohio
+    rootDir: backend
+    buildCommand: npm install && npm run build
+    startCommand: npm run start:prod
+    healthCheckPath: /api/health
+    envVars:
+      # --- Application ---
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+
+      # --- Supabase ---
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+
+      # --- Database ---
+      - key: DATABASE_URL
+        sync: false
+
+      # --- Redis (Upstash) ---
+      - key: REDIS_HOST
+        sync: false
+      - key: REDIS_PORT
+        value: "6379"
+      - key: REDIS_PASSWORD
+        sync: false
+
+      # --- AWS S3 ---
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        value: us-east-1
+
+      # --- Stripe ---
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+
+      # --- Mux ---
+      - key: MUX_WEBHOOK_SECRET
+        sync: false
+
+      # --- OneSignal ---
+      - key: ONESIGNAL_APP_ID
+        sync: false
+      - key: ONESIGNAL_REST_API_KEY
+        sync: false
+
+      # --- Super Admins ---
+      - key: SUPER_ADMIN_EMAILS
+        sync: false

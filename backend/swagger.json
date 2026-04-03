@@ -1,0 +1,971 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/api/auth/signup": {
+      "post": {
+        "operationId": "AuthController_signup",
+        "summary": "Register a new user account",
+        "tags": ["Auth"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SignupDto" }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Account created. Confirm email before logging in." },
+          "401": { "description": "Signup failed (e.g., email already exists)" },
+          "429": { "description": "Rate limit exceeded (5 req/min)" }
+        }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "operationId": "AuthController_login",
+        "summary": "Authenticate and receive session tokens",
+        "tags": ["Auth"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LoginDto" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Returns accessToken, refreshToken, expiresAt, and user metadata" },
+          "401": { "description": "Invalid email or password" },
+          "429": { "description": "Rate limit exceeded (5 req/min)" }
+        }
+      }
+    },
+    "/api/auth/refresh": {
+      "post": {
+        "operationId": "AuthController_refresh",
+        "summary": "Exchange refresh token for new access token",
+        "tags": ["Auth"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RefreshDto" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Returns new accessToken and refreshToken" },
+          "401": { "description": "Invalid or expired refresh token" },
+          "429": { "description": "Rate limit exceeded (5 req/min)" }
+        }
+      }
+    },
+    "/api/auth/switch-tenant": {
+      "post": {
+        "operationId": "AuthController_switchTenant",
+        "summary": "Switch active tenant context. Client MUST call /auth/refresh afterward.",
+        "tags": ["Auth"],
+        "security": [{ "bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SwitchTenantDto" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Context switched. Call POST /auth/refresh for updated JWT." },
+          "403": { "description": "Not a member of the requested tenant" }
+        }
+      }
+    },
+    "/api/tenants": {
+      "post": {
+        "operationId": "TenantsController_create",
+        "summary": "Create a new church/tenant (super admin only)",
+        "tags": ["Tenants"],
+        "security": [{ "bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateTenantDto" }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Tenant created. Call /auth/refresh for updated JWT." },
+          "403": { "description": "Super admin access required" }
+        }
+      }
+    },
+    "/api/tenants/{id}": {
+      "get": {
+        "operationId": "TenantsController_findOne",
+        "summary": "Get tenant details",
+        "tags": ["Tenants"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Tenant details" },
+          "404": { "description": "Tenant not found or not accessible" }
+        }
+      }
+    },
+    "/api/users/me": {
+      "get": {
+        "operationId": "UsersController_getMe",
+        "summary": "Get authenticated user profile",
+        "tags": ["Users"],
+        "security": [{ "bearer": [] }],
+        "responses": {
+          "200": { "description": "User profile" }
+        }
+      },
+      "patch": {
+        "operationId": "UsersController_updateMe",
+        "summary": "Update authenticated user profile (fullName, avatarUrl)",
+        "tags": ["Users"],
+        "security": [{ "bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/UpdateUserDto" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Updated user profile" }
+        }
+      },
+      "delete": {
+        "operationId": "UsersController_deleteMe",
+        "summary": "Permanently delete account and all data (GDPR Right to Erasure)",
+        "tags": ["Users"],
+        "security": [{ "bearer": [] }],
+        "responses": {
+          "200": { "description": "Account deleted. All personal data erased." },
+          "404": { "description": "User not found" }
+        }
+      }
+    },
+    "/api/users/me/export": {
+      "get": {
+        "operationId": "UsersController_exportData",
+        "summary": "Export all personal data as JSON (GDPR Right of Access)",
+        "tags": ["Users"],
+        "security": [{ "bearer": [] }],
+        "responses": {
+          "200": { "description": "JSON dump of all user data across all tenants" }
+        }
+      }
+    },
+    "/api/memberships": {
+      "get": {
+        "operationId": "MembershipsController_getMyMemberships",
+        "summary": "List all tenants the authenticated user belongs to",
+        "tags": ["Memberships"],
+        "security": [{ "bearer": [] }],
+        "responses": {
+          "200": { "description": "Array of memberships with tenant details" }
+        }
+      },
+      "post": {
+        "operationId": "MembershipsController_createMembership",
+        "summary": "Add a user to the current tenant (admin/pastor only)",
+        "tags": ["Memberships"],
+        "security": [{ "bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateMembershipDto" }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Membership created" },
+          "404": { "description": "User with given email not found" }
+        }
+      }
+    },
+    "/api/tenants/{tenantId}/members": {
+      "get": {
+        "operationId": "MembershipsController_getMembers",
+        "summary": "List tenant members with cursor-based pagination",
+        "tags": ["Memberships"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "tenantId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string", "format": "uuid" }, "description": "user_id of last member seen" },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 20, "minimum": 1, "maximum": 100 } }
+        ],
+        "responses": {
+          "200": { "description": "Paginated member list with nextCursor" }
+        }
+      }
+    },
+    "/api/tenants/{tenantId}/members/{userId}/role": {
+      "patch": {
+        "operationId": "MembershipsController_updateRole",
+        "summary": "Update a member role (admin only)",
+        "tags": ["Memberships"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "tenantId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "userId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/UpdateRoleDto" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Role updated" },
+          "404": { "description": "Membership not found or not authorized" }
+        }
+      }
+    },
+    "/api/tenants/{tenantId}/members/{userId}": {
+      "delete": {
+        "operationId": "MembershipsController_removeMember",
+        "summary": "Remove a member from tenant (admin or self)",
+        "tags": ["Memberships"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "tenantId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "userId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "204": { "description": "Member removed" },
+          "404": { "description": "Membership not found or not authorized" }
+        }
+      }
+    },
+    "/api/posts": {
+      "post": {
+        "operationId": "PostsController_createPost",
+        "summary": "Create a church-internal post",
+        "tags": ["Posts"],
+        "security": [{ "bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreatePostDto" }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Post created" }
+        }
+      },
+      "get": {
+        "operationId": "PostsController_getPosts",
+        "summary": "List paginated posts for current tenant (newest first)",
+        "tags": ["Posts"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 20, "minimum": 1, "maximum": 100 } },
+          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "default": 0, "minimum": 0 } }
+        ],
+        "responses": {
+          "200": { "description": "Array of posts with pagination metadata" }
+        }
+      }
+    },
+    "/api/posts/global": {
+      "post": {
+        "operationId": "PostsController_createGlobalPost",
+        "summary": "Create a global post (visible to all users, triggers fan-out)",
+        "tags": ["Posts"],
+        "security": [{ "bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreatePostDto" }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Global post created and fan-out queued" }
+        }
+      }
+    },
+    "/api/posts/{id}": {
+      "get": {
+        "operationId": "PostsController_findOne",
+        "summary": "Get a single post by ID",
+        "tags": ["Posts"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Post object" },
+          "404": { "description": "Post not found or not in current tenant" }
+        }
+      },
+      "patch": {
+        "operationId": "PostsController_updatePost",
+        "summary": "Update post content (author only)",
+        "tags": ["Posts"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/UpdatePostDto" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Updated post" },
+          "404": { "description": "Post not found or not the author" }
+        }
+      },
+      "delete": {
+        "operationId": "PostsController_deletePost",
+        "summary": "Delete a post (author or admin)",
+        "tags": ["Posts"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "204": { "description": "Post deleted" },
+          "404": { "description": "Post not found or not authorized" }
+        }
+      }
+    },
+    "/api/posts/{postId}/comments": {
+      "post": {
+        "operationId": "CommentsController_createComment",
+        "summary": "Create a comment on a post",
+        "tags": ["Comments"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "postId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateCommentDto" }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Comment created. Notification sent to post author." },
+          "404": { "description": "Post not found in current tenant" }
+        }
+      },
+      "get": {
+        "operationId": "CommentsController_getComments",
+        "summary": "List comments for a post (newest first)",
+        "tags": ["Comments"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "postId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 20, "minimum": 1, "maximum": 100 } },
+          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "default": 0, "minimum": 0 } }
+        ],
+        "responses": {
+          "200": { "description": "Paginated array of comments" },
+          "404": { "description": "Post not found in current tenant" }
+        }
+      }
+    },
+    "/api/invitations": {
+      "get": {
+        "operationId": "InvitationsController_getInvitations",
+        "summary": "List pending invitations for current tenant (admin/pastor)",
+        "tags": ["Invitations"],
+        "security": [{ "bearer": [] }],
+        "responses": {
+          "200": { "description": "Array of pending invitations" }
+        }
+      },
+      "post": {
+        "operationId": "InvitationsController_createInvitation",
+        "summary": "Send an invitation to join the current tenant",
+        "tags": ["Invitations"],
+        "security": [{ "bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateInvitationDto" }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Invitation created and email queued" }
+        }
+      }
+    },
+    "/api/invitations/{token}/accept": {
+      "post": {
+        "operationId": "InvitationsController_acceptInvitation",
+        "summary": "Accept an invitation by token. Call /auth/switch-tenant + /auth/refresh afterward.",
+        "tags": ["Invitations"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "token", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Invitation accepted. Membership created." },
+          "400": { "description": "Invalid/expired token or email mismatch" }
+        }
+      }
+    },
+    "/api/notifications": {
+      "get": {
+        "operationId": "NotificationsController_getNotifications",
+        "summary": "List notifications for authenticated user",
+        "tags": ["Notifications"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 20, "minimum": 1, "maximum": 50 } },
+          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "default": 0, "minimum": 0 } },
+          { "name": "unreadOnly", "in": "query", "required": false, "schema": { "type": "boolean", "default": false }, "description": "When true, returns only unread notifications" }
+        ],
+        "responses": {
+          "200": { "description": "Paginated array of notifications" }
+        }
+      }
+    },
+    "/api/notifications/{id}/read": {
+      "patch": {
+        "operationId": "NotificationsController_markAsRead",
+        "summary": "Mark a notification as read",
+        "tags": ["Notifications"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Notification marked as read" },
+          "404": { "description": "Notification not found" }
+        }
+      }
+    },
+    "/api/media/presigned-url": {
+      "post": {
+        "operationId": "MediaController_generatePresignedUrl",
+        "summary": "Generate a pre-signed S3 upload URL (5 min expiry)",
+        "tags": ["Media"],
+        "security": [{ "bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PresignedUrlDto" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Returns uploadUrl and fileKey for direct S3 upload" },
+          "400": { "description": "No active tenant context" }
+        }
+      }
+    },
+    "/api/users/{id}/follow": {
+      "post": {
+        "operationId": "FollowsController_follow",
+        "summary": "Follow a user (platform-wide, not tenant-scoped)",
+        "tags": ["Follows"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "201": { "description": "Now following the user" },
+          "409": { "description": "Already following this user" }
+        }
+      },
+      "delete": {
+        "operationId": "FollowsController_unfollow",
+        "summary": "Unfollow a user",
+        "tags": ["Follows"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Unfollowed successfully" }
+        }
+      }
+    },
+    "/api/users/{id}/followers": {
+      "get": {
+        "operationId": "FollowsController_getFollowers",
+        "summary": "List users who follow the specified user",
+        "tags": ["Follows"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 20, "minimum": 1, "maximum": 50 } },
+          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "default": 0, "minimum": 0 } }
+        ],
+        "responses": {
+          "200": { "description": "Paginated follower list" }
+        }
+      }
+    },
+    "/api/users/{id}/following": {
+      "get": {
+        "operationId": "FollowsController_getFollowing",
+        "summary": "List users the specified user is following",
+        "tags": ["Follows"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 20, "minimum": 1, "maximum": 50 } },
+          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "default": 0, "minimum": 0 } }
+        ],
+        "responses": {
+          "200": { "description": "Paginated following list" }
+        }
+      }
+    },
+    "/api/channels": {
+      "post": {
+        "operationId": "ChatController_createChannel",
+        "summary": "Create a chat channel (public, private, or direct)",
+        "tags": ["Chat"],
+        "security": [{ "bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateChannelDto" }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Channel created. Creator auto-added as member." }
+        }
+      },
+      "get": {
+        "operationId": "ChatController_getChannels",
+        "summary": "List accessible channels in the current tenant",
+        "tags": ["Chat"],
+        "security": [{ "bearer": [] }],
+        "responses": {
+          "200": { "description": "Array of channels" }
+        }
+      }
+    },
+    "/api/channels/{id}/members": {
+      "post": {
+        "operationId": "ChatController_addMember",
+        "summary": "Add a member to a channel",
+        "tags": ["Chat"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AddMemberDto" }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Member added (idempotent)" }
+        }
+      }
+    },
+    "/api/channels/{id}/messages": {
+      "post": {
+        "operationId": "ChatController_sendMessage",
+        "summary": "Send a message to a channel",
+        "tags": ["Chat"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SendMessageDto" }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Message sent. Push notification dispatched for private/direct channels." }
+        }
+      },
+      "get": {
+        "operationId": "ChatController_getMessages",
+        "summary": "Get channel messages with cursor-based pagination",
+        "tags": ["Chat"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string", "format": "uuid" }, "description": "UUID of last message seen — loads older messages" },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 50, "minimum": 1, "maximum": 100 } }
+        ],
+        "responses": {
+          "200": { "description": "{ messages, nextCursor } — nextCursor is null when no more messages" }
+        }
+      }
+    },
+    "/api/search/posts": {
+      "get": {
+        "operationId": "SearchController_searchPosts",
+        "summary": "Full-text search posts in current tenant (ranked by relevance)",
+        "tags": ["Search"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "q", "in": "query", "required": true, "schema": { "type": "string", "minLength": 1, "maxLength": 200 }, "description": "Full-text search query (supports phrases, OR, exclusion)" },
+          { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 20, "minimum": 1, "maximum": 100 } }
+        ],
+        "responses": {
+          "200": { "description": "Paginated search results with cursor" }
+        }
+      }
+    },
+    "/api/search/members": {
+      "get": {
+        "operationId": "SearchController_searchMembers",
+        "summary": "Full-text search members in current tenant (by name/email)",
+        "tags": ["Search"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "q", "in": "query", "required": true, "schema": { "type": "string", "minLength": 1, "maxLength": 200 }, "description": "Search by full_name or email" },
+          { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 20, "minimum": 1, "maximum": 100 } }
+        ],
+        "responses": {
+          "200": { "description": "Paginated search results with cursor" }
+        }
+      }
+    },
+    "/api/stripe/connect/onboard": {
+      "post": {
+        "operationId": "StripeConnectController_onboard",
+        "summary": "Initiate Stripe Connect onboarding (admin only, idempotent)",
+        "tags": ["Stripe Connect"],
+        "security": [{ "bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/OnboardConnectDto" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Returns Stripe AccountLink URL and stripeAccountId" },
+          "400": { "description": "Not an admin or no tenant context" }
+        }
+      }
+    },
+    "/api/stripe/connect/status": {
+      "get": {
+        "operationId": "StripeConnectController_getStatus",
+        "summary": "Get Stripe Connect onboarding status (admin only)",
+        "tags": ["Stripe Connect"],
+        "security": [{ "bearer": [] }],
+        "responses": {
+          "200": { "description": "Returns status, chargesEnabled, payoutsEnabled, detailsSubmitted" },
+          "400": { "description": "Not an admin or no tenant context" }
+        }
+      }
+    },
+    "/api/giving/donate": {
+      "post": {
+        "operationId": "GivingController_donate",
+        "summary": "Create a donation PaymentIntent (returns clientSecret for Stripe.js)",
+        "tags": ["Giving"],
+        "security": [{ "bearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/DonateDto" }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "{ clientSecret, transactionId }" },
+          "400": { "description": "Church has not set up or activated payment processing" }
+        }
+      }
+    },
+    "/api/giving/transactions": {
+      "get": {
+        "operationId": "GivingController_getMyTransactions",
+        "summary": "Get authenticated user donation history (cursor-paginated)",
+        "tags": ["Giving"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "string", "default": "20" } }
+        ],
+        "responses": {
+          "200": { "description": "{ transactions, nextCursor }" }
+        }
+      }
+    },
+    "/api/tenants/{tenantId}/transactions": {
+      "get": {
+        "operationId": "GivingController_getTenantTransactions",
+        "summary": "Get all tenant transactions (admin dashboard, cursor-paginated)",
+        "tags": ["Giving"],
+        "security": [{ "bearer": [] }],
+        "parameters": [
+          { "name": "tenantId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "string", "default": "20" } }
+        ],
+        "responses": {
+          "200": { "description": "{ transactions, nextCursor }" }
+        }
+      }
+    },
+    "/api/webhooks/stripe": {
+      "post": {
+        "operationId": "StripeWebhookController_handleStripeWebhook",
+        "summary": "Stripe webhook receiver (signature-verified, no JWT)",
+        "tags": ["Webhooks"],
+        "responses": {
+          "200": { "description": "{ received: true }" },
+          "401": { "description": "Invalid or missing stripe-signature header" }
+        }
+      }
+    },
+    "/api/webhooks/mux": {
+      "post": {
+        "operationId": "WebhooksController_handleMuxWebhook",
+        "summary": "Mux webhook receiver (HMAC-SHA256 verified, no JWT)",
+        "tags": ["Webhooks"],
+        "responses": {
+          "200": { "description": "{ received: true }" },
+          "401": { "description": "Invalid or missing mux-signature header" }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "operationId": "HealthController_liveness",
+        "summary": "Liveness probe — is the process running?",
+        "tags": ["Health"],
+        "responses": {
+          "200": { "description": "{ status: \"ok\", timestamp }" }
+        }
+      }
+    },
+    "/api/health/ready": {
+      "get": {
+        "operationId": "HealthController_readiness",
+        "summary": "Readiness probe — is the database connection alive?",
+        "tags": ["Health"],
+        "responses": {
+          "200": { "description": "{ status: \"ok\"|\"degraded\", database: \"connected\"|\"disconnected\", timestamp }" }
+        }
+      }
+    }
+  },
+  "info": {
+    "title": "ChurchApp Platform API",
+    "description": "Multi-tenant church management platform & global social network.\n\n**Authentication:** All protected endpoints require a Supabase JWT in the `Authorization: Bearer <token>` header.\n\n**Tenant Context:** Most endpoints are tenant-scoped via PostgreSQL Row-Level Security. Call `POST /api/auth/switch-tenant` followed by `POST /api/auth/refresh` to set the active tenant in your JWT.\n\n**Rate Limits:** Global: 100 req/min per IP. Auth endpoints: 5 req/min per IP. Webhooks: unlimited.",
+    "version": "1.0.0",
+    "contact": {}
+  },
+  "tags": [
+    { "name": "Auth", "description": "User registration, login, token refresh, tenant switching" },
+    { "name": "Tenants", "description": "Church/tenant CRUD (super admin)" },
+    { "name": "Users", "description": "User profile management & GDPR endpoints" },
+    { "name": "Memberships", "description": "Tenant membership management & member listing" },
+    { "name": "Posts", "description": "Church-internal and global post CRUD" },
+    { "name": "Comments", "description": "Post comments (nested under /posts/:postId)" },
+    { "name": "Invitations", "description": "Church invitation management" },
+    { "name": "Notifications", "description": "In-app notification listing & read marking" },
+    { "name": "Media", "description": "S3 pre-signed upload URL generation" },
+    { "name": "Follows", "description": "Platform-wide user follow/unfollow & lists" },
+    { "name": "Chat", "description": "Real-time chat channels & messaging" },
+    { "name": "Search", "description": "Full-text search for posts & members" },
+    { "name": "Stripe Connect", "description": "Stripe Connect onboarding & status (admin)" },
+    { "name": "Giving", "description": "Donation/giving flow via Stripe PaymentIntents" },
+    { "name": "Webhooks", "description": "External webhook receivers (Stripe, Mux) — signature-verified" },
+    { "name": "Health", "description": "Liveness & readiness probes for orchestration" }
+  ],
+  "servers": [
+    { "url": "http://localhost:3000", "description": "Local development" }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "type": "http",
+        "description": "Supabase JWT access token"
+      }
+    },
+    "schemas": {
+      "SignupDto": {
+        "type": "object",
+        "required": ["email", "password"],
+        "properties": {
+          "email": { "type": "string", "format": "email", "example": "user@example.com" },
+          "password": { "type": "string", "minLength": 8, "maxLength": 72, "example": "secureP@ss1" }
+        }
+      },
+      "LoginDto": {
+        "type": "object",
+        "required": ["email", "password"],
+        "properties": {
+          "email": { "type": "string", "format": "email", "example": "user@example.com" },
+          "password": { "type": "string", "example": "secureP@ss1" }
+        }
+      },
+      "RefreshDto": {
+        "type": "object",
+        "required": ["refreshToken"],
+        "properties": {
+          "refreshToken": { "type": "string", "description": "Refresh token from login or previous refresh" }
+        }
+      },
+      "SwitchTenantDto": {
+        "type": "object",
+        "required": ["tenantId"],
+        "properties": {
+          "tenantId": { "type": "string", "format": "uuid", "description": "Target tenant to switch context to" }
+        }
+      },
+      "CreateTenantDto": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "maxLength": 255, "example": "First Baptist Church" }
+        }
+      },
+      "UpdateUserDto": {
+        "type": "object",
+        "properties": {
+          "fullName": { "type": "string", "maxLength": 255, "example": "John Doe" },
+          "avatarUrl": { "type": "string", "format": "uri", "maxLength": 2048, "example": "https://cdn.example.com/avatar.jpg" }
+        }
+      },
+      "CreateMembershipDto": {
+        "type": "object",
+        "required": ["email", "role"],
+        "properties": {
+          "email": { "type": "string", "format": "email", "example": "newmember@example.com", "description": "Email of the user to add. Must already have a platform account." },
+          "role": { "type": "string", "enum": ["admin", "pastor", "member"], "example": "member" }
+        }
+      },
+      "UpdateRoleDto": {
+        "type": "object",
+        "required": ["role"],
+        "properties": {
+          "role": { "type": "string", "enum": ["admin", "pastor", "member"], "example": "pastor" }
+        }
+      },
+      "CreatePostDto": {
+        "type": "object",
+        "required": ["content"],
+        "properties": {
+          "content": { "type": "string", "maxLength": 5000, "example": "Excited for Sunday service!" },
+          "videoMuxPlaybackId": { "type": "string", "description": "Mux playback ID for an attached video" },
+          "mentions": { "type": "array", "items": { "type": "string", "format": "uuid" }, "description": "User UUIDs mentioned in the post" }
+        }
+      },
+      "UpdatePostDto": {
+        "type": "object",
+        "properties": {
+          "content": { "type": "string", "maxLength": 5000, "example": "Updated post content" }
+        }
+      },
+      "CreateCommentDto": {
+        "type": "object",
+        "required": ["content"],
+        "properties": {
+          "content": { "type": "string", "maxLength": 2000, "example": "Great post!" }
+        }
+      },
+      "CreateInvitationDto": {
+        "type": "object",
+        "required": ["email", "role"],
+        "properties": {
+          "email": { "type": "string", "format": "email", "example": "invitee@example.com", "description": "Email address of the person being invited" },
+          "role": { "type": "string", "enum": ["admin", "pastor", "member"], "example": "member" }
+        }
+      },
+      "PresignedUrlDto": {
+        "type": "object",
+        "required": ["filename", "contentType"],
+        "properties": {
+          "filename": { "type": "string", "maxLength": 255, "example": "sermon-photo.jpg" },
+          "contentType": { "type": "string", "example": "image/jpeg", "description": "Supported: image/jpeg, image/png, image/gif, image/webp, video/mp4, video/quicktime, video/webm" }
+        }
+      },
+      "CreateChannelDto": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "name": { "type": "string", "maxLength": 100, "example": "Prayer Group" },
+          "type": { "type": "string", "enum": ["public", "private", "direct"], "example": "private" }
+        }
+      },
+      "AddMemberDto": {
+        "type": "object",
+        "required": ["userId"],
+        "properties": {
+          "userId": { "type": "string", "format": "uuid", "description": "User ID to add to the channel" }
+        }
+      },
+      "SendMessageDto": {
+        "type": "object",
+        "required": ["content"],
+        "properties": {
+          "content": { "type": "string", "minLength": 1, "maxLength": 5000, "example": "Hello everyone!" }
+        }
+      },
+      "SearchQueryDto": {
+        "type": "object",
+        "required": ["q"],
+        "properties": {
+          "q": { "type": "string", "minLength": 1, "maxLength": 200, "example": "sunday sermon", "description": "Full-text search query (supports phrases, OR, exclusion)" },
+          "cursor": { "type": "string", "format": "uuid" },
+          "limit": { "type": "integer", "default": 20, "minimum": 1, "maximum": 100 }
+        }
+      },
+      "OnboardConnectDto": {
+        "type": "object",
+        "required": ["refreshUrl", "returnUrl"],
+        "properties": {
+          "refreshUrl": { "type": "string", "format": "uri", "example": "https://app.example.com/onboard", "description": "Redirect URL if onboarding link expires" },
+          "returnUrl": { "type": "string", "format": "uri", "example": "https://app.example.com/dashboard", "description": "Redirect URL after onboarding completes" }
+        }
+      },
+      "DonateDto": {
+        "type": "object",
+        "required": ["amount"],
+        "properties": {
+          "amount": { "type": "number", "minimum": 1, "example": 100, "description": "Donation amount in dollars (e.g., 100 = $100.00)" },
+          "currency": { "type": "string", "enum": ["usd", "eur", "gbp", "cad", "aud"], "default": "usd" }
+        }
+      }
+    }
+  }
+}
