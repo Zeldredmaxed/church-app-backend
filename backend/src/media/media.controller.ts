@@ -5,6 +5,7 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { MediaService } from './media.service';
@@ -29,7 +30,10 @@ export class MediaController {
     @CurrentUser() user: SupabaseJwtPayload,
     @Body() dto: PresignedUrlDto,
   ) {
-    const tenantId = user.app_metadata?.current_tenant_id ?? null;
+    const tenantId = user.app_metadata?.current_tenant_id;
+    if (!tenantId) {
+      throw new BadRequestException('No active tenant context');
+    }
     return this.mediaService.generatePresignedUrl(dto, tenantId, user.sub);
   }
 }

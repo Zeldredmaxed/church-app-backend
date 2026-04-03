@@ -5,7 +5,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { GraphQLModule } from '@nestjs/graphql';
 import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { ThrottlerModule } from '@nestjs/throttler';
-import { ThrottlerStorageRedisService } from '@nestjs/throttler/dist/throttler-storage-redis.service';
+import { RedisThrottlerStorage } from './common/storage/redis-throttler.storage';
 import { APP_GUARD } from '@nestjs/core';
 import { join } from 'path';
 import { AuthModule } from './auth/auth.module';
@@ -111,11 +111,11 @@ import { Notification } from './notifications/entities/notification.entity';
             limit: 5,
           },
         ],
-        storage: new ThrottlerStorageRedisService({
-          host: config.getOrThrow<string>('REDIS_HOST'),
-          port: config.get<number>('REDIS_PORT', 6379),
-          password: config.get<string>('REDIS_PASSWORD'),
-        }),
+        storage: new RedisThrottlerStorage(
+          config.getOrThrow<string>('REDIS_HOST'),
+          config.get<number>('REDIS_PORT', 6379),
+          config.get<string>('REDIS_PASSWORD'),
+        ),
       }),
     }),
 
@@ -127,7 +127,7 @@ import { Notification } from './notifications/entities/notification.entity';
       autoSchemaFile: join(process.cwd(), 'src/schema.gql'),
       sortSchema: true,
       playground: process.env.NODE_ENV !== 'production',
-      context: ({ req }) => ({ req }),
+      context: ({ req }: { req: any }) => ({ req }),
     }),
 
     AuthModule,

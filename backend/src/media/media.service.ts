@@ -104,7 +104,7 @@ export class MediaService {
    * Deletes all S3 objects for a user across all their tenant namespaces.
    *
    * Used by the GDPR "Right to Erasure" flow. Lists all objects under
-   * `tenants/*/users/{userId}/` and batch-deletes them.
+   * tenants/TENANT_ID/users/USER_ID/ and batch-deletes them.
    *
    * This is best-effort — S3 failures are logged but do not prevent
    * account deletion. The user's DB records are the authoritative source;
