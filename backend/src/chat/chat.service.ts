@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { rlsStorage } from '../common/storage/rls.storage';
@@ -15,6 +15,20 @@ export class ChatService {
     @InjectQueue('notifications') private readonly notificationsQueue: Queue,
   ) {}
 
+  /** Returns the RLS context, throwing 400 if no tenant is set in the JWT. */
+  private requireTenantContext() {
+    const ctx = rlsStorage.getStore();
+    if (!ctx) {
+      throw new BadRequestException('RLS context unavailable');
+    }
+    if (!ctx.currentTenantId) {
+      throw new BadRequestException(
+        'No tenant context. Call POST /api/auth/switch-tenant then POST /api/auth/refresh first.',
+      );
+    }
+    return ctx;
+  }
+
   /**
    * Creates a chat channel within the current tenant.
    * RLS INSERT policy enforces:
@@ -26,7 +40,7 @@ export class ChatService {
    * After creation, automatically adds the creator as a channel member.
    */
   async createChannel(dto: CreateChannelDto, userId: string): Promise<ChatChannel> {
-    const { queryRunner, currentTenantId } = rlsStorage.getStore()!;
+    const { queryRunner, currentTenantId } = this.requireTenantContext();
 
     const channel = queryRunner.manager.create(ChatChannel, {
       tenantId: currentTenantId!,
@@ -54,7 +68,7 @@ export class ChatService {
    * RLS SELECT policy handles visibility (public = all, private/direct = members only).
    */
   async getChannels(): Promise<ChatChannel[]> {
-    const { queryRunner } = rlsStorage.getStore()!;
+    const { queryRunner } = this.requireTenantContext();
     return queryRunner.manager.find(ChatChannel, {
       order: { createdAt: 'DESC' },
     });
@@ -111,7 +125,7 @@ export class ChatService {
     dto: SendMessageDto,
     userId: string,
   ): Promise<ChatMessage> {
-    const { queryRunner, currentTenantId } = rlsStorage.getStore()!;
+    const { queryRunner, currentTenantId } = this.requireTenantContext();
 
     // Verify channel exists and is accessible (RLS enforced)
     const channel = await queryRunner.manager.findOne(ChatChannel, {
