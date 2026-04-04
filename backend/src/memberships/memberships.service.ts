@@ -13,6 +13,7 @@ import { User } from '../users/entities/user.entity';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { CreateMembershipDto } from './dto/create-membership.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
+import { UpdatePermissionsDto } from './dto/update-permissions.dto';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 
 @Injectable()
@@ -319,6 +320,86 @@ export class MembershipsService {
     this.logger.log(`Member ${targetUserId} removed from tenant ${tenantId}`);
   }
 
+  /**
+   * Updates a member's granular permissions within the current tenant.
+   *
+   * Only admins can update permissions. Uses RLS-scoped QueryRunner so the
+   * UPDATE policy enforces admin-only access at the database level.
+   */
+  async updatePermissions(
+    tenantId: string,
+    targetUserId: string,
+    dto: UpdatePermissionsDto,
+  ): Promise<TenantMemberDetail> {
+    const { queryRunner } = this.getRlsContext();
+
+    // Validate allowed permission keys
+    const allowedKeys = [
+      'manage_finance',
+      'manage_content',
+      'manage_members',
+      'manage_worship',
+      'view_analytics',
+    ];
+    const invalidKeys = Object.keys(dto.permissions).filter(
+      k => !allowedKeys.includes(k),
+    );
+    if (invalidKeys.length > 0) {
+      throw new BadRequestException(
+        `Invalid permission keys: ${invalidKeys.join(', ')}. ` +
+        `Allowed: ${allowedKeys.join(', ')}`,
+      );
+    }
+
+    const result = await queryRunner.manager.update(
+      TenantMembership,
+      { userId: targetUserId, tenantId },
+      { permissions: dto.permissions },
+    );
+
+    if (result.affected === 0) {
+      throw new NotFoundException(
+        'Membership not found or you do not have permission to update it',
+      );
+    }
+
+    // Fetch updated membership with user details
+    const rows: Array<{
+      user_id: string;
+      tenant_id: string;
+      role: string;
+      permissions: Record<string, boolean>;
+      email: string;
+      full_name: string | null;
+      avatar_url: string | null;
+    }> = await queryRunner.query(
+      `SELECT tm.user_id, tm.tenant_id, tm.role, tm.permissions,
+              u.email, u.full_name, u.avatar_url
+       FROM public.tenant_memberships tm
+       JOIN public.users u ON u.id = tm.user_id
+       WHERE tm.user_id = $1 AND tm.tenant_id = $2`,
+      [targetUserId, tenantId],
+    );
+
+    if (rows.length === 0) {
+      throw new NotFoundException('Membership not found');
+    }
+
+    this.logger.log(
+      `Permissions updated: user ${targetUserId} in tenant ${tenantId} → ${JSON.stringify(dto.permissions)}`,
+    );
+
+    return {
+      userId: rows[0].user_id,
+      tenantId: rows[0].tenant_id,
+      role: rows[0].role as TenantMembership['role'],
+      email: rows[0].email,
+      fullName: rows[0].full_name,
+      avatarUrl: rows[0].avatar_url,
+      permissions: rows[0].permissions,
+    };
+  }
+
   private getRlsContext() {
     const context = rlsStorage.getStore();
     if (!context) {
@@ -333,16 +414,17 @@ export class MembershipsService {
 export interface TenantMemberDetail {
   userId: string;
   tenantId: string;
-  role: 'admin' | 'pastor' | 'member';
+  role: 'admin' | 'pastor' | 'accountant' | 'worship_leader' | 'member';
   email: string;
   fullName: string | null;
   avatarUrl: string | null;
+  permissions?: Record<string, boolean>;
 }
 
 export interface MembershipWithTenant {
   tenantId: string;
   tenantName: string;
-  role: 'admin' | 'pastor' | 'member';
+  role: 'admin' | 'pastor' | 'accountant' | 'worship_leader' | 'member';
   /** Whether this is the user's currently active tenant context. */
   isCurrent: boolean;
   /** Only present on POST responses */

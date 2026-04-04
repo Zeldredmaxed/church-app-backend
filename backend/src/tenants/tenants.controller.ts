@@ -11,8 +11,10 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { TenantsService } from './tenants.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
+import { RegisterChurchDto } from './dto/register-church.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { SuperAdminGuard } from '../common/guards/super-admin.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
@@ -20,12 +22,27 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 
 @ApiTags('Tenants')
-@ApiBearerAuth()
 @Controller('tenants')
 export class TenantsController {
   constructor(private readonly tenantsService: TenantsService) {}
 
+  /**
+   * Self-service church registration — PUBLIC endpoint (no JWT required).
+   * Rate-limited to 5 requests per minute to prevent abuse.
+   */
+  @Post('register')
+  @HttpCode(HttpStatus.CREATED)
+  @Throttle({ auth: { ttl: 60000, limit: 5 } })
+  @ApiOperation({ summary: 'Register a new church (self-service, no auth required)' })
+  @ApiResponse({ status: 201, description: 'Church created. Returns JWT for the new admin.' })
+  @ApiResponse({ status: 400, description: 'Invalid registration key' })
+  @ApiResponse({ status: 409, description: 'Email or Church App ID already taken' })
+  register(@Body() dto: RegisterChurchDto) {
+    return this.tenantsService.register(dto);
+  }
+
   @Post()
+  @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, SuperAdminGuard)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create a new church/tenant (super admin only)' })
@@ -39,6 +56,7 @@ export class TenantsController {
   }
 
   @Get(':id')
+  @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(RlsContextInterceptor)
   @ApiOperation({ summary: 'Get tenant details' })

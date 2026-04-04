@@ -15,8 +15,10 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { GivingService } from './giving.service';
 import { DonateDto } from './dto/donate.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { Permissions } from '../common/decorators/permissions.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 
 @ApiTags('Giving')
@@ -53,8 +55,11 @@ export class GivingController {
   }
 
   @Get('tenants/:tenantId/transactions')
-  @ApiOperation({ summary: 'Get all tenant transactions (admin dashboard, cursor-paginated)' })
+  @UseGuards(PermissionsGuard)
+  @Permissions('manage_finance')
+  @ApiOperation({ summary: 'Get all tenant transactions (admin/accountant, cursor-paginated)' })
   @ApiResponse({ status: 200, description: '{ transactions, nextCursor }' })
+  @ApiResponse({ status: 403, description: 'Insufficient permissions (requires manage_finance)' })
   getTenantTransactions(
     @Param('tenantId', ParseUUIDPipe) tenantId: string,
     @Query('cursor') cursor?: string,

@@ -13,9 +13,9 @@ export class CreateMembershipDto {
   @IsEmail()
   email: string;
 
-  @ApiProperty({ enum: ['admin', 'pastor', 'member'], example: 'member' })
-  @IsIn(['admin', 'pastor', 'member'], {
-    message: "role must be one of: 'admin', 'pastor', 'member'",
+  @ApiProperty({ enum: ['admin', 'pastor', 'accountant', 'worship_leader', 'member'], example: 'member' })
+  @IsIn(['admin', 'pastor', 'accountant', 'worship_leader', 'member'], {
+    message: "role must be one of: 'admin', 'pastor', 'accountant', 'worship_leader', 'member'",
   })
-  role: 'admin' | 'pastor' | 'member';
+  role: 'admin' | 'pastor' | 'accountant' | 'worship_leader' | 'member';
 }

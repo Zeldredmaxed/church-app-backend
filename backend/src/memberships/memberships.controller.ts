@@ -17,6 +17,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { MembershipsService } from './memberships.service';
 import { CreateMembershipDto } from './dto/create-membership.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
+import { UpdatePermissionsDto } from './dto/update-permissions.dto';
 import { GetMembersDto } from './dto/get-members.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
@@ -76,6 +77,19 @@ export class MembershipsController {
     @Body() dto: UpdateRoleDto,
   ) {
     return this.membershipsService.updateRole(tenantId, userId, dto);
+  }
+
+  @Patch('tenants/:tenantId/members/:userId/permissions')
+  @UseInterceptors(RlsContextInterceptor)
+  @ApiOperation({ summary: 'Update member permissions (admin only)' })
+  @ApiResponse({ status: 200, description: 'Permissions updated' })
+  @ApiResponse({ status: 404, description: 'Membership not found or not authorized' })
+  updatePermissions(
+    @Param('tenantId', ParseUUIDPipe) tenantId: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Body() dto: UpdatePermissionsDto,
+  ) {
+    return this.membershipsService.updatePermissions(tenantId, userId, dto);
   }
 
   @Delete('tenants/:tenantId/members/:userId')

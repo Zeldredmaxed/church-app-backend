@@ -38,6 +38,8 @@ import { Post } from './posts/entities/post.entity';
 import { Invitation } from './invitations/entities/invitation.entity';
 import { Comment } from './comments/entities/comment.entity';
 import { Notification } from './notifications/entities/notification.entity';
+import { RegistrationKey } from './tenants/entities/registration-key.entity';
+import { Role } from './tenants/entities/role.entity';
 
 @Module({
   imports: [
@@ -53,7 +55,7 @@ import { Notification } from './notifications/entities/notification.entity';
       useFactory: (config: ConfigService) => ({
         type: 'postgres',
         url: config.getOrThrow<string>('DATABASE_URL'),
-        entities: [Tenant, User, TenantMembership, Post, Invitation, Comment, Notification, Follow, ChatChannel, ChannelMember, ChatMessage, Transaction],
+        entities: [Tenant, User, TenantMembership, Post, Invitation, Comment, Notification, Follow, ChatChannel, ChannelMember, ChatMessage, Transaction, RegistrationKey, Role],
 
         // CRITICAL: synchronize must ALWAYS be false.
         // Schema changes are managed exclusively by migration scripts.
