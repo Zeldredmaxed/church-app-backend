@@ -24,6 +24,20 @@ import { SupabaseJwtPayload } from '../types/jwt-payload.type';
 @Injectable()
 export class CustomThrottlerGuard extends ThrottlerGuard {
   /**
+   * Skip rate limiting for health-check endpoints.
+   * Render's health checker polls /api/health frequently from the same IP,
+   * which can exhaust the rate limit and cause the service to be marked unhealthy.
+   */
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const req = context.switchToHttp().getRequest();
+    const url: string = req.url || req.originalUrl || '';
+    if (url.startsWith('/api/health')) {
+      return true;
+    }
+    return super.canActivate(context);
+  }
+
+  /**
    * Override the tracker key to include tenant context for authenticated requests.
    *
    * The default ThrottlerGuard uses only the IP address. By including the
