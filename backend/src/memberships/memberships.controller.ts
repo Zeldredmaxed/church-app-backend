@@ -20,8 +20,10 @@ import { UpdateRoleDto } from './dto/update-role.dto';
 import { UpdatePermissionsDto } from './dto/update-permissions.dto';
 import { GetMembersDto } from './dto/get-members.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { TierGuard } from '../common/guards/tier.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { RequiresTier } from '../common/decorators/requires-tier.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 
 @ApiTags('Memberships')
@@ -80,8 +82,10 @@ export class MembershipsController {
   }
 
   @Patch('tenants/:tenantId/members/:userId/permissions')
+  @UseGuards(TierGuard)
+  @RequiresTier('granularRoles')
   @UseInterceptors(RlsContextInterceptor)
-  @ApiOperation({ summary: 'Update member permissions (admin only)' })
+  @ApiOperation({ summary: 'Update member permissions (admin only, Pro+ tier)' })
   @ApiResponse({ status: 200, description: 'Permissions updated' })
   @ApiResponse({ status: 404, description: 'Membership not found or not authorized' })
   updatePermissions(

@@ -65,4 +65,17 @@ export class TenantsController {
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.tenantsService.findOne(id);
   }
+
+  /**
+   * Returns the feature flags for the user's current tenant.
+   * The frontend calls this on login to determine which UI elements to show.
+   */
+  @Get(':id/features')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Get tenant feature flags (for frontend bootstrap)' })
+  @ApiResponse({ status: 200, description: 'Tenant tier info + feature flags' })
+  getFeatures(@Param('id', ParseUUIDPipe) id: string) {
+    return this.tenantsService.getFeatures(id);
+  }
 }

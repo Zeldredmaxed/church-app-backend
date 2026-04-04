@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  ForbiddenException,
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
@@ -15,6 +16,7 @@ import { CreateMembershipDto } from './dto/create-membership.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { UpdatePermissionsDto } from './dto/update-permissions.dto';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
+import { getTierFeatures, TIER_DISPLAY_NAMES, TierName } from '../common/config/tier-features.config';
 
 @Injectable()
 export class MembershipsService {
@@ -126,7 +128,34 @@ export class MembershipsService {
       );
     }
 
-    // Step 4: INSERT via RLS QueryRunner — policy enforces admin/pastor role
+    // Step 4: Check admin user limits if adding a non-member role
+    if (dto.role !== 'member') {
+      const tenant = await this.dataSource.manager.findOne(Tenant, {
+        where: { id: currentTenantId },
+        select: ['id', 'tier'],
+      });
+      if (tenant) {
+        const features = getTierFeatures(tenant.tier);
+        if (features.maxAdminUsers !== -1) {
+          // Count existing non-member users in this tenant
+          const adminCount: number = await this.dataSource.manager
+            .createQueryBuilder(TenantMembership, 'tm')
+            .where('tm.tenant_id = :tenantId', { tenantId: currentTenantId })
+            .andWhere("tm.role != 'member'")
+            .getCount();
+
+          if (adminCount >= features.maxAdminUsers) {
+            const tierDisplay = TIER_DISPLAY_NAMES[tenant.tier as TierName] ?? tenant.tier;
+            throw new ForbiddenException(
+              `Your ${tierDisplay} plan allows a maximum of ${features.maxAdminUsers} admin/staff users. ` +
+              `Upgrade your plan to add more staff roles.`,
+            );
+          }
+        }
+      }
+    }
+
+    // Step 5: INSERT via RLS QueryRunner — policy enforces admin/pastor role
     const membership = queryRunner.manager.create(TenantMembership, {
       userId: targetUser.id,
       tenantId: currentTenantId,

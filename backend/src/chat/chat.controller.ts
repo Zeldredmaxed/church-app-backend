@@ -18,14 +18,17 @@ import { AddMemberDto } from './dto/add-member.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import { GetMessagesDto } from './dto/get-messages.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { TierGuard } from '../common/guards/tier.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { RequiresTier } from '../common/decorators/requires-tier.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 
 @ApiTags('Chat')
 @ApiBearerAuth()
 @Controller('channels')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, TierGuard)
+@RequiresTier('chat')
 @UseInterceptors(RlsContextInterceptor)
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}

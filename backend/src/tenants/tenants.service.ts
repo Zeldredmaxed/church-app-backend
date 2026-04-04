@@ -17,6 +17,7 @@ import { User } from '../users/entities/user.entity';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { RegisterChurchDto } from './dto/register-church.dto';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
+import { getTierFeatures, TierFeatures, TIER_DISPLAY_NAMES, TierName } from '../common/config/tier-features.config';
 
 @Injectable()
 export class TenantsService {
@@ -249,5 +250,37 @@ export class TenantsService {
     }
 
     return tenant;
+  }
+
+  /**
+   * Returns the feature set for a tenant based on its tier.
+   * Used by the frontend to bootstrap UI feature flags on login.
+   *
+   * Uses service-role connection (not RLS) — the tenant ID comes from
+   * the verified JWT, not user input.
+   */
+  async getFeatures(tenantId: string) {
+    const tenant = await this.dataSource.manager.findOne(Tenant, {
+      where: { id: tenantId },
+      select: ['id', 'name', 'tier', 'slug'],
+    });
+
+    if (!tenant) {
+      throw new NotFoundException('Tenant not found');
+    }
+
+    const features = getTierFeatures(tenant.tier);
+    const displayName = TIER_DISPLAY_NAMES[tenant.tier as TierName] ?? tenant.tier;
+
+    return {
+      tenant: {
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        tier: tenant.tier,
+        tierDisplayName: displayName,
+      },
+      features,
+    };
   }
 }

@@ -9,12 +9,15 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { SearchService } from './search.service';
 import { SearchQueryDto } from './dto/search-query.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { TierGuard } from '../common/guards/tier.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
+import { RequiresTier } from '../common/decorators/requires-tier.decorator';
 
 @ApiTags('Search')
 @ApiBearerAuth()
 @Controller('search')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, TierGuard)
+@RequiresTier('search')
 @UseInterceptors(RlsContextInterceptor)
 export class SearchController {
   constructor(private readonly searchService: SearchService) {}
