@@ -3,27 +3,47 @@ import {
   CanActivate,
   ExecutionContext,
   UnauthorizedException,
+  Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as jwt from 'jsonwebtoken';
+import { JwksClient } from 'jwks-rsa';
 import { SupabaseJwtPayload } from '../types/jwt-payload.type';
 
 /**
  * Verifies the Supabase-issued JWT in the Authorization header and attaches
  * the decoded payload to request.user.
  *
- * Supabase signs JWTs with HS256 using the project's JWT Secret, which is
- * available at: Supabase Dashboard > Settings > API > JWT Secret.
- * Set it as SUPABASE_JWT_SECRET in .env.
+ * Supports both:
+ *   - ES256 (asymmetric) — newer Supabase projects use ECDSA signing.
+ *     The public key is fetched from the Supabase JWKS endpoint and cached.
+ *   - HS256 (symmetric) — legacy Supabase projects use HMAC with JWT Secret.
  *
  * Apply this guard to any route that requires authentication:
  *   @UseGuards(JwtAuthGuard)
  */
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
-  constructor(private readonly config: ConfigService) {}
+  private readonly logger = new Logger(JwtAuthGuard.name);
+  private readonly jwksClient: JwksClient | null;
+  private readonly jwtSecret: string;
 
-  canActivate(context: ExecutionContext): boolean {
+  constructor(private readonly config: ConfigService) {
+    this.jwtSecret = this.config.getOrThrow<string>('SUPABASE_JWT_SECRET');
+    const supabaseUrl = this.config.get<string>('SUPABASE_URL');
+    if (supabaseUrl) {
+      this.jwksClient = new JwksClient({
+        jwksUri: `${supabaseUrl}/auth/v1/.well-known/jwks.json`,
+        cache: true,
+        cacheMaxAge: 600000, // 10 minutes
+        rateLimit: true,
+      });
+    } else {
+      this.jwksClient = null;
+    }
+  }
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
     const token = this.extractBearerToken(request);
 
@@ -32,11 +52,22 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     try {
-      const payload = jwt.verify(
-        token,
-        this.config.getOrThrow<string>('SUPABASE_JWT_SECRET'),
-        { algorithms: ['HS256'] },
-      ) as SupabaseJwtPayload;
+      const header = jwt.decode(token, { complete: true })?.header;
+      let payload: SupabaseJwtPayload;
+
+      if (header?.alg === 'ES256' && header.kid && this.jwksClient) {
+        // Asymmetric verification via JWKS public key
+        const signingKey = await this.jwksClient.getSigningKey(header.kid);
+        const publicKey = signingKey.getPublicKey();
+        payload = jwt.verify(token, publicKey, {
+          algorithms: ['ES256'],
+        }) as SupabaseJwtPayload;
+      } else {
+        // Symmetric verification via JWT secret (HS256 fallback)
+        payload = jwt.verify(token, this.jwtSecret, {
+          algorithms: ['HS256'],
+        }) as SupabaseJwtPayload;
+      }
 
       // Attach decoded payload — available via @CurrentUser() in controllers
       request.user = payload;
