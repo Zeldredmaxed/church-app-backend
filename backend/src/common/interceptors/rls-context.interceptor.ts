@@ -79,9 +79,12 @@ export class RlsContextInterceptor implements NestInterceptor {
 
         // Step 2: Inject the JWT payload so auth.jwt() resolves in RLS policies.
         // The policies use: (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid
-        await queryRunner.query(`SET LOCAL "request.jwt.claims" = $1`, [
-          JSON.stringify(user),
-        ]);
+        //
+        // NOTE: We use string concatenation instead of parameterized $1 because
+        // PgBouncer (transaction mode) does not support parameterized SET commands.
+        // The value is safe — it's JSON-stringified from our own decoded JWT, not user input.
+        const claimsJson = JSON.stringify(user).replace(/'/g, "''");
+        await queryRunner.query(`SET LOCAL "request.jwt.claims" = '${claimsJson}'`);
 
         const rlsContext: RlsContext = {
           queryRunner,
