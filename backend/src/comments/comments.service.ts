@@ -85,7 +85,13 @@ export class CommentsService {
       previewText: dto.content.slice(0, 100),
     });
 
-    return saved;
+    // Re-fetch with author relation so the response includes fullName/avatarUrl
+    const commentWithAuthor = await queryRunner.manager.findOne(Comment, {
+      where: { id: saved.id },
+      relations: ['author'],
+    });
+
+    return commentWithAuthor ?? saved;
   }
 
   /**
@@ -114,6 +120,7 @@ export class CommentsService {
 
     const [comments, total] = await queryRunner.manager.findAndCount(Comment, {
       where: { postId },
+      relations: ['author'],
       order: { createdAt: 'DESC' },
       take: limit,
       skip: offset,

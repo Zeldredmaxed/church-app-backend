@@ -55,8 +55,8 @@ export class PostsController {
   @UseInterceptors(RlsContextInterceptor)
   @ApiOperation({ summary: 'List paginated posts for current tenant (newest first)' })
   @ApiResponse({ status: 200, description: 'Array of posts with pagination metadata' })
-  getPosts(@Query() query: GetPostsDto) {
-    return this.postsService.getPosts(query);
+  getPosts(@CurrentUser() user: SupabaseJwtPayload, @Query() query: GetPostsDto) {
+    return this.postsService.getPosts(query, user.sub);
   }
 
   @Get(':id')
@@ -85,5 +85,41 @@ export class PostsController {
   @ApiResponse({ status: 404, description: 'Post not found or not authorized' })
   deletePost(@Param('id', ParseUUIDPipe) id: string) {
     return this.postsService.deletePost(id);
+  }
+
+  @Post(':id/like')
+  @UseInterceptors(RlsContextInterceptor)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Like a post (idempotent)' })
+  @ApiResponse({ status: 201, description: 'Liked' })
+  likePost(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: SupabaseJwtPayload) {
+    return this.postsService.likePost(id, user.sub);
+  }
+
+  @Delete(':id/like')
+  @UseInterceptors(RlsContextInterceptor)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Unlike a post (idempotent)' })
+  @ApiResponse({ status: 204, description: 'Unliked' })
+  unlikePost(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: SupabaseJwtPayload) {
+    return this.postsService.unlikePost(id, user.sub);
+  }
+
+  @Post(':id/save')
+  @UseInterceptors(RlsContextInterceptor)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Save/bookmark a post (idempotent)' })
+  @ApiResponse({ status: 201, description: 'Saved' })
+  savePost(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: SupabaseJwtPayload) {
+    return this.postsService.savePost(id, user.sub);
+  }
+
+  @Delete(':id/save')
+  @UseInterceptors(RlsContextInterceptor)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Unsave/unbookmark a post (idempotent)' })
+  @ApiResponse({ status: 204, description: 'Unsaved' })
+  unsavePost(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: SupabaseJwtPayload) {
+    return this.postsService.unsavePost(id, user.sub);
   }
 }
