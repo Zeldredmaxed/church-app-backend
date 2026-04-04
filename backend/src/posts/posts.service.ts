@@ -52,6 +52,8 @@ export class PostsService {
       tenantId: currentTenantId,
       authorId,
       content: dto.content,
+      mediaType: dto.mediaType ?? (dto.videoMuxPlaybackId ? 'video' : 'text'),
+      mediaUrl: dto.mediaUrl ?? null,
       videoMuxPlaybackId: dto.videoMuxPlaybackId ?? null,
     });
 

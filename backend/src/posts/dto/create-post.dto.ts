@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, MaxLength, IsOptional, IsArray, IsUUID } from 'class-validator';
+import { IsString, IsNotEmpty, MaxLength, IsOptional, IsArray, IsUUID, IsIn } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 /**
@@ -14,6 +14,17 @@ export class CreatePostDto {
   @IsNotEmpty()
   @MaxLength(5000)
   content: string;
+
+  @ApiPropertyOptional({ enum: ['text', 'image', 'video'], default: 'text', description: 'Content type: text, image, or video' })
+  @IsOptional()
+  @IsString()
+  @IsIn(['text', 'image', 'video'])
+  mediaType?: string;
+
+  @ApiPropertyOptional({ description: 'S3 URL for an attached image (from pre-signed upload)' })
+  @IsOptional()
+  @IsString()
+  mediaUrl?: string;
 
   @ApiPropertyOptional({ description: 'Mux playback ID for an attached video' })
   @IsOptional()
