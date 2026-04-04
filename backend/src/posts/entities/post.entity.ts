@@ -4,7 +4,10 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  ManyToOne,
+  JoinColumn,
 } from 'typeorm';
+import { User } from '../../users/entities/user.entity';
 
 /**
  * Maps to public.posts.
@@ -23,6 +26,10 @@ export class Post {
   /** Set from the authenticated user's JWT sub — never from user input. */
   @Column({ type: 'uuid', name: 'author_id' })
   authorId: string;
+
+  @ManyToOne(() => User, { eager: false })
+  @JoinColumn({ name: 'author_id' })
+  author?: User;
 
   @Column({ type: 'text' })
   content: string;

@@ -60,6 +60,12 @@ export class PostsService {
     const saved = await queryRunner.manager.save(Post, post);
     this.logger.log(`Post created: ${saved.id} in tenant ${currentTenantId} by ${authorId}`);
 
+    // Re-fetch with author relation so the response includes fullName/avatarUrl
+    const postWithAuthor = await queryRunner.manager.findOne(Post, {
+      where: { id: saved.id },
+      relations: ['author'],
+    });
+
     // Dispatch async mention notifications via BullMQ.
     // Each mentioned user gets a separate job — failures are isolated.
     if (dto.mentions?.length) {
@@ -77,7 +83,7 @@ export class PostsService {
       this.logger.log(`Enqueued ${uniqueMentions.length} mention notification(s) for post ${saved.id}`);
     }
 
-    return saved;
+    return postWithAuthor ?? saved;
   }
 
   /**
@@ -105,6 +111,12 @@ export class PostsService {
     const saved = await dataSource.manager.save(Post, post);
     this.logger.log(`Global post created: ${saved.id} by ${authorId}`);
 
+    // Re-fetch with author relation
+    const postWithAuthor = await dataSource.manager.findOne(Post, {
+      where: { id: saved.id },
+      relations: ['author'],
+    });
+
     // Dispatch fan-out job — pushes post ID to all followers' Redis feed lists
     await this.socialFanoutQueue.add('NEW_GLOBAL_POST', {
       postId: saved.id,
@@ -128,7 +140,7 @@ export class PostsService {
       }
     }
 
-    return saved;
+    return postWithAuthor ?? saved;
   }
 
   /**
@@ -142,6 +154,7 @@ export class PostsService {
     const offset = query.offset ?? 0;
 
     const [posts, total] = await queryRunner.manager.findAndCount(Post, {
+      relations: ['author'],
       order: { createdAt: 'DESC' },
       take: limit,
       skip: offset,
@@ -158,7 +171,10 @@ export class PostsService {
   async findOne(postId: string): Promise<Post> {
     const { queryRunner } = this.getRlsContext();
 
-    const post = await queryRunner.manager.findOne(Post, { where: { id: postId } });
+    const post = await queryRunner.manager.findOne(Post, {
+      where: { id: postId },
+      relations: ['author'],
+    });
     if (!post) {
       throw new NotFoundException('Post not found');
     }
