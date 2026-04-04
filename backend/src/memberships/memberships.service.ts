@@ -42,14 +42,22 @@ export class MembershipsService {
     currentTenantId: string | null,
   ): Promise<MembershipWithTenant[]> {
     const rows: Array<{
+      user_id: string;
       tenant_id: string;
       role: string;
       tenant_name: string;
+      tenant_tier: string;
+      tenant_slug: string | null;
+      tenant_created_at: string;
     }> = await this.dataSource.query(
       `SELECT
+         tm.user_id,
          tm.tenant_id,
          tm.role,
-         t.name AS tenant_name
+         t.name       AS tenant_name,
+         t.tier       AS tenant_tier,
+         t.slug       AS tenant_slug,
+         t.created_at AS tenant_created_at
        FROM public.tenant_memberships tm
        JOIN public.tenants t ON t.id = tm.tenant_id
        WHERE tm.user_id = $1
@@ -58,10 +66,17 @@ export class MembershipsService {
     );
 
     return rows.map(row => ({
+      userId: row.user_id,
       tenantId: row.tenant_id,
-      tenantName: row.tenant_name,
       role: row.role as TenantMembership['role'],
       isCurrent: row.tenant_id === currentTenantId,
+      tenant: {
+        id: row.tenant_id,
+        name: row.tenant_name,
+        tier: row.tenant_tier,
+        slug: row.tenant_slug,
+        createdAt: row.tenant_created_at,
+      },
     }));
   }
 
@@ -178,10 +193,17 @@ export class MembershipsService {
     // await this.notificationsQueue.add('NEW_MEMBER_INVITE', { ... });
 
     return {
+      userId: targetUser.id,
       tenantId: currentTenantId,
-      tenantName: tenant?.name ?? 'Unknown',
       role: dto.role,
       isCurrent: true,
+      tenant: {
+        id: currentTenantId,
+        name: tenant?.name ?? 'Unknown',
+        tier: tenant?.tier ?? 'standard',
+        slug: tenant?.slug ?? null,
+        createdAt: tenant?.createdAt?.toISOString() ?? new Date().toISOString(),
+      },
       newMember: {
         userId: targetUser.id,
         email: targetUser.email,
@@ -451,11 +473,17 @@ export interface TenantMemberDetail {
 }
 
 export interface MembershipWithTenant {
+  userId: string;
   tenantId: string;
-  tenantName: string;
   role: 'admin' | 'pastor' | 'accountant' | 'worship_leader' | 'member';
-  /** Whether this is the user's currently active tenant context. */
   isCurrent: boolean;
+  tenant: {
+    id: string;
+    name: string;
+    tier: string;
+    slug: string | null;
+    createdAt: string;
+  };
   /** Only present on POST responses */
   newMember?: { userId: string; email: string };
 }
