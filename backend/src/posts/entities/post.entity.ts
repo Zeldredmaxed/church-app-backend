@@ -41,6 +41,10 @@ export class Post {
   @Column({ type: 'text', name: 'media_type', default: 'text' })
   mediaType: string;
 
+  /** 'public' = visible to all tenant members; 'private' = author only. */
+  @Column({ type: 'text', default: 'public' })
+  visibility: 'public' | 'private';
+
   /**
    * S3 object URL for image posts. NULL for text-only and video posts.
    * The frontend uses this URL directly (S3 public read or pre-signed GET).

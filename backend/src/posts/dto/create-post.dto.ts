@@ -31,6 +31,12 @@ export class CreatePostDto {
   @IsString()
   videoMuxPlaybackId?: string;
 
+  @ApiPropertyOptional({ enum: ['public', 'private'], default: 'public', description: 'Post visibility' })
+  @IsOptional()
+  @IsString()
+  @IsIn(['public', 'private'])
+  visibility?: 'public' | 'private';
+
   @ApiPropertyOptional({ type: [String], description: 'User UUIDs mentioned in the post' })
   @IsOptional()
   @IsArray()

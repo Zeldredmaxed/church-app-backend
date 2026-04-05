@@ -1,11 +1,10 @@
-import { IsOptional, IsString, IsNotEmpty, MaxLength } from 'class-validator';
+import { IsOptional, IsString, IsNotEmpty, MaxLength, IsIn } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 /**
  * Payload for PATCH /api/posts/:id.
- * Only content is user-editable.
- * videoMuxPlaybackId is managed exclusively by the Mux webhook pipeline (Phase 2).
  * tenantId and authorId are immutable once set.
+ * videoMuxPlaybackId is managed exclusively by the Mux webhook pipeline.
  */
 export class UpdatePostDto {
   @ApiPropertyOptional({ example: 'Updated post content', maxLength: 5000 })
@@ -14,4 +13,10 @@ export class UpdatePostDto {
   @IsNotEmpty({ message: 'content cannot be set to an empty string' })
   @MaxLength(5000)
   content?: string;
+
+  @ApiPropertyOptional({ enum: ['public', 'private'], description: 'Post visibility' })
+  @IsOptional()
+  @IsString()
+  @IsIn(['public', 'private'])
+  visibility?: 'public' | 'private';
 }

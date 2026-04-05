@@ -23,6 +23,7 @@ export interface PostWithMeta {
   mediaType: string;
   mediaUrl: string | null;
   videoMuxPlaybackId: string | null;
+  visibility: 'public' | 'private';
   createdAt: Date;
   updatedAt: Date;
   author: { id: string; email: string; fullName: string | null; avatarUrl: string | null } | null;
@@ -72,6 +73,7 @@ export class PostsService {
       mediaType: dto.mediaType ?? (dto.videoMuxPlaybackId ? 'video' : 'text'),
       mediaUrl: dto.mediaUrl ?? null,
       videoMuxPlaybackId: dto.videoMuxPlaybackId ?? null,
+      visibility: dto.visibility ?? 'public',
     });
 
     const saved = await queryRunner.manager.save(Post, post);
@@ -179,6 +181,7 @@ export class PostsService {
     const rows: Array<{
       id: string; tenant_id: string; author_id: string; content: string;
       media_type: string; media_url: string | null; video_mux_playback_id: string | null;
+      visibility: 'public' | 'private';
       created_at: Date; updated_at: Date;
       u_id: string | null; u_email: string | null; u_full_name: string | null; u_avatar_url: string | null;
       like_count: string; comment_count: string;
@@ -186,7 +189,7 @@ export class PostsService {
     }> = await queryRunner.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.visibility,
          p.created_at, p.updated_at,
          u.id         AS u_id,
          u.email      AS u_email,
@@ -198,16 +201,17 @@ export class PostsService {
          EXISTS(SELECT 1 FROM public.post_saves WHERE post_id = p.id AND user_id = $1) AS is_saved_by_me
        FROM public.posts p
        LEFT JOIN public.users u ON u.id = p.author_id
-       WHERE 1=1 ${authorFilter}
+       WHERE (p.visibility = 'public' OR p.author_id = $1) ${authorFilter}
        ORDER BY p.created_at DESC
        LIMIT $2 OFFSET $3`,
       params,
     );
 
-    const countParams = query.authorId ? [query.authorId] : [];
-    const countFilter = query.authorId ? `WHERE author_id = $1` : '';
+    const countParams = query.authorId ? [userId, query.authorId] : [userId];
+    const countAuthorFilter = query.authorId ? `AND author_id = $2` : '';
     const [{ total }]: [{ total: string }] = await queryRunner.query(
-      `SELECT COUNT(*)::int AS total FROM public.posts ${countFilter}`,
+      `SELECT COUNT(*)::int AS total FROM public.posts
+       WHERE (visibility = 'public' OR author_id = $1) ${countAuthorFilter}`,
       countParams,
     );
 
@@ -219,6 +223,7 @@ export class PostsService {
       mediaType: r.media_type,
       mediaUrl: r.media_url,
       videoMuxPlaybackId: r.video_mux_playback_id,
+      visibility: r.visibility,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
       author: r.u_id
@@ -265,16 +270,16 @@ export class PostsService {
   async updatePost(postId: string, dto: UpdatePostDto): Promise<Post> {
     const { queryRunner } = this.getRlsContext();
 
-    if (!dto.content) {
+    const updates: Partial<Post> = {};
+    if (dto.content) updates.content = dto.content;
+    if (dto.visibility) updates.visibility = dto.visibility;
+
+    if (Object.keys(updates).length === 0) {
       // Nothing to update — return current state without touching the DB
       return this.findOne(postId);
     }
 
-    const result = await queryRunner.manager.update(
-      Post,
-      { id: postId },
-      { content: dto.content },
-    );
+    const result = await queryRunner.manager.update(Post, { id: postId }, updates);
 
     if (result.affected === 0) {
       throw new NotFoundException('Post not found or you do not have permission to edit it');
@@ -363,14 +368,15 @@ export class PostsService {
     const rows: Array<{
       id: string; tenant_id: string; author_id: string; content: string;
       media_type: string; media_url: string | null; video_mux_playback_id: string | null;
+      visibility: 'public' | 'private';
       created_at: Date; updated_at: Date;
       u_id: string | null; u_email: string | null; u_full_name: string | null; u_avatar_url: string | null;
       like_count: string; comment_count: string;
-      is_liked_by_me: boolean; is_saved_by_me: boolean;
+      is_liked_by_me: boolean;
     }> = await queryRunner.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.visibility,
          p.created_at, p.updated_at,
          u.id         AS u_id,
          u.email      AS u_email,
@@ -378,8 +384,7 @@ export class PostsService {
          u.avatar_url AS u_avatar_url,
          (SELECT COUNT(*)::int FROM public.post_likes WHERE post_id = p.id) AS like_count,
          (SELECT COUNT(*)::int FROM public.comments   WHERE post_id = p.id) AS comment_count,
-         EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $1) AS is_liked_by_me,
-         true AS is_saved_by_me
+         EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $1) AS is_liked_by_me
        FROM public.post_saves ps
        JOIN public.posts p ON p.id = ps.post_id
        LEFT JOIN public.users u ON u.id = p.author_id
@@ -402,6 +407,7 @@ export class PostsService {
       mediaType: r.media_type,
       mediaUrl: r.media_url,
       videoMuxPlaybackId: r.video_mux_playback_id,
+      visibility: r.visibility,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
       author: r.u_id
