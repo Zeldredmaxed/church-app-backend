@@ -6,7 +6,12 @@ export interface PostSearchResult {
   content: string;
   mediaType: string;
   mediaUrl: string | null;
+  visibility: string;
   createdAt: Date;
+  likeCount: number;
+  commentCount: number;
+  isLikedByMe: boolean;
+  isSavedByMe: boolean;
   rank: number;
   author: {
     id: string;
@@ -42,47 +47,49 @@ export class SearchService {
    */
   async searchPosts(
     query: string,
+    userId: string,
     cursor?: string,
     limit: number = 20,
-  ): Promise<{ results: PostSearchResult[]; nextCursor: string | null }> {
+  ): Promise<{ data: PostSearchResult[]; nextCursor: string | null }> {
     const { queryRunner } = rlsStorage.getStore()!;
+
+    // $1 = query, $2 = userId (for visibility filter + isLikedByMe/isSavedByMe)
+    // ILIKE fallback ensures short/common words still match even without a search_vector hit
+    const params: any[] = [query, userId];
 
     let sql = `
       SELECT
         p.id,
         p.content,
-        p.media_type AS "mediaType",
-        p.media_url AS "mediaUrl",
-        p.created_at AS "createdAt",
-        ts_rank(p.search_vector, websearch_to_tsquery('english', $1)) AS rank,
-        u.id AS author_id,
-        u.full_name AS author_full_name,
-        u.avatar_url AS author_avatar_url
+        p.media_type    AS "mediaType",
+        p.media_url     AS "mediaUrl",
+        p.visibility,
+        p.created_at    AS "createdAt",
+        u.id            AS author_id,
+        u.full_name     AS author_full_name,
+        u.avatar_url    AS author_avatar_url,
+        (SELECT COUNT(*)::int FROM public.post_likes WHERE post_id = p.id)              AS like_count,
+        (SELECT COUNT(*)::int FROM public.comments   WHERE post_id = p.id)              AS comment_count,
+        EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $2)  AS is_liked_by_me,
+        EXISTS(SELECT 1 FROM public.post_saves WHERE post_id = p.id AND user_id = $2)  AS is_saved_by_me
       FROM public.posts p
-      JOIN public.users u ON u.id = p.author_id
-      WHERE p.search_vector @@ websearch_to_tsquery('english', $1)
-        AND p.tenant_id IS NOT NULL
+      LEFT JOIN public.users u ON u.id = p.author_id
+      WHERE (
+        p.search_vector @@ websearch_to_tsquery('english', $1)
+        OR p.content ILIKE '%' || $1 || '%'
+        OR u.full_name ILIKE '%' || $1 || '%'
+      )
+      AND (p.visibility = 'public' OR p.author_id = $2)
+      AND p.tenant_id IS NOT NULL
     `;
-    const params: any[] = [query];
 
     if (cursor) {
       params.push(cursor);
-      sql += ` AND p.id != $${params.length}`;
-      // For cursor-based pagination on ranked results, we use a subquery approach.
-      // The cursor post's rank determines the cutoff.
-      sql += `
-        AND (
-          ts_rank(p.search_vector, websearch_to_tsquery('english', $1)),
-          p.id
-        ) < (
-          SELECT ts_rank(cp.search_vector, websearch_to_tsquery('english', $1)), cp.id
-          FROM public.posts cp WHERE cp.id = $${params.length}
-        )
-      `;
+      sql += ` AND p.id < $${params.length}`;
     }
 
     params.push(limit + 1);
-    sql += ` ORDER BY rank DESC, p.id DESC LIMIT $${params.length}`;
+    sql += ` ORDER BY p.created_at DESC LIMIT $${params.length}`;
 
     const rows = await queryRunner.query(sql, params);
 
@@ -90,13 +97,18 @@ export class SearchService {
     const page = hasMore ? rows.slice(0, limit) : rows;
     const nextCursor = hasMore ? page[page.length - 1].id : null;
 
-    const results: PostSearchResult[] = page.map((row: any) => ({
+    const data: PostSearchResult[] = page.map((row: any) => ({
       id: row.id,
       content: row.content,
       mediaType: row.mediaType,
       mediaUrl: row.mediaUrl,
+      visibility: row.visibility,
       createdAt: row.createdAt,
-      rank: parseFloat(row.rank),
+      likeCount: Number(row.like_count),
+      commentCount: Number(row.comment_count),
+      isLikedByMe: row.is_liked_by_me,
+      isSavedByMe: row.is_saved_by_me,
+      rank: 0,
       author: {
         id: row.author_id,
         fullName: row.author_full_name,
@@ -104,7 +116,7 @@ export class SearchService {
       },
     }));
 
-    return { results, nextCursor };
+    return { data, nextCursor };
   }
 
   /**
