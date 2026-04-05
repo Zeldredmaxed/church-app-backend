@@ -59,6 +59,14 @@ export class PostsController {
     return this.postsService.getPosts(query, user.sub);
   }
 
+  @Get('saved')
+  @UseInterceptors(RlsContextInterceptor)
+  @ApiOperation({ summary: 'List saved/bookmarked posts for the current user' })
+  @ApiResponse({ status: 200, description: 'Same shape as GET /api/posts — posts + total' })
+  getSavedPosts(@CurrentUser() user: SupabaseJwtPayload, @Query() query: GetPostsDto) {
+    return this.postsService.getSavedPosts(user.sub, query.limit ?? 20, query.offset ?? 0);
+  }
+
   @Get(':id')
   @UseInterceptors(RlsContextInterceptor)
   @ApiOperation({ summary: 'Get a single post by ID' })

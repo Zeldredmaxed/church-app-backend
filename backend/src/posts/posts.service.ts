@@ -170,6 +170,12 @@ export class PostsService {
     const limit = query.limit ?? 20;
     const offset = query.offset ?? 0;
 
+    // authorId filter is optional — when provided, scope to that author only
+    const authorFilter = query.authorId ? `AND p.author_id = $4` : '';
+    const params: unknown[] = query.authorId
+      ? [userId, limit, offset, query.authorId]
+      : [userId, limit, offset];
+
     const rows: Array<{
       id: string; tenant_id: string; author_id: string; content: string;
       media_type: string; media_url: string | null; video_mux_playback_id: string | null;
@@ -192,13 +198,17 @@ export class PostsService {
          EXISTS(SELECT 1 FROM public.post_saves WHERE post_id = p.id AND user_id = $1) AS is_saved_by_me
        FROM public.posts p
        LEFT JOIN public.users u ON u.id = p.author_id
+       WHERE 1=1 ${authorFilter}
        ORDER BY p.created_at DESC
        LIMIT $2 OFFSET $3`,
-      [userId, limit, offset],
+      params,
     );
 
+    const countParams = query.authorId ? [query.authorId] : [];
+    const countFilter = query.authorId ? `WHERE author_id = $1` : '';
     const [{ total }]: [{ total: string }] = await queryRunner.query(
-      `SELECT COUNT(*)::int AS total FROM public.posts`,
+      `SELECT COUNT(*)::int AS total FROM public.posts ${countFilter}`,
+      countParams,
     );
 
     const posts: PostWithMeta[] = rows.map(r => ({
@@ -340,6 +350,70 @@ export class PostsService {
       `DELETE FROM public.post_saves WHERE post_id = $1 AND user_id = $2`,
       [postId, userId],
     );
+  }
+
+  /**
+   * Returns paginated saved/bookmarked posts for the current user.
+   * Same response shape as getPosts — every post includes engagement counts
+   * and isLikedByMe/isSavedByMe so the frontend can render consistently.
+   */
+  async getSavedPosts(userId: string, limit: number, offset: number): Promise<PaginatedPosts> {
+    const { queryRunner } = this.getRlsContext();
+
+    const rows: Array<{
+      id: string; tenant_id: string; author_id: string; content: string;
+      media_type: string; media_url: string | null; video_mux_playback_id: string | null;
+      created_at: Date; updated_at: Date;
+      u_id: string | null; u_email: string | null; u_full_name: string | null; u_avatar_url: string | null;
+      like_count: string; comment_count: string;
+      is_liked_by_me: boolean; is_saved_by_me: boolean;
+    }> = await queryRunner.query(
+      `SELECT
+         p.id, p.tenant_id, p.author_id, p.content,
+         p.media_type, p.media_url, p.video_mux_playback_id,
+         p.created_at, p.updated_at,
+         u.id         AS u_id,
+         u.email      AS u_email,
+         u.full_name  AS u_full_name,
+         u.avatar_url AS u_avatar_url,
+         (SELECT COUNT(*)::int FROM public.post_likes WHERE post_id = p.id) AS like_count,
+         (SELECT COUNT(*)::int FROM public.comments   WHERE post_id = p.id) AS comment_count,
+         EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $1) AS is_liked_by_me,
+         true AS is_saved_by_me
+       FROM public.post_saves ps
+       JOIN public.posts p ON p.id = ps.post_id
+       LEFT JOIN public.users u ON u.id = p.author_id
+       WHERE ps.user_id = $1
+       ORDER BY ps.created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [userId, limit, offset],
+    );
+
+    const [{ total }]: [{ total: string }] = await queryRunner.query(
+      `SELECT COUNT(*)::int AS total FROM public.post_saves WHERE user_id = $1`,
+      [userId],
+    );
+
+    const posts: PostWithMeta[] = rows.map(r => ({
+      id: r.id,
+      tenantId: r.tenant_id,
+      authorId: r.author_id,
+      content: r.content,
+      mediaType: r.media_type,
+      mediaUrl: r.media_url,
+      videoMuxPlaybackId: r.video_mux_playback_id,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      author: r.u_id
+        ? { id: r.u_id, email: r.u_email!, fullName: r.u_full_name, avatarUrl: r.u_avatar_url }
+        : null,
+      likeCount: Number(r.like_count),
+      commentCount: Number(r.comment_count),
+      isLikedByMe: r.is_liked_by_me,
+      isSavedByMe: true,
+    }));
+
+    return { posts, total: Number(total), limit, offset };
   }
 
   private getRlsContext() {

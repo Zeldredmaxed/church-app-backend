@@ -1,4 +1,4 @@
-import { IsOptional, IsInt, Min, Max } from 'class-validator';
+import { IsOptional, IsInt, Min, Max, IsUUID } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -18,4 +18,9 @@ export class GetPostsDto {
   @IsInt()
   @Min(0)
   offset?: number = 0;
+
+  @ApiPropertyOptional({ description: 'Filter posts by author UUID' })
+  @IsOptional()
+  @IsUUID('4')
+  authorId?: string;
 }
