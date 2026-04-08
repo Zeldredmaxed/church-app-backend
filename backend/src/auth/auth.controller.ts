@@ -2,17 +2,22 @@ import {
   Controller,
   Post,
   Body,
+  Query,
+  Req,
   UseGuards,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import { Request } from 'express';
 import { AuthService } from './auth.service';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { SwitchTenantDto } from './dto/switch-tenant.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -52,6 +57,35 @@ export class AuthController {
   @ApiResponse({ status: 429, description: 'Rate limit exceeded (5 req/min)' })
   refresh(@Body() dto: RefreshDto) {
     return this.authService.refresh(dto);
+  }
+
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ auth: { ttl: 60000, limit: 3 } })
+  @ApiOperation({ summary: 'Request a password reset email' })
+  @ApiQuery({ name: 'redirectTo', required: false, description: 'URL the user is redirected to after clicking the reset link (should be your app\'s reset-password page)' })
+  @ApiResponse({ status: 200, description: 'Always returns success to prevent email enumeration' })
+  @ApiResponse({ status: 429, description: 'Rate limit exceeded (3 req/min)' })
+  forgotPassword(
+    @Body() dto: ForgotPasswordDto,
+    @Query('redirectTo') redirectTo?: string,
+  ) {
+    return this.authService.forgotPassword(dto, redirectTo);
+  }
+
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Set a new password (requires valid session from reset link)' })
+  @ApiResponse({ status: 200, description: 'Password updated successfully' })
+  @ApiResponse({ status: 401, description: 'Invalid or expired reset token' })
+  resetPassword(
+    @Body() dto: ResetPasswordDto,
+    @Req() req: Request,
+  ) {
+    const token = (req.headers.authorization ?? '').replace('Bearer ', '');
+    return this.authService.resetPassword(dto, token);
   }
 
   @Post('switch-tenant')
