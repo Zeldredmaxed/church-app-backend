@@ -1,10 +1,11 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Logger } from '@nestjs/common';
+import { Logger, OnModuleDestroy } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { Job } from 'bullmq';
 import Redis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
 import { Follow } from '../follows/entities/follow.entity';
+import { Post } from '../posts/entities/post.entity';
 import { NotificationType, NotificationJobData } from '../notifications/notifications.types';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -34,7 +35,7 @@ export interface GlobalPostJob {
  * Runs outside HTTP lifecycle — uses service-role DataSource.
  */
 @Processor('social-fanout')
-export class SocialFanoutProcessor extends WorkerHost {
+export class SocialFanoutProcessor extends WorkerHost implements OnModuleDestroy {
   private readonly logger = new Logger(SocialFanoutProcessor.name);
   private readonly redis: Redis;
 
@@ -51,6 +52,10 @@ export class SocialFanoutProcessor extends WorkerHost {
       password: this.config.get<string>('REDIS_PASSWORD'),
       tls: redisHost.includes('upstash.io') ? {} : undefined,
     });
+  }
+
+  async onModuleDestroy() {
+    await this.redis.quit();
   }
 
   async process(job: Job<GlobalPostJob>): Promise<void> {
@@ -81,15 +86,22 @@ export class SocialFanoutProcessor extends WorkerHost {
 
     this.logger.log(`Fan-out complete: post ${postId} pushed to ${followers.length} feed(s)`);
 
+    // Fetch post content for the notification preview
+    const post = await this.dataSource.manager.findOne(Post, {
+      where: { id: postId },
+      select: ['content'],
+    });
+    const previewText = post?.content?.slice(0, 100) ?? '';
+
     // Dispatch notification jobs for each follower (non-blocking — failures are isolated)
     for (const { followerId } of followers) {
       await this.notificationsQueue.add('NEW_GLOBAL_POST', {
-        type: NotificationType.POST_MENTION,
-        tenantId: '', // Global posts have no tenant — use empty string
+        type: NotificationType.NEW_GLOBAL_POST,
+        tenantId: '', // Global posts have no tenant
         recipientUserId: followerId,
         actorUserId: authorId,
         postId,
-        previewText: '', // Preview will be resolved by the processor from the DB
+        previewText,
       });
     }
   }

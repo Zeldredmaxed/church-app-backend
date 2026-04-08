@@ -12,8 +12,10 @@ import {
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { ConfigService } from '@nestjs/config';
+import { DataSource } from 'typeorm';
 import { Request, Response } from 'express';
 import { createHmac, timingSafeEqual } from 'crypto';
+import { Post as PostEntity } from '../posts/entities/post.entity';
 
 @ApiTags('Webhooks')
 @Controller('webhooks')
@@ -22,7 +24,10 @@ export class WebhooksController {
   private readonly logger = new Logger(WebhooksController.name);
   private readonly muxWebhookSecret: string;
 
-  constructor(private readonly config: ConfigService) {
+  constructor(
+    private readonly config: ConfigService,
+    private readonly dataSource: DataSource,
+  ) {
     this.muxWebhookSecret = this.config.get<string>('MUX_WEBHOOK_SECRET', '');
     if (!this.muxWebhookSecret) {
       new Logger(WebhooksController.name).warn('MUX_WEBHOOK_SECRET not configured — Mux webhooks will reject all requests');
@@ -94,6 +99,28 @@ export class WebhooksController {
 
     this.logger.log(`Mux webhook received: ${eventType}`);
     this.logger.debug(`Mux webhook payload: ${JSON.stringify(payload)}`);
+
+    // Process video.asset.ready — update the post's playback ID
+    if (eventType === 'video.asset.ready') {
+      const asset = payload.data;
+      const playbackId = asset?.playback_ids?.[0]?.id;
+      const passthrough = asset?.passthrough; // We store the post ID as passthrough
+
+      if (playbackId && passthrough) {
+        await this.dataSource.manager.update(
+          PostEntity,
+          { id: passthrough },
+          { videoMuxPlaybackId: playbackId },
+        );
+        this.logger.log(
+          `Updated post ${passthrough} with Mux playback ID ${playbackId}`,
+        );
+      } else {
+        this.logger.warn(
+          `video.asset.ready missing playbackId or passthrough: ${JSON.stringify({ playbackId, passthrough })}`,
+        );
+      }
+    }
 
     return { received: true };
   }

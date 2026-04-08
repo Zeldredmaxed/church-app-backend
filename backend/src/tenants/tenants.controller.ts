@@ -73,9 +73,16 @@ export class TenantsController {
   @Get(':id/features')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
+  @UseInterceptors(RlsContextInterceptor)
   @ApiOperation({ summary: 'Get tenant feature flags (for frontend bootstrap)' })
   @ApiResponse({ status: 200, description: 'Tenant tier info + feature flags' })
-  getFeatures(@Param('id', ParseUUIDPipe) id: string) {
-    return this.tenantsService.getFeatures(id);
+  getFeatures(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    // Use the tenant from the user's JWT context rather than the URL param
+    // to prevent enumeration of other tenants' features
+    const tenantId = user.app_metadata?.current_tenant_id ?? id;
+    return this.tenantsService.getFeatures(tenantId);
   }
 }

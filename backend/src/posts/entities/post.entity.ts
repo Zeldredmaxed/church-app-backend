@@ -19,9 +19,9 @@ export class Post {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  /** Always set in Phase 1. Derived from the JWT current_tenant_id — never from user input. */
-  @Column({ type: 'uuid', name: 'tenant_id' })
-  tenantId: string;
+  /** Derived from the JWT current_tenant_id — never from user input. NULL for global posts. */
+  @Column({ type: 'uuid', name: 'tenant_id', nullable: true })
+  tenantId: string | null;
 
   /** Set from the authenticated user's JWT sub — never from user input. */
   @Column({ type: 'uuid', name: 'author_id' })

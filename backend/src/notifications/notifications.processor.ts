@@ -9,6 +9,7 @@ import {
   NotificationType,
   NewCommentJob,
   PostMentionJob,
+  NewGlobalPostJob,
   InvitationEmailJob,
   NewMessageJob,
 } from './notifications.types';
@@ -47,6 +48,9 @@ export class NotificationsProcessor extends WorkerHost {
         break;
       case NotificationType.POST_MENTION:
         await this.handlePostMention(job.data);
+        break;
+      case NotificationType.NEW_GLOBAL_POST:
+        await this.handleNewGlobalPost(job.data);
         break;
       case NotificationType.INVITATION_EMAIL:
         await this.handleInvitationEmail(job.data);
@@ -131,6 +135,41 @@ export class NotificationsProcessor extends WorkerHost {
       'You were mentioned',
       data.previewText,
       { type: 'POST_MENTION', postId: data.postId },
+    );
+  }
+
+  /**
+   * Creates an in-app notification for a follower when someone they follow
+   * creates a global post. Sends a push notification via OneSignal.
+   */
+  private async handleNewGlobalPost(data: NewGlobalPostJob): Promise<void> {
+    if (data.recipientUserId === data.actorUserId) {
+      return;
+    }
+
+    await this.dataSource.manager.save(
+      Notification,
+      this.dataSource.manager.create(Notification, {
+        recipientId: data.recipientUserId,
+        tenantId: data.tenantId,
+        type: data.type,
+        payload: {
+          postId: data.postId,
+          actorUserId: data.actorUserId,
+          preview: data.previewText,
+        },
+      }),
+    );
+
+    this.logger.log(
+      `In-app notification created for user ${data.recipientUserId} (new global post ${data.postId})`,
+    );
+
+    await this.oneSignal.sendPush(
+      data.recipientUserId,
+      'New Post',
+      data.previewText,
+      { type: 'NEW_GLOBAL_POST', postId: data.postId },
     );
   }
 

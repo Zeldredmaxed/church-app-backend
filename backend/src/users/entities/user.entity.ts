@@ -35,6 +35,10 @@ export class User {
   @Column({ type: 'uuid', nullable: true, name: 'last_accessed_tenant_id' })
   lastAccessedTenantId: string | null;
 
+  /** Stripe Customer ID (cus_xxx). Created lazily on first SetupIntent. User-global. */
+  @Column({ type: 'text', nullable: true, unique: true, name: 'stripe_customer_id' })
+  stripeCustomerId: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }

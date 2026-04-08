@@ -48,10 +48,8 @@ export class GivingController {
     @Query('cursor') cursor?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.givingService.getMyTransactions(
-      cursor,
-      limit ? parseInt(limit, 10) : 20,
-    );
+    const parsedLimit = Math.min(Math.max(parseInt(limit ?? '20', 10) || 20, 1), 100);
+    return this.givingService.getMyTransactions(cursor, parsedLimit);
   }
 
   @Get('tenants/:tenantId/transactions')
@@ -65,10 +63,7 @@ export class GivingController {
     @Query('cursor') cursor?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.givingService.getTenantTransactions(
-      tenantId,
-      cursor,
-      limit ? parseInt(limit, 10) : 20,
-    );
+    const parsedLimit = Math.min(Math.max(parseInt(limit ?? '20', 10) || 20, 1), 100);
+    return this.givingService.getTenantTransactions(tenantId, cursor, parsedLimit);
   }
 }

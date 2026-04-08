@@ -4,14 +4,16 @@
  * Single source of truth for what each tier can access.
  * The TierGuard and frontend bootstrap endpoint both read from this.
  *
+ * Tier names MUST match the CHECK constraint in migration 012:
+ *   CHECK (tier IN ('standard', 'premium', 'enterprise'))
+ *
  * Tier philosophy ("Grow with Us"):
- *   starter    → Admin-only. Digital filing cabinet. No mobile app.
  *   standard   → Core offering. Mobile app + basic community feed.
- *   pro        → Growth tools: video, chat, push, search, granular roles.
+ *   premium    → Growth tools: video, chat, push, search, granular roles.
  *   enterprise → White-glove: custom branding, multi-site, API access.
  */
 
-export type TierName = 'starter' | 'standard' | 'pro' | 'enterprise';
+export type TierName = 'standard' | 'premium' | 'enterprise';
 
 export interface TierFeatures {
   // Platform access
@@ -48,25 +50,6 @@ export interface TierFeatures {
 }
 
 export const TIER_FEATURES: Record<TierName, TierFeatures> = {
-  starter: {
-    mobileApp: false,
-    maxAdminUsers: 2,
-    granularRoles: false,
-    internalFeed: false,
-    globalFeed: false,
-    videoPostsAllowed: false,
-    search: false,
-    pushNotifications: false,
-    pushNotificationsSegmented: false,
-    chat: false,
-    videoUploads: false,
-    storageLimit: 0,
-    transactionFeePercent: 2.0,
-    customBranding: false,
-    multiSite: false,
-    apiAccess: false,
-  },
-
   standard: {
     mobileApp: true,
     maxAdminUsers: 5,
@@ -86,7 +69,7 @@ export const TIER_FEATURES: Record<TierName, TierFeatures> = {
     apiAccess: false,
   },
 
-  pro: {
+  premium: {
     mobileApp: true,
     maxAdminUsers: -1,
     granularRoles: true,
@@ -127,19 +110,18 @@ export const TIER_FEATURES: Record<TierName, TierFeatures> = {
 
 /**
  * Returns the feature set for a given tier.
- * Falls back to 'starter' for unknown tier values.
+ * Falls back to 'standard' for unknown tier values.
  */
 export function getTierFeatures(tier: string): TierFeatures {
-  return TIER_FEATURES[tier as TierName] ?? TIER_FEATURES.starter;
+  return TIER_FEATURES[tier as TierName] ?? TIER_FEATURES.standard;
 }
 
 /**
  * Human-readable tier names for error messages and UI.
  */
 export const TIER_DISPLAY_NAMES: Record<TierName, string> = {
-  starter: 'Starter',
   standard: 'Standard',
-  pro: 'Pro',
+  premium: 'Premium',
   enterprise: 'Enterprise',
 };
 
@@ -148,7 +130,7 @@ export const TIER_DISPLAY_NAMES: Record<TierName, string> = {
  * Used in upsell messages: "Video uploads require Pro tier or higher."
  */
 export function minimumTierForFeature(feature: keyof TierFeatures): TierName {
-  const tierOrder: TierName[] = ['starter', 'standard', 'pro', 'enterprise'];
+  const tierOrder: TierName[] = ['standard', 'premium', 'enterprise'];
   for (const tier of tierOrder) {
     const features = TIER_FEATURES[tier];
     const val = features[feature];

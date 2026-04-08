@@ -1,5 +1,34 @@
-import { IsObject, IsBoolean, IsOptional } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import { IsBoolean, IsOptional, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+class PermissionFlags {
+  [key: string]: boolean | undefined;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  manage_finance?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  manage_content?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  manage_members?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  manage_worship?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  view_analytics?: boolean;
+}
 
 export class UpdatePermissionsDto {
   @ApiProperty({
@@ -12,12 +41,7 @@ export class UpdatePermissionsDto {
     },
     description: 'Granular permission flags',
   })
-  @IsObject()
-  permissions: {
-    manage_finance?: boolean;
-    manage_content?: boolean;
-    manage_members?: boolean;
-    manage_worship?: boolean;
-    view_analytics?: boolean;
-  };
+  @ValidateNested()
+  @Type(() => PermissionFlags)
+  permissions: PermissionFlags;
 }

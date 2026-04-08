@@ -26,6 +26,7 @@ import { StripeModule } from './stripe/stripe.module';
 import { GivingModule } from './giving/giving.module';
 import { HealthModule } from './health/health.module';
 import { CustomThrottlerGuard } from './common/guards/custom-throttler.guard';
+import { SupabaseAdminModule } from './common/services/supabase-admin.service';
 import { Transaction } from './giving/entities/transaction.entity';
 import { Follow } from './follows/entities/follow.entity';
 import { ChatChannel } from './chat/entities/chat-channel.entity';
@@ -62,7 +63,9 @@ import { Role } from './tenants/entities/role.entity';
         // Setting this to true would let TypeORM overwrite or drop columns.
         synchronize: false,
 
-        ssl: { rejectUnauthorized: false },
+        ssl: {
+          rejectUnauthorized: process.env.NODE_ENV === 'production',
+        },
 
         // Connection pool configuration.
         // Keep extra connections low — Supabase free/pro plans have connection limits.
@@ -126,6 +129,7 @@ import { Role } from './tenants/entities/role.entity';
       context: ({ req }: { req: any }) => ({ req }),
     }),
 
+    SupabaseAdminModule,
     AuthModule,
     TenantsModule,
     UsersModule,

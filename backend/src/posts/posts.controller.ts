@@ -14,7 +14,6 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
-import { DataSource } from 'typeorm';
 import { PostsService } from './posts.service';
 import { CreatePostDto } from './dto/create-post.dto';
 import { GetPostsDto } from './dto/get-posts.dto';
@@ -31,7 +30,6 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 export class PostsController {
   constructor(
     private readonly postsService: PostsService,
-    private readonly dataSource: DataSource,
   ) {}
 
   @Post()
@@ -48,7 +46,7 @@ export class PostsController {
   @ApiOperation({ summary: 'Create a global post (visible to all users, triggers fan-out)' })
   @ApiResponse({ status: 201, description: 'Global post created and fan-out queued' })
   createGlobalPost(@CurrentUser() user: SupabaseJwtPayload, @Body() dto: CreatePostDto) {
-    return this.postsService.createGlobalPost(dto, user.sub, this.dataSource);
+    return this.postsService.createGlobalPost(dto, user.sub);
   }
 
   @Get()

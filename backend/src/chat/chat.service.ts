@@ -84,7 +84,11 @@ export class ChatService {
    * Catches PG unique violation (23505) for duplicate membership — idempotent.
    */
   async addMember(channelId: string, targetUserId: string): Promise<ChannelMember> {
-    const { queryRunner } = rlsStorage.getStore()!;
+    const ctx = rlsStorage.getStore();
+    if (!ctx) {
+      throw new BadRequestException('RLS context unavailable');
+    }
+    const { queryRunner } = ctx;
 
     // Verify channel exists and is accessible (RLS enforced)
     const channel = await queryRunner.manager.findOne(ChatChannel, {
@@ -183,7 +187,11 @@ export class ChatService {
     cursor?: string,
     limit: number = 50,
   ): Promise<{ messages: ChatMessage[]; nextCursor: string | null }> {
-    const { queryRunner } = rlsStorage.getStore()!;
+    const ctx = rlsStorage.getStore();
+    if (!ctx) {
+      throw new BadRequestException('RLS context unavailable');
+    }
+    const { queryRunner } = ctx;
 
     // Verify channel exists and is accessible (RLS enforced)
     const channel = await queryRunner.manager.findOne(ChatChannel, {

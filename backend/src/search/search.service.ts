@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { rlsStorage } from '../common/storage/rls.storage';
 
 export interface PostSearchResult {
@@ -51,11 +51,17 @@ export class SearchService {
     cursor?: string,
     limit: number = 20,
   ): Promise<{ data: PostSearchResult[]; nextCursor: string | null }> {
-    const { queryRunner } = rlsStorage.getStore()!;
+    const context = rlsStorage.getStore();
+    if (!context) {
+      throw new InternalServerErrorException('RLS context unavailable');
+    }
+    const { queryRunner } = context;
 
     // $1 = query, $2 = userId (for visibility filter + isLikedByMe/isSavedByMe)
+    // $3 = escaped query for ILIKE fallback (% and _ characters escaped)
     // ILIKE fallback ensures short/common words still match even without a search_vector hit
-    const params: any[] = [query, userId];
+    const escapedQuery = query.replace(/[%_\\]/g, '\\$&');
+    const params: any[] = [query, userId, escapedQuery];
 
     let sql = `
       SELECT
@@ -76,8 +82,8 @@ export class SearchService {
       LEFT JOIN public.users u ON u.id = p.author_id
       WHERE (
         p.search_vector @@ websearch_to_tsquery('english', $1)
-        OR p.content ILIKE '%' || $1 || '%'
-        OR u.full_name ILIKE '%' || $1 || '%'
+        OR p.content ILIKE '%' || $3 || '%'
+        OR u.full_name ILIKE '%' || $3 || '%'
       )
       AND (p.visibility = 'public' OR p.author_id = $2)
       AND p.tenant_id IS NOT NULL
@@ -133,7 +139,11 @@ export class SearchService {
     cursor?: string,
     limit: number = 20,
   ): Promise<{ results: MemberSearchResult[]; nextCursor: string | null }> {
-    const { queryRunner } = rlsStorage.getStore()!;
+    const context = rlsStorage.getStore();
+    if (!context) {
+      throw new InternalServerErrorException('RLS context unavailable');
+    }
+    const { queryRunner } = context;
 
     let sql = `
       SELECT

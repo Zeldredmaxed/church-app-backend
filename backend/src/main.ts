@@ -17,6 +17,15 @@ async function bootstrap() {
   // Global route prefix — all routes accessible at /api/*
   app.setGlobalPrefix('api');
 
+  // CORS — restrict origins in production, allow all in development.
+  const allowedOrigins = process.env.CORS_ORIGINS?.split(',').map(o => o.trim());
+  app.enableCors({
+    origin: process.env.NODE_ENV === 'production' && allowedOrigins?.length
+      ? allowedOrigins
+      : true,
+    credentials: true,
+  });
+
   // Input validation pipe.
   // whitelist: strips unknown properties from request bodies before they reach handlers.
   // forbidNonWhitelisted: throws 400 if unknown properties are present (fail-fast).
@@ -29,7 +38,8 @@ async function bootstrap() {
     }),
   );
 
-  // --- Swagger / OpenAPI ---
+  // --- Swagger / OpenAPI (disabled in production) ---
+  if (process.env.NODE_ENV !== 'production') {
   const swaggerConfig = new DocumentBuilder()
     .setTitle('ChurchApp Platform API')
     .setDescription(
@@ -76,12 +86,11 @@ async function bootstrap() {
     },
   });
 
-  // Write swagger.json to disk in development for frontend team handoff
-  if (process.env.NODE_ENV !== 'production') {
+  // Write swagger.json to disk for frontend team handoff
     const outputPath = path.resolve(process.cwd(), 'swagger.json');
     fs.writeFileSync(outputPath, JSON.stringify(document, null, 2), 'utf-8');
     logger.log(`OpenAPI spec written to ${outputPath}`);
-  }
+  } // end Swagger gate
 
   const port = process.env.PORT ?? 3000;
   await app.listen(port);

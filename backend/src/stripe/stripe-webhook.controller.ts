@@ -11,7 +11,10 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiExcludeEndpoint } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { Request } from 'express';
+import { DataSource } from 'typeorm';
 import { StripeService } from './stripe.service';
+import { Transaction } from '../giving/entities/transaction.entity';
+import { Tenant } from '../tenants/entities/tenant.entity';
 import Stripe from 'stripe';
 
 @ApiTags('Webhooks')
@@ -20,7 +23,10 @@ import Stripe from 'stripe';
 export class StripeWebhookController {
   private readonly logger = new Logger(StripeWebhookController.name);
 
-  constructor(private readonly stripeService: StripeService) {}
+  constructor(
+    private readonly stripeService: StripeService,
+    private readonly dataSource: DataSource,
+  ) {}
 
   @Post('stripe')
   @HttpCode(HttpStatus.OK)
@@ -56,29 +62,55 @@ export class StripeWebhookController {
     this.logger.log(`Stripe webhook received: ${event.type} (${event.id})`);
 
     switch (event.type) {
-      case 'payment_intent.succeeded':
-        this.logger.log(
-          `PaymentIntent succeeded: ${(event.data.object as Stripe.PaymentIntent).id}`,
+      case 'payment_intent.succeeded': {
+        const pi = event.data.object as Stripe.PaymentIntent;
+        this.logger.log(`PaymentIntent succeeded: ${pi.id}`);
+        await this.dataSource.manager.update(
+          Transaction,
+          { stripePaymentIntentId: pi.id },
+          { status: 'succeeded' },
         );
         break;
+      }
 
-      case 'payment_intent.payment_failed':
-        this.logger.log(
-          `PaymentIntent failed: ${(event.data.object as Stripe.PaymentIntent).id}`,
+      case 'payment_intent.payment_failed': {
+        const pi = event.data.object as Stripe.PaymentIntent;
+        this.logger.log(`PaymentIntent failed: ${pi.id}`);
+        await this.dataSource.manager.update(
+          Transaction,
+          { stripePaymentIntentId: pi.id },
+          { status: 'failed' },
         );
         break;
+      }
 
-      case 'account.updated':
-        this.logger.log(
-          `Connect account updated: ${(event.data.object as Stripe.Account).id}`,
+      case 'account.updated': {
+        const account = event.data.object as Stripe.Account;
+        this.logger.log(`Connect account updated: ${account.id}`);
+        const status = account.charges_enabled ? 'active' : 'restricted';
+        await this.dataSource.manager.update(
+          Tenant,
+          { stripeAccountId: account.id },
+          { stripeAccountStatus: status },
         );
         break;
+      }
 
-      case 'charge.refunded':
-        this.logger.log(
-          `Charge refunded: ${(event.data.object as Stripe.Charge).id}`,
-        );
+      case 'charge.refunded': {
+        const charge = event.data.object as Stripe.Charge;
+        this.logger.log(`Charge refunded: ${charge.id}`);
+        if (charge.payment_intent) {
+          const piId = typeof charge.payment_intent === 'string'
+            ? charge.payment_intent
+            : charge.payment_intent.id;
+          await this.dataSource.manager.update(
+            Transaction,
+            { stripePaymentIntentId: piId },
+            { status: 'refunded' },
+          );
+        }
         break;
+      }
 
       default:
         this.logger.log(`Unhandled Stripe event type: ${event.type}`);

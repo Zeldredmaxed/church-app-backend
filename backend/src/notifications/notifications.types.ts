@@ -5,6 +5,7 @@
 export enum NotificationType {
   NEW_COMMENT = 'NEW_COMMENT',
   POST_MENTION = 'POST_MENTION',
+  NEW_GLOBAL_POST = 'NEW_GLOBAL_POST',
   INVITATION_EMAIL = 'INVITATION_EMAIL',
   NEW_MESSAGE = 'NEW_MESSAGE',
 }
@@ -34,6 +35,15 @@ export interface PostMentionJob extends BaseNotificationJob {
   previewText: string;
 }
 
+/** Dispatched to followers when a global post is created. */
+export interface NewGlobalPostJob extends BaseNotificationJob {
+  type: NotificationType.NEW_GLOBAL_POST;
+  recipientUserId: string;
+  actorUserId: string;
+  postId: string;
+  previewText: string;
+}
+
 /** Dispatched when an invitation is created — sends the email. */
 export interface InvitationEmailJob extends BaseNotificationJob {
   type: NotificationType.INVITATION_EMAIL;
@@ -56,5 +66,6 @@ export interface NewMessageJob extends BaseNotificationJob {
 export type NotificationJobData =
   | NewCommentJob
   | PostMentionJob
+  | NewGlobalPostJob
   | InvitationEmailJob
   | NewMessageJob;

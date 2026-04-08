@@ -128,7 +128,13 @@ export class InvitationsService {
     // The token must ONLY travel via email — remove it from the return value below.
     // await this.notificationsQueue.add('INVITATION_EMAIL', { token, email: dto.email, ... });
 
-    return saved; // DEV ONLY: token included. Remove from response once email service is active.
+    // Strip the secret token from the response in production.
+    // In development, include it for testing without an email service.
+    if (process.env.NODE_ENV === 'production') {
+      const { token: _token, ...safeResponse } = saved;
+      return safeResponse as Invitation;
+    }
+    return saved;
   }
 
   /**

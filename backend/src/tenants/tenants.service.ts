@@ -6,9 +6,9 @@ import {
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { SupabaseClient } from '@supabase/supabase-js';
+import { SupabaseAdminService } from '../common/services/supabase-admin.service';
 import { rlsStorage } from '../common/storage/rls.storage';
 import { Tenant } from './entities/tenant.entity';
 import { TenantMembership } from '../memberships/entities/tenant-membership.entity';
@@ -26,13 +26,9 @@ export class TenantsService {
 
   constructor(
     private readonly dataSource: DataSource,
-    private readonly config: ConfigService,
+    private readonly supabaseAdmin: SupabaseAdminService,
   ) {
-    this.supabase = createClient(
-      config.getOrThrow('SUPABASE_URL'),
-      config.getOrThrow('SUPABASE_SERVICE_ROLE_KEY'),
-      { auth: { autoRefreshToken: false, persistSession: false } },
-    );
+    this.supabase = supabaseAdmin.client;
   }
 
   /**

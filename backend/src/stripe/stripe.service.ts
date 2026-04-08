@@ -98,6 +98,28 @@ export class StripeService {
   }
 
   /**
+   * Creates a Stripe Customer for the given email.
+   * Called lazily on first SetupIntent creation.
+   */
+  async createCustomer(email: string, name?: string): Promise<Stripe.Customer> {
+    return this.ensureStripe().customers.create({
+      email,
+      name: name ?? undefined,
+    });
+  }
+
+  /**
+   * Creates a SetupIntent for saving a payment method to a customer.
+   * The frontend uses the returned client_secret with Stripe.js CardField.
+   */
+  async createSetupIntent(customerId: string): Promise<Stripe.SetupIntent> {
+    return this.ensureStripe().setupIntents.create({
+      customer: customerId,
+      payment_method_types: ['card'],
+    });
+  }
+
+  /**
    * Verifies a Stripe webhook signature and returns the parsed event.
    * Throws Stripe.errors.StripeSignatureVerificationError on failure.
    */

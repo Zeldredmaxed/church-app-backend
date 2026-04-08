@@ -4,9 +4,9 @@ import {
   ForbiddenException,
   Logger,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { DataSource } from 'typeorm';
+import { SupabaseClient } from '@supabase/supabase-js';
+import { SupabaseAdminService } from '../common/services/supabase-admin.service';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
@@ -21,16 +21,10 @@ export class AuthService {
   private readonly supabase: SupabaseClient;
 
   constructor(
-    private readonly config: ConfigService,
+    private readonly supabaseAdmin: SupabaseAdminService,
     private readonly dataSource: DataSource,
   ) {
-    // Service role client — used for auth admin operations only.
-    // Never expose the service role key to the client.
-    this.supabase = createClient(
-      config.getOrThrow('SUPABASE_URL'),
-      config.getOrThrow('SUPABASE_SERVICE_ROLE_KEY'),
-      { auth: { autoRefreshToken: false, persistSession: false } },
-    );
+    this.supabase = supabaseAdmin.client;
   }
 
   /**

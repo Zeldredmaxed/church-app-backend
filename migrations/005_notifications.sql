@@ -10,6 +10,8 @@
 --   § SECTION 4 — Verification queries
 -- ============================================================================
 
+BEGIN;
+
 -- ============================================================================
 -- § SECTION 1 — notifications table
 -- ============================================================================
@@ -121,3 +123,5 @@ CREATE INDEX idx_notifications_recipient_created
 -- 4d: Trigger
 -- SELECT trigger_name FROM information_schema.triggers
 -- WHERE event_object_table = 'notifications' AND trigger_name = 'set_notifications_updated_at';
+
+COMMIT;

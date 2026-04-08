@@ -47,6 +47,7 @@ export class PostsService {
   constructor(
     @InjectQueue('notifications') private readonly notificationsQueue: Queue<NotificationJobData>,
     @InjectQueue('social-fanout') private readonly socialFanoutQueue: Queue<GlobalPostJob>,
+    private readonly dataSource: import('typeorm').DataSource,
   ) {}
 
   /**
@@ -117,21 +118,22 @@ export class PostsService {
    *   3. Using service role here is simpler; the author_id is still derived
    *      from the verified JWT, so impersonation is impossible.
    */
-  async createGlobalPost(dto: CreatePostDto, authorId: string, dataSource: import('typeorm').DataSource): Promise<Post> {
-    const post = dataSource.manager.create(Post, {
-      tenantId: undefined, // NULL — global post
+  async createGlobalPost(dto: CreatePostDto, authorId: string): Promise<Post> {
+    const post = this.dataSource.manager.create(Post, {
+      tenantId: undefined as any, // NULL — global post
       authorId,
       content: dto.content,
-      mediaType: dto.videoMuxPlaybackId ? 'video' : 'text',
-      mediaUrl: null,
+      mediaType: dto.mediaType ?? (dto.videoMuxPlaybackId ? 'video' : 'text'),
+      mediaUrl: dto.mediaUrl ?? null,
       videoMuxPlaybackId: dto.videoMuxPlaybackId ?? null,
+      visibility: dto.visibility ?? 'public',
     });
 
-    const saved = await dataSource.manager.save(Post, post);
+    const saved = await this.dataSource.manager.save(Post, post);
     this.logger.log(`Global post created: ${saved.id} by ${authorId}`);
 
     // Re-fetch with author relation
-    const postWithAuthor = await dataSource.manager.findOne(Post, {
+    const postWithAuthor = await this.dataSource.manager.findOne(Post, {
       where: { id: saved.id },
       relations: ['author'],
     });
@@ -271,8 +273,8 @@ export class PostsService {
     const { queryRunner } = this.getRlsContext();
 
     const updates: Partial<Post> = {};
-    if (dto.content) updates.content = dto.content;
-    if (dto.visibility) updates.visibility = dto.visibility;
+    if (dto.content !== undefined) updates.content = dto.content;
+    if (dto.visibility !== undefined) updates.visibility = dto.visibility;
 
     if (Object.keys(updates).length === 0) {
       // Nothing to update — return current state without touching the DB

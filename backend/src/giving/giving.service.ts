@@ -9,9 +9,7 @@ import { rlsStorage } from '../common/storage/rls.storage';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { Transaction } from './entities/transaction.entity';
 import { DonateDto } from './dto/donate.dto';
-
-/** Platform fee percentage deducted from each donation. */
-const PLATFORM_FEE_PERCENT = 0.01; // 1%
+import { getTierFeatures } from '../common/config/tier-features.config';
 
 @Injectable()
 export class GivingService {
@@ -40,7 +38,11 @@ export class GivingService {
     dto: DonateDto,
     userId: string,
   ): Promise<{ clientSecret: string; transactionId: string }> {
-    const { queryRunner, currentTenantId } = rlsStorage.getStore()!;
+    const context = rlsStorage.getStore();
+    if (!context) {
+      throw new BadRequestException('RLS context unavailable');
+    }
+    const { queryRunner, currentTenantId } = context;
 
     if (!currentTenantId) {
       throw new BadRequestException('No active tenant context');
@@ -70,8 +72,10 @@ export class GivingService {
     // Step 2: Convert to cents
     const amountCents = Math.round(dto.amount * 100);
 
-    // Step 3: Calculate platform fee (1%)
-    const platformFeeCents = Math.round(amountCents * PLATFORM_FEE_PERCENT);
+    // Step 3: Calculate tier-aware platform fee
+    const tierFeatures = getTierFeatures(tenant.tier);
+    const platformFeeRate = tierFeatures.transactionFeePercent / 100;
+    const platformFeeCents = Math.round(amountCents * platformFeeRate);
 
     // Step 4: Create Stripe PaymentIntent
     const paymentIntent = await this.stripeService.createPaymentIntent(
@@ -113,7 +117,11 @@ export class GivingService {
     cursor?: string,
     limit: number = 20,
   ): Promise<{ transactions: Transaction[]; nextCursor: string | null }> {
-    const { queryRunner } = rlsStorage.getStore()!;
+    const context = rlsStorage.getStore();
+    if (!context) {
+      throw new BadRequestException('RLS context unavailable');
+    }
+    const { queryRunner } = context;
 
     const qb = queryRunner.manager
       .createQueryBuilder(Transaction, 'tx')
@@ -150,7 +158,11 @@ export class GivingService {
     cursor?: string,
     limit: number = 20,
   ): Promise<{ transactions: Transaction[]; nextCursor: string | null }> {
-    const { queryRunner } = rlsStorage.getStore()!;
+    const context = rlsStorage.getStore();
+    if (!context) {
+      throw new BadRequestException('RLS context unavailable');
+    }
+    const { queryRunner } = context;
 
     const qb = queryRunner.manager
       .createQueryBuilder(Transaction, 'tx')

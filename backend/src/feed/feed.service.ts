@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { DataSource, In } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
@@ -32,7 +32,7 @@ export interface PaginatedFeed {
 }
 
 @Injectable()
-export class FeedService {
+export class FeedService implements OnModuleDestroy {
   private readonly logger = new Logger(FeedService.name);
   private readonly redis: Redis;
 
@@ -47,6 +47,10 @@ export class FeedService {
       password: this.config.get<string>('REDIS_PASSWORD'),
       tls: redisHost.includes('upstash.io') ? {} : undefined,
     });
+  }
+
+  async onModuleDestroy() {
+    await this.redis.quit();
   }
 
   /**
@@ -106,14 +110,6 @@ export class FeedService {
   private async getColdStartFeed(limit: number, offset: number): Promise<PaginatedFeed> {
     this.logger.log('Cold start: falling back to DB query for global feed');
 
-    const [posts, total] = await this.dataSource.manager.findAndCount(Post, {
-      where: { tenantId: undefined }, // TypeORM: undefined maps to IS NULL
-      order: { createdAt: 'DESC' },
-      take: limit,
-      skip: offset,
-    });
-
-    // TypeORM's `undefined` in where clause can be tricky; use QueryBuilder for IS NULL
     const qb = this.dataSource.manager
       .createQueryBuilder(Post, 'p')
       .where('p.tenant_id IS NULL')
