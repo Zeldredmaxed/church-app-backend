@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { DataSource } from 'typeorm';
 import { rlsStorage } from '../common/storage/rls.storage';
 import { Post } from './entities/post.entity';
 import { CreatePostDto } from './dto/create-post.dto';
@@ -47,7 +48,7 @@ export class PostsService {
   constructor(
     @InjectQueue('notifications') private readonly notificationsQueue: Queue<NotificationJobData>,
     @InjectQueue('social-fanout') private readonly socialFanoutQueue: Queue<GlobalPostJob>,
-    private readonly dataSource: import('typeorm').DataSource,
+    private readonly dataSource: DataSource,
   ) {}
 
   /**
