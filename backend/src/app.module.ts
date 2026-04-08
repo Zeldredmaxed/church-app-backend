@@ -63,9 +63,9 @@ import { Role } from './tenants/entities/role.entity';
         // Setting this to true would let TypeORM overwrite or drop columns.
         synchronize: false,
 
-        ssl: {
-          rejectUnauthorized: process.env.NODE_ENV === 'production',
-        },
+        // Supabase Postgres uses a self-signed certificate chain.
+        // rejectUnauthorized must be false for Supabase connections.
+        ssl: { rejectUnauthorized: false },
 
         // Connection pool configuration.
         // Keep extra connections low — Supabase free/pro plans have connection limits.
