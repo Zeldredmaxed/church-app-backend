@@ -1,5 +1,6 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, Query, ParseUUIDPipe, UseGuards, UseInterceptors, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { DataSource } from 'typeorm';
 import { BadgesService } from './badges.service';
 import { CreateBadgeDto } from './dto/create-badge.dto';
 import { UpdateBadgeDto } from './dto/update-badge.dto';
@@ -15,7 +16,10 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 @UseGuards(JwtAuthGuard)
 @UseInterceptors(RlsContextInterceptor)
 export class BadgesController {
-  constructor(private readonly badgesService: BadgesService) {}
+  constructor(
+    private readonly badgesService: BadgesService,
+    private readonly dataSource: DataSource,
+  ) {}
 
   @Get('leaderboard')
   @ApiOperation({ summary: 'Get badge leaderboard — top members by badge count' })
@@ -23,8 +27,30 @@ export class BadgesController {
     return this.badgesService.getBadgeLeaderboard(Math.min(parseInt(limit ?? '20', 10) || 20, 100));
   }
 
+  @Get('progress')
+  @ApiOperation({ summary: 'Get current user badge progress (all badges with current/target/percent)' })
+  getMyProgress(@CurrentUser() user: SupabaseJwtPayload) {
+    const tenantId = user.app_metadata?.current_tenant_id!;
+    return this.badgesService.getMemberBadgeProgress(tenantId, user.sub);
+  }
+
+  @Post('check')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Check and auto-award badges for current user. Returns newly earned badges (for celebration overlay).' })
+  async checkBadges(@CurrentUser() user: SupabaseJwtPayload) {
+    const tenantId = user.app_metadata?.current_tenant_id!;
+    const newlyEarned = await this.badgesService.checkAndAwardAutoBadges(tenantId, user.sub);
+    return { newlyEarned };
+  }
+
+  @Get('user/:userId')
+  @ApiOperation({ summary: 'Get all badges earned by a specific user' })
+  getUserBadges(@Param('userId', ParseUUIDPipe) userId: string) {
+    return this.badgesService.getMemberBadges(userId);
+  }
+
   @Get()
-  @ApiOperation({ summary: 'List all badges for current tenant with award counts' })
+  @ApiOperation({ summary: 'List all badge definitions for current tenant with award counts' })
   getBadges() {
     return this.badgesService.getBadges();
   }
