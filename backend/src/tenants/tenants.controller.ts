@@ -42,6 +42,17 @@ export class TenantsController {
     return this.tenantsService.register(dto);
   }
 
+  /**
+   * Public church directory — no auth required.
+   * Returns only safe fields (id, name, slug) for the Join/signup church picker.
+   */
+  @Get('public')
+  @ApiOperation({ summary: 'List all churches (public, no auth required)' })
+  @ApiResponse({ status: 200, description: 'Array of { id, name, slug }' })
+  getPublicChurches(@Query('q') q?: string) {
+    return this.tenantsService.getPublicChurches(q);
+  }
+
   @Post()
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, SuperAdminGuard)

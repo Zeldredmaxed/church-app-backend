@@ -32,6 +32,26 @@ export class TenantsService {
   }
 
   /**
+   * Returns all churches with only public-safe fields.
+   * No auth required — used by the Join/signup church picker.
+   * Optional search query filters by name (case-insensitive).
+   */
+  async getPublicChurches(q?: string) {
+    const params: any[] = [];
+    let sql = `SELECT id, name, slug FROM public.tenants`;
+
+    if (q && q.trim()) {
+      params.push(`%${q.trim()}%`);
+      sql += ` WHERE name ILIKE $1`;
+    }
+
+    sql += ` ORDER BY name ASC LIMIT 100`;
+
+    const rows = await this.dataSource.query(sql, params);
+    return rows.map((r: any) => ({ id: r.id, name: r.name, slug: r.slug }));
+  }
+
+  /**
    * Creates a new tenant (church). Service-role operation — intentionally bypasses RLS.
    * Only callable from the SuperAdmin-guarded endpoint.
    *
