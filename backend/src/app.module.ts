@@ -92,6 +92,7 @@ import { AudienceSegment } from './communications/entities/audience-segment.enti
 import { MessageTemplate } from './communications/entities/message-template.entity';
 import { SentMessage } from './communications/entities/sent-message.entity';
 import { ReportsModule } from './reports/reports.module';
+import { AssistantModule } from './assistant/assistant.module';
 
 @Module({
   imports: [
@@ -234,6 +235,7 @@ import { ReportsModule } from './reports/reports.module';
     CareCasesModule,
     CommunicationsModule,
     ReportsModule,
+    AssistantModule,
 
     // GraphQL — Apollo Driver (code-first approach)
     // The FeedModule provides the FeedResolver which registers the globalFeed query.
