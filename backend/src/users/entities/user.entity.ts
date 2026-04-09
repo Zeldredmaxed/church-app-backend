@@ -35,6 +35,10 @@ export class User {
   @Column({ type: 'uuid', nullable: true, name: 'last_accessed_tenant_id' })
   lastAccessedTenantId: string | null;
 
+  /** Phone number for SMS. E.164 format (e.g., +15551234567). */
+  @Column({ type: 'text', nullable: true })
+  phone: string | null;
+
   /** Stripe Customer ID (cus_xxx). Created lazily on first SetupIntent. User-global. */
   @Column({ type: 'text', nullable: true, unique: true, name: 'stripe_customer_id' })
   stripeCustomerId: string | null;

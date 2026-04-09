@@ -1,5 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { EmailService } from './email.service';
+import { SmsService } from './sms.service';
+import { OneSignalService } from '../notifications/onesignal.service';
 import { CreateSegmentDto } from './dto/create-segment.dto';
 import { CreateTemplateDto } from './dto/create-template.dto';
 import { SendMessageDto } from './dto/send-message.dto';
@@ -9,7 +12,12 @@ import { ScheduleMessageDto } from './dto/schedule-message.dto';
 export class CommunicationsService {
   private readonly logger = new Logger(CommunicationsService.name);
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly emailService: EmailService,
+    private readonly smsService: SmsService,
+    private readonly oneSignalService: OneSignalService,
+  ) {}
 
   /* ───── Audience Segments ───── */
 
@@ -63,22 +71,25 @@ export class CommunicationsService {
   /* ───── Send / Schedule ───── */
 
   async sendMessage(tenantId: string, dto: SendMessageDto, userId: string) {
-    // Count recipients: from segment or all members
-    let recipientCount = 0;
-    if (dto.segmentId) {
-      const [seg] = await this.dataSource.query(
-        `SELECT COUNT(*)::int AS cnt FROM public.tenant_memberships WHERE tenant_id = $1`,
+    // Fetch recipients: all members of this tenant with their contact info
+    const recipients: Array<{ user_id: string; email: string; phone: string | null; full_name: string | null }> =
+      await this.dataSource.query(
+        `SELECT u.id AS user_id, u.email, u.phone, u.full_name
+         FROM public.tenant_memberships tm
+         JOIN public.users u ON u.id = tm.user_id
+         WHERE tm.tenant_id = $1`,
         [tenantId],
       );
-      recipientCount = seg.cnt;
-    } else {
-      const [all] = await this.dataSource.query(
-        `SELECT COUNT(*)::int AS cnt FROM public.tenant_memberships WHERE tenant_id = $1`,
-        [tenantId],
-      );
-      recipientCount = all.cnt;
-    }
 
+    // Get the church name for email branding
+    const [tenant] = await this.dataSource.query(
+      `SELECT name FROM public.tenants WHERE id = $1`, [tenantId],
+    );
+    const churchName = tenant?.name ?? undefined;
+
+    const recipientCount = recipients.length;
+
+    // Record the message in sent_messages
     const [row] = await this.dataSource.query(
       `INSERT INTO public.sent_messages
          (tenant_id, segment_id, template_id, channel, subject, body, recipient_count, sent_by, sent_at, status)
@@ -96,10 +107,58 @@ export class CommunicationsService {
       ],
     );
 
-    // TODO: Actual email/SMS/push sending integration
-    this.logger.log(`Message sent to ${recipientCount} recipients (channel=${dto.channel})`);
+    // Dispatch through the appropriate channel (fire-and-forget)
+    this.dispatchMessage(dto.channel, recipients, dto.subject ?? '', dto.body, churchName)
+      .catch(err => this.logger.error(`Dispatch failed: ${err.message}`));
 
     return this.mapSentMessage(row);
+  }
+
+  /**
+   * Actually sends the message through Email, SMS, or Push.
+   */
+  private async dispatchMessage(
+    channel: string,
+    recipients: Array<{ user_id: string; email: string; phone: string | null; full_name: string | null }>,
+    subject: string,
+    body: string,
+    churchName?: string,
+  ) {
+    switch (channel) {
+      case 'email': {
+        const emails = recipients.map(r => r.email).filter(Boolean);
+        if (emails.length > 0) {
+          const result = await this.emailService.sendEmail(emails, subject, body, churchName);
+          this.logger.log(`Email dispatch: ${result.sent} sent, ${result.failed} failed`);
+        }
+        break;
+      }
+
+      case 'sms': {
+        const phones = recipients.map(r => r.phone).filter((p): p is string => !!p);
+        if (phones.length > 0) {
+          const result = await this.smsService.sendSms(phones, body);
+          this.logger.log(`SMS dispatch: ${result.sent} sent, ${result.failed} failed`);
+        } else {
+          this.logger.warn('No phone numbers available for SMS dispatch');
+        }
+        break;
+      }
+
+      case 'push': {
+        const userIds = recipients.map(r => r.user_id);
+        let sent = 0;
+        for (const uid of userIds) {
+          await this.oneSignalService.sendPush(uid, subject || 'Church Update', body);
+          sent++;
+        }
+        this.logger.log(`Push dispatch: ${sent} notifications queued`);
+        break;
+      }
+
+      default:
+        this.logger.warn(`Unknown channel: ${channel}`);
+    }
   }
 
   async scheduleMessage(tenantId: string, dto: ScheduleMessageDto, userId: string) {
