@@ -43,6 +43,9 @@ export interface TierFeatures {
   // Giving
   transactionFeePercent: number;
 
+  // AI
+  aiAssistant: boolean;
+
   // Enterprise extras
   customBranding: boolean;
   multiSite: boolean;
@@ -64,6 +67,7 @@ export const TIER_FEATURES: Record<TierName, TierFeatures> = {
     videoUploads: false,
     storageLimit: 10,
     transactionFeePercent: 1.0,
+    aiAssistant: false,
     customBranding: false,
     multiSite: false,
     apiAccess: false,
@@ -83,6 +87,7 @@ export const TIER_FEATURES: Record<TierName, TierFeatures> = {
     videoUploads: true,
     storageLimit: 100,
     transactionFeePercent: 0.5,
+    aiAssistant: true,
     customBranding: false,
     multiSite: false,
     apiAccess: false,
@@ -102,6 +107,7 @@ export const TIER_FEATURES: Record<TierName, TierFeatures> = {
     videoUploads: true,
     storageLimit: -1,
     transactionFeePercent: 0,
+    aiAssistant: true,
     customBranding: true,
     multiSite: true,
     apiAccess: true,

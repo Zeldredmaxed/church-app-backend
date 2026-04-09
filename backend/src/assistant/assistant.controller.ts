@@ -6,14 +6,18 @@ import {
   UseInterceptors,
   HttpCode,
   HttpStatus,
+  ForbiddenException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { DataSource } from 'typeorm';
 import { AssistantService } from './assistant.service';
 import { AskDto } from './dto/ask.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
+import { getTierFeatures } from '../common/config/tier-features.config';
+import { Tenant } from '../tenants/entities/tenant.entity';
 
 @ApiTags('Shepherd Assistant')
 @ApiBearerAuth()
@@ -21,7 +25,10 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 @UseGuards(JwtAuthGuard)
 @UseInterceptors(RlsContextInterceptor)
 export class AssistantController {
-  constructor(private readonly assistantService: AssistantService) {}
+  constructor(
+    private readonly assistantService: AssistantService,
+    private readonly dataSource: DataSource,
+  ) {}
 
   @Post('ask')
   @HttpCode(HttpStatus.OK)
@@ -37,7 +44,7 @@ export class AssistantController {
     status: 200,
     description: '{ query, summary, results[], resultCount, suggestions? }',
   })
-  ask(
+  async ask(
     @CurrentUser() user: SupabaseJwtPayload,
     @Body() dto: AskDto,
   ) {
@@ -50,6 +57,19 @@ export class AssistantController {
         resultCount: 0,
       };
     }
+
+    // Tier gate: only Premium and Enterprise have AI assistant access
+    const tenant = await this.dataSource.manager.findOne(Tenant, {
+      where: { id: tenantId },
+      select: ['tier'],
+    });
+    const features = getTierFeatures(tenant?.tier ?? 'standard');
+    if (!features.aiAssistant) {
+      throw new ForbiddenException(
+        'Shepherd Assistant requires a Premium or Enterprise plan. Upgrade to unlock AI-powered insights for your church.',
+      );
+    }
+
     return this.assistantService.ask(tenantId, dto.query);
   }
 }
