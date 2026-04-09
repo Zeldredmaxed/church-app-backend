@@ -15,6 +15,7 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 import { TenantMembership } from '../memberships/entities/tenant-membership.entity';
+import { Tenant } from '../tenants/entities/tenant.entity';
 import { User } from '../users/entities/user.entity';
 
 @Injectable()
@@ -32,22 +33,107 @@ export class AuthService {
   /**
    * Registers a new user via Supabase Auth.
    * The handle_new_user DB trigger automatically creates the public.users row.
-   * The user will not pass RLS on tenant-scoped tables until they are assigned
-   * a membership and call POST /auth/switch-tenant.
+   *
+   * If tenantId is provided, the user is automatically added as a 'member'
+   * of that church, their tenant context is set, and they're logged in —
+   * so the frontend can skip the switch-tenant + refresh dance.
+   *
+   * If tenantId is NOT provided, the user must be invited or manually added.
    */
   async signup(dto: SignupDto) {
-    const { data, error } = await this.supabase.auth.signUp({
+    // Create Supabase Auth user (email confirmation required unless tenant flow)
+    const signupOptions: any = {
       email: dto.email,
       password: dto.password,
-    });
+    };
+
+    // If joining a church, pre-confirm the email so they can log in immediately
+    if (dto.tenantId) {
+      // Verify the tenant exists
+      const tenant = await this.dataSource.manager.findOne(Tenant, {
+        where: { id: dto.tenantId },
+        select: ['id', 'name'],
+      });
+      if (!tenant) {
+        throw new UnauthorizedException('Church not found');
+      }
+    }
+
+    const { data, error } = dto.tenantId
+      ? await this.supabase.auth.admin.createUser({
+          email: dto.email,
+          password: dto.password,
+          email_confirm: true,
+        })
+      : await this.supabase.auth.signUp(signupOptions);
 
     if (error) {
       this.logger.warn(`Signup failed for ${dto.email}: ${error.message}`);
+      if (error.message?.includes('already been registered')) {
+        throw new UnauthorizedException('An account with this email already exists');
+      }
       throw new UnauthorizedException(error.message);
     }
 
+    const userId = data.user?.id;
+    if (!userId) {
+      throw new UnauthorizedException('Failed to create user account');
+    }
+
+    // If joining a church, set up membership + context + fullName in one step
+    if (dto.tenantId) {
+      // Wait for the handle_new_user trigger to create the public.users row
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      await this.dataSource.transaction(async manager => {
+        // Add as member
+        await manager.save(
+          TenantMembership,
+          manager.create(TenantMembership, {
+            userId,
+            tenantId: dto.tenantId!,
+            role: 'member',
+          }),
+        );
+
+        // Set tenant context (fires handle_tenant_context_switch trigger)
+        const updates: Partial<User> = { lastAccessedTenantId: dto.tenantId! };
+        if (dto.fullName) updates.fullName = dto.fullName;
+        await manager.update(User, { id: userId }, updates);
+      });
+
+      // Auto-login so the frontend gets tokens immediately
+      const { data: loginData, error: loginError } =
+        await this.supabase.auth.signInWithPassword({
+          email: dto.email,
+          password: dto.password,
+        });
+
+      if (loginError) {
+        this.logger.warn(`Auto-login after signup failed: ${loginError.message}`);
+        return {
+          userId,
+          email: dto.email,
+          tenantId: dto.tenantId,
+          message: 'Account created and joined church. Please log in manually.',
+        };
+      }
+
+      return {
+        userId,
+        email: dto.email,
+        fullName: dto.fullName ?? null,
+        tenantId: dto.tenantId,
+        accessToken: loginData.session!.access_token,
+        refreshToken: loginData.session!.refresh_token,
+        expiresAt: loginData.session!.expires_at,
+        message: 'Account created and joined church.',
+      };
+    }
+
+    // Standard signup (no church) — requires email confirmation
     return {
-      userId: data.user?.id,
+      userId,
       email: data.user?.email,
       message: 'Account created. Check your email to confirm before logging in.',
     };
