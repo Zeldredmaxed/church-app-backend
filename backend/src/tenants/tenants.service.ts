@@ -279,4 +279,114 @@ export class TenantsService {
       features,
     };
   }
+
+  /**
+   * Returns the public profile for a tenant.
+   * Includes member count, post count, and event count.
+   */
+  async getProfile(tenantId: string) {
+    const tenant = await this.dataSource.manager.findOne(Tenant, {
+      where: { id: tenantId },
+    });
+
+    if (!tenant) {
+      throw new NotFoundException('Tenant not found');
+    }
+
+    const [[{ member_count }], [{ post_count }], [{ event_count }]] = await Promise.all([
+      this.dataSource.query(
+        `SELECT COUNT(*)::int AS member_count FROM public.tenant_memberships WHERE tenant_id = $1`,
+        [tenantId],
+      ),
+      this.dataSource.query(
+        `SELECT COUNT(*)::int AS post_count FROM public.posts WHERE tenant_id = $1`,
+        [tenantId],
+      ),
+      this.dataSource.query(
+        `SELECT COUNT(*)::int AS event_count FROM public.events WHERE tenant_id = $1`,
+        [tenantId],
+      ),
+    ]);
+
+    return {
+      id: tenant.id,
+      name: tenant.name,
+      slug: tenant.slug,
+      tier: tenant.tier,
+      description: (tenant as any).description ?? null,
+      location: (tenant as any).location ?? null,
+      serviceTimes: (tenant as any).service_times ?? null,
+      websiteUrl: (tenant as any).website_url ?? null,
+      phone: (tenant as any).phone ?? null,
+      coverImageUrl: (tenant as any).cover_image_url ?? null,
+      memberCount: Number(member_count),
+      postCount: Number(post_count),
+      eventCount: Number(event_count),
+    };
+  }
+
+  /**
+   * Returns analytics data for the admin dashboard.
+   */
+  async getAnalytics(tenantId: string, range: string) {
+    const intervalMap: Record<string, string> = {
+      '7d': '7 days',
+      '30d': '30 days',
+      '90d': '90 days',
+      'all': '100 years',
+    };
+    const interval = intervalMap[range] ?? '30 days';
+
+    const [newMembers, givingTrends, totalGivingResult, totalNewMembersResult, topPosts] = await Promise.all([
+      this.dataSource.query(
+        `SELECT date_trunc('day', tm.created_at)::date AS date, COUNT(*)::int AS count
+         FROM public.tenant_memberships tm
+         WHERE tm.tenant_id = $1 AND tm.created_at >= now() - $2::interval
+         GROUP BY 1 ORDER BY 1`,
+        [tenantId, interval],
+      ),
+      this.dataSource.query(
+        `SELECT date_trunc('day', t.created_at)::date AS date, SUM(t.amount)::float AS amount
+         FROM public.transactions t
+         WHERE t.tenant_id = $1 AND t.status = 'succeeded' AND t.created_at >= now() - $2::interval
+         GROUP BY 1 ORDER BY 1`,
+        [tenantId, interval],
+      ),
+      this.dataSource.query(
+        `SELECT COALESCE(SUM(amount), 0)::float AS total
+         FROM public.transactions
+         WHERE tenant_id = $1 AND status = 'succeeded' AND created_at >= now() - $2::interval`,
+        [tenantId, interval],
+      ),
+      this.dataSource.query(
+        `SELECT COUNT(*)::int AS total
+         FROM public.tenant_memberships
+         WHERE tenant_id = $1 AND created_at >= now() - $2::interval`,
+        [tenantId, interval],
+      ),
+      this.dataSource.query(
+        `SELECT p.id, LEFT(p.content, 80) AS title,
+           (SELECT COUNT(*)::int FROM public.post_likes WHERE post_id = p.id) AS likes,
+           (SELECT COUNT(*)::int FROM public.comments WHERE post_id = p.id) AS comments
+         FROM public.posts p
+         WHERE p.tenant_id = $1 AND p.created_at >= now() - $2::interval
+         ORDER BY likes DESC, comments DESC
+         LIMIT 5`,
+        [tenantId, interval],
+      ),
+    ]);
+
+    return {
+      newMembers,
+      givingTrends,
+      totalGiving: totalGivingResult[0]?.total ?? 0,
+      totalNewMembers: totalNewMembersResult[0]?.total ?? 0,
+      topPosts: topPosts.map((p: any) => ({
+        id: p.id,
+        title: p.title,
+        likes: Number(p.likes),
+        comments: Number(p.comments),
+      })),
+    };
+  }
 }

@@ -41,6 +41,32 @@ import { Comment } from './comments/entities/comment.entity';
 import { Notification } from './notifications/entities/notification.entity';
 import { RegistrationKey } from './tenants/entities/registration-key.entity';
 import { Role } from './tenants/entities/role.entity';
+import { PrayersModule } from './prayers/prayers.module';
+import { Prayer } from './prayers/entities/prayer.entity';
+import { PrayerPray } from './prayers/entities/prayer-pray.entity';
+import { EventsModule } from './events/events.module';
+import { Event } from './events/entities/event.entity';
+import { EventRsvp } from './events/entities/event-rsvp.entity';
+import { GroupsModule } from './groups/groups.module';
+import { Group } from './groups/entities/group.entity';
+import { GroupMember } from './groups/entities/group-member.entity';
+import { GroupMessage } from './groups/entities/group-message.entity';
+import { AnnouncementsModule } from './announcements/announcements.module';
+import { Announcement } from './announcements/entities/announcement.entity';
+import { SermonsModule } from './sermons/sermons.module';
+import { Sermon } from './sermons/entities/sermon.entity';
+import { VolunteerModule } from './volunteer/volunteer.module';
+import { Opportunity } from './volunteer/entities/opportunity.entity';
+import { VolunteerSignup } from './volunteer/entities/volunteer-signup.entity';
+import { CheckinModule } from './checkin/checkin.module';
+import { ServiceSchedule } from './checkin/entities/service-schedule.entity';
+import { CheckIn } from './checkin/entities/check-in.entity';
+import { GalleryModule } from './gallery/gallery.module';
+import { GalleryPhoto } from './gallery/entities/gallery-photo.entity';
+import { ModerationModule } from './moderation/moderation.module';
+import { PostReport } from './moderation/entities/post-report.entity';
+import { RecurringGivingModule } from './recurring-giving/recurring-giving.module';
+import { RecurringGift } from './recurring-giving/entities/recurring-gift.entity';
 
 @Module({
   imports: [
@@ -56,7 +82,14 @@ import { Role } from './tenants/entities/role.entity';
       useFactory: (config: ConfigService) => ({
         type: 'postgres',
         url: config.getOrThrow<string>('DATABASE_URL'),
-        entities: [Tenant, User, TenantMembership, Post, Invitation, Comment, Notification, Follow, ChatChannel, ChannelMember, ChatMessage, Transaction, RegistrationKey, Role],
+        entities: [
+          Tenant, User, TenantMembership, Post, Invitation, Comment, Notification,
+          Follow, ChatChannel, ChannelMember, ChatMessage, Transaction, RegistrationKey, Role,
+          Prayer, PrayerPray, Event, EventRsvp,
+          Group, GroupMember, GroupMessage, Announcement, Sermon,
+          Opportunity, VolunteerSignup, ServiceSchedule, CheckIn,
+          GalleryPhoto, PostReport, RecurringGift,
+        ],
 
         // CRITICAL: synchronize must ALWAYS be false.
         // Schema changes are managed exclusively by migration scripts.
@@ -147,6 +180,16 @@ import { Role } from './tenants/entities/role.entity';
     StripeModule,
     GivingModule,
     HealthModule,
+    PrayersModule,
+    EventsModule,
+    GroupsModule,
+    AnnouncementsModule,
+    SermonsModule,
+    VolunteerModule,
+    CheckinModule,
+    GalleryModule,
+    ModerationModule,
+    RecurringGivingModule,
 
     // GraphQL — Apollo Driver (code-first approach)
     // The FeedModule provides the FeedResolver which registers the globalFeed query.

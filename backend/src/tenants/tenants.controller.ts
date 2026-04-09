@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Param,
+  Query,
   Body,
   UseGuards,
   UseInterceptors,
@@ -84,5 +85,25 @@ export class TenantsController {
     // to prevent enumeration of other tenants' features
     const tenantId = user.app_metadata?.current_tenant_id ?? id;
     return this.tenantsService.getFeatures(tenantId);
+  }
+
+  @Get(':id/profile')
+  @ApiOperation({ summary: 'Get public church profile (name, location, counts)' })
+  @ApiResponse({ status: 200, description: 'Tenant public profile' })
+  getProfile(@Param('id', ParseUUIDPipe) id: string) {
+    return this.tenantsService.getProfile(id);
+  }
+
+  @Get(':id/analytics')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(RlsContextInterceptor)
+  @ApiOperation({ summary: 'Get admin analytics (requires manage_finance or admin)' })
+  @ApiResponse({ status: 200, description: 'Analytics data' })
+  getAnalytics(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('range') range?: string,
+  ) {
+    return this.tenantsService.getAnalytics(id, range ?? '30d');
   }
 }
