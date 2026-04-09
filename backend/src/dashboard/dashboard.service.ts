@@ -169,6 +169,98 @@ export class DashboardService {
   }
 
   /**
+   * Member engagement metrics — weekly active members and trend.
+   *
+   * "Active" = distinct user who performed at least one action in that week:
+   * posted, commented, liked, checked in, gave, joined a group, prayed,
+   * RSVP'd, or sent a message.
+   *
+   * Returns current + previous week comparison, delta, trend, and 6-week history.
+   */
+  async getEngagement(tenantId: string) {
+    // Get 6 weeks of engagement data using a CTE that unions all activity tables
+    const rows: Array<{ week_start: string; active_members: string; total_members: string }> =
+      await this.dataSource.query(
+        `WITH weeks AS (
+           SELECT generate_series(
+             date_trunc('week', now()) - interval '5 weeks',
+             date_trunc('week', now()),
+             '1 week'::interval
+           )::date AS week_start
+         ),
+         activity AS (
+           SELECT author_id AS user_id, created_at FROM public.posts WHERE tenant_id = $1
+           UNION ALL
+           SELECT author_id, created_at FROM public.comments WHERE tenant_id = $1
+           UNION ALL
+           SELECT user_id, created_at FROM public.post_likes WHERE tenant_id = $1
+           UNION ALL
+           SELECT user_id, checked_in_at FROM public.check_ins WHERE tenant_id = $1
+           UNION ALL
+           SELECT user_id, created_at FROM public.transactions WHERE tenant_id = $1 AND status = 'succeeded'
+           UNION ALL
+           SELECT user_id, joined_at FROM public.group_members gm
+             WHERE gm.group_id IN (SELECT id FROM public.groups WHERE tenant_id = $1)
+           UNION ALL
+           SELECT author_id, created_at FROM public.prayers WHERE tenant_id = $1
+           UNION ALL
+           SELECT user_id, created_at FROM public.event_rsvps er
+             WHERE er.event_id IN (SELECT id FROM public.events WHERE tenant_id = $1)
+           UNION ALL
+           SELECT author_id, created_at FROM public.group_messages gm2
+             WHERE gm2.group_id IN (SELECT id FROM public.groups WHERE tenant_id = $1)
+         ),
+         weekly_active AS (
+           SELECT w.week_start,
+             COUNT(DISTINCT a.user_id)::int AS active_members
+           FROM weeks w
+           LEFT JOIN activity a
+             ON a.created_at >= w.week_start
+             AND a.created_at < w.week_start + interval '1 week'
+           GROUP BY w.week_start
+         ),
+         weekly_total AS (
+           SELECT w.week_start,
+             (SELECT COUNT(*)::int FROM public.tenant_memberships WHERE tenant_id = $1) AS total_members
+           FROM weeks w
+         )
+         SELECT wa.week_start, wa.active_members, wt.total_members
+         FROM weekly_active wa
+         JOIN weekly_total wt ON wt.week_start = wa.week_start
+         ORDER BY wa.week_start ASC`,
+        [tenantId],
+      );
+
+    const weeklyHistory = rows.map(r => {
+      const active = Number(r.active_members);
+      const total = Number(r.total_members);
+      return {
+        weekStart: r.week_start,
+        activeMembers: active,
+        totalMembers: total,
+        engagementPercent: total > 0 ? Math.round((active / total) * 1000) / 10 : 0,
+      };
+    });
+
+    // Pad to exactly 6 entries if needed
+    while (weeklyHistory.length < 6) {
+      weeklyHistory.unshift({ weekStart: '', activeMembers: 0, totalMembers: 0, engagementPercent: 0 });
+    }
+
+    const currentWeek = weeklyHistory[weeklyHistory.length - 1];
+    const previousWeek = weeklyHistory[weeklyHistory.length - 2];
+    const delta = Math.round((currentWeek.engagementPercent - previousWeek.engagementPercent) * 10) / 10;
+
+    return {
+      currentWeek,
+      previousWeek,
+      delta,
+      trend: delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat',
+      weeklyHistory,
+    };
+  }
+
+  /**
    * Union of recent activity across posts, events, prayers, and announcements.
    */
   async getActivityFeed(tenantId: string, limit: number) {

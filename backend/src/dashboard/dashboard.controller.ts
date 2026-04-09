@@ -72,6 +72,14 @@ export class DashboardController {
     return this.dashboardService.getUpcomingEvents(tenantId);
   }
 
+  @Get('engagement')
+  @ApiOperation({ summary: 'Member engagement metrics — weekly active members and 6-week trend' })
+  @ApiResponse({ status: 200, description: 'currentWeek, previousWeek, delta, trend, weeklyHistory' })
+  getEngagement(@CurrentUser() user: SupabaseJwtPayload) {
+    const tenantId = user.app_metadata?.current_tenant_id!;
+    return this.dashboardService.getEngagement(tenantId);
+  }
+
   @Get('activity-feed')
   @ApiOperation({ summary: 'Recent activity feed across posts, events, prayers, announcements' })
   @ApiResponse({ status: 200, description: 'Array of { type, id, title, createdAt }' })
