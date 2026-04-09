@@ -76,6 +76,14 @@ import { StoriesModule } from './stories/stories.module';
 import { Story } from './stories/entities/story.entity';
 import { StoryView } from './stories/entities/story-view.entity';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { FacilitiesModule } from './facilities/facilities.module';
+import { Room } from './facilities/entities/room.entity';
+import { RoomBooking } from './facilities/entities/room-booking.entity';
+import { TasksModule } from './tasks/tasks.module';
+import { Task } from './tasks/entities/task.entity';
+import { CareCasesModule } from './care-cases/care-cases.module';
+import { CareCase } from './care-cases/entities/care-case.entity';
+import { CareNote } from './care-cases/entities/care-note.entity';
 import { UserSettings } from './users/entities/user-settings.entity';
 import { LoginStreak } from './users/entities/login-streak.entity';
 
@@ -103,6 +111,8 @@ import { LoginStreak } from './users/entities/login-streak.entity';
           Story, StoryView,
           UserSettings, LoginStreak,
           GivingFund, VolunteerHours,
+          Room, RoomBooking,
+          Task, CareCase, CareNote,
         ],
 
         // CRITICAL: synchronize must ALWAYS be false.
@@ -212,6 +222,9 @@ import { LoginStreak } from './users/entities/login-streak.entity';
     TagsModule,
     StoriesModule,
     DashboardModule,
+    FacilitiesModule,
+    TasksModule,
+    CareCasesModule,
 
     // GraphQL — Apollo Driver (code-first approach)
     // The FeedModule provides the FeedResolver which registers the globalFeed query.

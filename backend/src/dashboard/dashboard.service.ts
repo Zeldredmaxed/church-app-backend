@@ -123,11 +123,25 @@ export class DashboardService {
   }
 
   /**
-   * Care summary — placeholder until the care_cases module is built.
-   * TODO: Populate from care_cases table when the Care module is implemented.
+   * Care summary — counts of care cases by status.
    */
-  async getCareSummary(_tenantId: string) {
-    return { newCases: 0, inProgress: 0, resolved: 0, needsLeader: 0 };
+  async getCareSummary(tenantId: string) {
+    const [row] = await this.dataSource.query(
+      `SELECT
+         COUNT(CASE WHEN status = 'new' THEN 1 END)::int AS new_cases,
+         COUNT(CASE WHEN status = 'in_progress' THEN 1 END)::int AS in_progress,
+         COUNT(CASE WHEN status = 'resolved' THEN 1 END)::int AS resolved,
+         COUNT(CASE WHEN status = 'needs_leader' THEN 1 END)::int AS needs_leader
+       FROM public.care_cases WHERE tenant_id = $1`,
+      [tenantId],
+    );
+
+    return {
+      newCases: row.new_cases,
+      inProgress: row.in_progress,
+      resolved: row.resolved,
+      needsLeader: row.needs_leader,
+    };
   }
 
   /**

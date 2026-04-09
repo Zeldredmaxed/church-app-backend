@@ -4,6 +4,7 @@ import { Group } from './entities/group.entity';
 import { GroupMember } from './entities/group-member.entity';
 import { GroupMessage } from './entities/group-message.entity';
 import { CreateGroupDto } from './dto/create-group.dto';
+import { UpdateGroupDto } from './dto/update-group.dto';
 import { SendGroupMessageDto } from './dto/send-group-message.dto';
 
 @Injectable()
@@ -119,6 +120,81 @@ export class GroupsService {
     return {
       messages: messages.map((r: any) => this.mapMessage(r)),
       nextCursor: hasMore ? messages[messages.length - 1].id : null,
+    };
+  }
+
+  async updateGroup(groupId: string, dto: UpdateGroupDto) {
+    const { queryRunner } = this.getRlsContext();
+    const sets: string[] = [];
+    const params: any[] = [groupId];
+
+    if (dto.name !== undefined) {
+      params.push(dto.name);
+      sets.push(`name = $${params.length}`);
+    }
+    if (dto.description !== undefined) {
+      params.push(dto.description);
+      sets.push(`description = $${params.length}`);
+    }
+    if (dto.imageUrl !== undefined) {
+      params.push(dto.imageUrl);
+      sets.push(`image_url = $${params.length}`);
+    }
+
+    if (sets.length === 0) {
+      throw new NotFoundException('No fields to update');
+    }
+
+    const rows = await queryRunner.query(
+      `UPDATE public.groups SET ${sets.join(', ')} WHERE id = $1 RETURNING *`,
+      params,
+    );
+    if (!rows.length) throw new NotFoundException('Group not found');
+    return this.mapGroup(rows[0]);
+  }
+
+  async deleteGroup(groupId: string) {
+    const { queryRunner } = this.getRlsContext();
+    const rows = await queryRunner.query(
+      `DELETE FROM public.groups WHERE id = $1 RETURNING id`,
+      [groupId],
+    );
+    if (!rows.length) throw new NotFoundException('Group not found');
+    return { deleted: true };
+  }
+
+  async getGroupMembers(groupId: string, limit: number, cursor?: string) {
+    const { queryRunner } = this.getRlsContext();
+    const params: any[] = [groupId, limit + 1];
+    let sql = `
+      SELECT gm.id, gm.user_id, gm.joined_at,
+        u.full_name, u.avatar_url, u.email
+      FROM public.group_members gm
+      JOIN public.users u ON u.id = gm.user_id
+      WHERE gm.group_id = $1
+    `;
+
+    if (cursor) {
+      params.push(cursor);
+      sql += ` AND gm.id < $${params.length}`;
+    }
+
+    sql += ` ORDER BY gm.joined_at DESC LIMIT $2`;
+
+    const rows = await queryRunner.query(sql, params);
+    const hasMore = rows.length > limit;
+    const members = hasMore ? rows.slice(0, limit) : rows;
+
+    return {
+      members: members.map((r: any) => ({
+        id: r.id,
+        userId: r.user_id,
+        fullName: r.full_name,
+        avatarUrl: r.avatar_url,
+        email: r.email,
+        joinedAt: r.joined_at,
+      })),
+      nextCursor: hasMore ? members[members.length - 1].id : null,
     };
   }
 

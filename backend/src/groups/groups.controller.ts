@@ -1,7 +1,8 @@
-import { Controller, Get, Post, Delete, Body, Param, Query, ParseUUIDPipe, UseGuards, UseInterceptors, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, Query, ParseUUIDPipe, UseGuards, UseInterceptors, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { GroupsService } from './groups.service';
 import { CreateGroupDto } from './dto/create-group.dto';
+import { UpdateGroupDto } from './dto/update-group.dto';
 import { SendGroupMessageDto } from './dto/send-group-message.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
@@ -37,6 +38,32 @@ export class GroupsController {
   @ApiOperation({ summary: 'Create a group' })
   createGroup(@Body() dto: CreateGroupDto, @CurrentUser() user: SupabaseJwtPayload) {
     return this.groupsService.createGroup(dto, user.sub);
+  }
+
+  @Put(':id')
+  @ApiOperation({ summary: 'Update a group' })
+  updateGroup(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateGroupDto,
+  ) {
+    return this.groupsService.updateGroup(id, dto);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Delete a group (cascades members + messages)' })
+  deleteGroup(@Param('id', ParseUUIDPipe) id: string) {
+    return this.groupsService.deleteGroup(id);
+  }
+
+  @Get(':id/members')
+  @ApiOperation({ summary: 'List group members (cursor-paginated)' })
+  getGroupMembers(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
+  ) {
+    return this.groupsService.getGroupMembers(id, Math.min(parseInt(limit ?? '20', 10) || 20, 100), cursor);
   }
 
   @Post(':id/join')
