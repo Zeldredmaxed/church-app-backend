@@ -36,6 +36,10 @@ export class Comment {
   @JoinColumn({ name: 'author_id' })
   author?: User;
 
+  /** NULL = top-level comment. Set = reply to another comment. */
+  @Column({ type: 'uuid', nullable: true, name: 'parent_id' })
+  parentId: string | null;
+
   @Column({ type: 'text' })
   content: string;
 

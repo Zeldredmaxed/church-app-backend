@@ -16,6 +16,8 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 import { TenantMembership } from '../memberships/entities/tenant-membership.entity';
 import { Tenant } from '../tenants/entities/tenant.entity';
+import { Tag } from '../tags/entities/tag.entity';
+import { MemberTag } from '../tags/entities/member-tag.entity';
 import { User } from '../users/entities/user.entity';
 
 @Injectable()
@@ -100,6 +102,26 @@ export class AuthService {
         const updates: Partial<User> = { lastAccessedTenantId: dto.tenantId! };
         if (dto.fullName) updates.fullName = dto.fullName;
         await manager.update(User, { id: userId }, updates);
+
+        // Auto-assign "Guest" tag — create it for this tenant if it doesn't exist
+        let guestTag = await manager.findOne(Tag, {
+          where: { tenantId: dto.tenantId!, name: 'Guest' },
+        });
+        if (!guestTag) {
+          guestTag = await manager.save(
+            Tag,
+            manager.create(Tag, {
+              tenantId: dto.tenantId!,
+              name: 'Guest',
+              color: '#9CA3AF', // gray
+            }),
+          );
+        }
+        await manager.query(
+          `INSERT INTO public.member_tags (tag_id, user_id, assigned_by)
+           VALUES ($1, $2, $2) ON CONFLICT DO NOTHING`,
+          [guestTag.id, userId],
+        );
       });
 
       // Auto-login so the frontend gets tokens immediately

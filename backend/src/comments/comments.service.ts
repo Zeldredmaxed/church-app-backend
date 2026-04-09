@@ -68,6 +68,7 @@ export class CommentsService {
       tenantId: currentTenantId,
       authorId,
       content: dto.content,
+      parentId: dto.parentId ?? null,
     });
 
     const saved = await queryRunner.manager.save(Comment, comment);
