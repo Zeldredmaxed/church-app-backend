@@ -281,6 +281,190 @@ export class BadgesService {
     return newlyAwarded;
   }
 
+  /**
+   * Returns badge progress for a specific member.
+   * For each badge with an auto-award rule, calculates:
+   *   - current value (e.g., $3,200 given)
+   *   - target value (e.g., $5,000 threshold)
+   *   - percent complete (0-100)
+   *   - whether already earned
+   *
+   * This powers the progress bars on the member's profile.
+   */
+  async getMemberBadgeProgress(tenantId: string, userId: string) {
+    const { queryRunner } = this.getRlsContext();
+
+    // Get all active badges with auto-award rules
+    const badges = await queryRunner.query(
+      `SELECT b.id, b.name, b.description, b.icon, b.color, b.tier, b.category,
+        b.auto_award_rule, b.display_order,
+        EXISTS(SELECT 1 FROM public.member_badges mb WHERE mb.badge_id = b.id AND mb.user_id = $2) AS is_earned
+       FROM public.badges b
+       WHERE b.tenant_id = $1 AND b.is_active = true AND b.auto_award_rule IS NOT NULL
+       ORDER BY b.display_order, b.created_at`,
+      [tenantId, userId],
+    );
+
+    // Pre-fetch all the member's stats in parallel
+    const [
+      [givingRow],
+      [attendanceRow],
+      [journeyRow],
+      [groupRow],
+      [volunteerRow],
+      [postRow],
+      [prayerRow],
+    ] = await Promise.all([
+      queryRunner.query(
+        `SELECT COALESCE(SUM(amount), 0)::float AS total, MAX(amount)::float AS max_single
+         FROM public.transactions WHERE user_id = $1 AND tenant_id = $2 AND status = 'succeeded'`,
+        [userId, tenantId],
+      ),
+      queryRunner.query(
+        `SELECT COUNT(*)::int AS total_count FROM public.check_ins WHERE user_id = $1 AND tenant_id = $2`,
+        [userId, tenantId],
+      ),
+      queryRunner.query(
+        `SELECT is_baptized, attended_members_class FROM public.member_journeys WHERE user_id = $1 AND tenant_id = $2`,
+        [userId, tenantId],
+      ).then(rows => rows.length ? rows : [{ is_baptized: false, attended_members_class: false }]),
+      queryRunner.query(
+        `SELECT COUNT(DISTINCT gm.group_id)::int AS cnt
+         FROM public.group_members gm
+         JOIN public.groups g ON g.id = gm.group_id AND g.tenant_id = $2
+         WHERE gm.user_id = $1`,
+        [userId, tenantId],
+      ),
+      queryRunner.query(
+        `SELECT COALESCE(SUM(hours), 0)::float AS total FROM public.volunteer_hours WHERE user_id = $1 AND tenant_id = $2`,
+        [userId, tenantId],
+      ),
+      queryRunner.query(
+        `SELECT COUNT(*)::int AS cnt FROM public.posts WHERE author_id = $1 AND tenant_id = $2`,
+        [userId, tenantId],
+      ),
+      queryRunner.query(
+        `SELECT COUNT(*)::int AS cnt FROM public.prayers WHERE author_id = $1 AND tenant_id = $2`,
+        [userId, tenantId],
+      ),
+    ]);
+
+    const stats = {
+      givingTotal: givingRow?.total ?? 0,
+      givingMaxSingle: givingRow?.max_single ?? 0,
+      attendanceCount: attendanceRow?.total_count ?? 0,
+      isBaptized: journeyRow?.is_baptized === true,
+      attendedMembersClass: journeyRow?.attended_members_class === true,
+      groupCount: groupRow?.cnt ?? 0,
+      volunteerHours: volunteerRow?.total ?? 0,
+      postCount: postRow?.cnt ?? 0,
+      prayerCount: prayerRow?.cnt ?? 0,
+    };
+
+    // Calculate progress for each badge
+    const progress = badges.map((badge: any) => {
+      const rule = badge.auto_award_rule;
+      const isEarned = badge.is_earned;
+      let current = 0;
+      let target = 0;
+      let unit = '';
+
+      switch (rule.type) {
+        case 'giving_lifetime':
+          current = stats.givingTotal;
+          target = rule.threshold ?? 0;
+          unit = 'dollars';
+          break;
+        case 'giving_single':
+          current = stats.givingMaxSingle;
+          target = rule.threshold ?? 0;
+          unit = 'dollars';
+          break;
+        case 'attendance_count':
+          current = stats.attendanceCount;
+          target = rule.count ?? 0;
+          unit = 'check-ins';
+          break;
+        case 'attendance_streak':
+          // Streak is harder to show as progress — show count as approximation
+          current = stats.attendanceCount;
+          target = rule.days ?? 30;
+          unit = 'consecutive weeks';
+          break;
+        case 'baptized':
+          current = stats.isBaptized ? 1 : 0;
+          target = 1;
+          unit = 'milestone';
+          break;
+        case 'members_class':
+          current = stats.attendedMembersClass ? 1 : 0;
+          target = 1;
+          unit = 'milestone';
+          break;
+        case 'group_count':
+          current = stats.groupCount;
+          target = rule.min ?? 1;
+          unit = 'groups';
+          break;
+        case 'volunteer_hours':
+          current = stats.volunteerHours;
+          target = rule.min ?? 0;
+          unit = 'hours';
+          break;
+        case 'post_count':
+          current = stats.postCount;
+          target = rule.min ?? 1;
+          unit = 'posts';
+          break;
+        case 'prayer_count':
+          current = stats.prayerCount;
+          target = rule.min ?? 1;
+          unit = 'prayers';
+          break;
+        default:
+          current = 0;
+          target = 1;
+          unit = '';
+      }
+
+      const percent = target > 0 ? Math.min(Math.round((current / target) * 100), 100) : 0;
+
+      return {
+        badge: {
+          id: badge.id,
+          name: badge.name,
+          description: badge.description,
+          icon: badge.icon,
+          color: badge.color,
+          tier: badge.tier,
+          category: badge.category,
+        },
+        isEarned,
+        progress: {
+          current,
+          target,
+          percent,
+          unit,
+          remaining: Math.max(target - current, 0),
+        },
+      };
+    });
+
+    // Sort: unearned first (so they see what to work toward), then earned
+    progress.sort((a: any, b: any) => {
+      if (a.isEarned && !b.isEarned) return 1;
+      if (!a.isEarned && b.isEarned) return -1;
+      return b.progress.percent - a.progress.percent; // closest to earning first
+    });
+
+    return {
+      memberId: userId,
+      totalBadgesEarned: progress.filter((p: any) => p.isEarned).length,
+      totalBadgesAvailable: progress.length,
+      badges: progress,
+    };
+  }
+
   async getBadgeLeaderboard(limit: number) {
     const { queryRunner } = this.getRlsContext();
     const rows = await queryRunner.query(
