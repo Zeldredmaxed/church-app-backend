@@ -32,6 +32,18 @@ export class Sermon {
   @Column({ type: 'text', nullable: true })
   notes: string | null;
 
+  @Column({ type: 'boolean', name: 'is_featured', default: false })
+  isFeatured: boolean;
+
+  @Column({ type: 'text', nullable: true })
+  transcript: string | null;
+
+  @Column({ type: 'int', name: 'view_count', default: 0 })
+  viewCount: number;
+
+  @Column({ type: 'int', name: 'like_count', default: 0 })
+  likeCount: number;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }

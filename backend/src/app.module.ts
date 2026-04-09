@@ -55,6 +55,7 @@ import { AnnouncementsModule } from './announcements/announcements.module';
 import { Announcement } from './announcements/entities/announcement.entity';
 import { SermonsModule } from './sermons/sermons.module';
 import { Sermon } from './sermons/entities/sermon.entity';
+import { SermonLike } from './sermons/entities/sermon-like.entity';
 import { VolunteerModule } from './volunteer/volunteer.module';
 import { Opportunity } from './volunteer/entities/opportunity.entity';
 import { VolunteerSignup } from './volunteer/entities/volunteer-signup.entity';
@@ -86,6 +87,11 @@ import { CareCase } from './care-cases/entities/care-case.entity';
 import { CareNote } from './care-cases/entities/care-note.entity';
 import { UserSettings } from './users/entities/user-settings.entity';
 import { LoginStreak } from './users/entities/login-streak.entity';
+import { CommunicationsModule } from './communications/communications.module';
+import { AudienceSegment } from './communications/entities/audience-segment.entity';
+import { MessageTemplate } from './communications/entities/message-template.entity';
+import { SentMessage } from './communications/entities/sent-message.entity';
+import { ReportsModule } from './reports/reports.module';
 
 @Module({
   imports: [
@@ -105,7 +111,7 @@ import { LoginStreak } from './users/entities/login-streak.entity';
           Tenant, User, TenantMembership, Post, Invitation, Comment, Notification,
           Follow, ChatChannel, ChannelMember, ChatMessage, Transaction, RegistrationKey, Role,
           Prayer, PrayerPray, Event, EventRsvp,
-          Group, GroupMember, GroupMessage, Announcement, Sermon,
+          Group, GroupMember, GroupMessage, Announcement, Sermon, SermonLike,
           Opportunity, VolunteerSignup, ServiceSchedule, CheckIn,
           GalleryPhoto, PostReport, RecurringGift, Tag, MemberTag,
           Story, StoryView,
@@ -113,6 +119,7 @@ import { LoginStreak } from './users/entities/login-streak.entity';
           GivingFund, VolunteerHours,
           Room, RoomBooking,
           Task, CareCase, CareNote,
+          AudienceSegment, MessageTemplate, SentMessage,
         ],
 
         // CRITICAL: synchronize must ALWAYS be false.
@@ -225,6 +232,8 @@ import { LoginStreak } from './users/entities/login-streak.entity';
     FacilitiesModule,
     TasksModule,
     CareCasesModule,
+    CommunicationsModule,
+    ReportsModule,
 
     // GraphQL — Apollo Driver (code-first approach)
     // The FeedModule provides the FeedResolver which registers the globalFeed query.
