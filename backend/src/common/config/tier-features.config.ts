@@ -46,6 +46,9 @@ export interface TierFeatures {
   // AI
   aiAssistant: boolean;
 
+  // Workflows
+  workflows: boolean;
+
   // Enterprise extras
   customBranding: boolean;
   multiSite: boolean;
@@ -68,6 +71,7 @@ export const TIER_FEATURES: Record<TierName, TierFeatures> = {
     storageLimit: 10,
     transactionFeePercent: 1.0,
     aiAssistant: false,
+    workflows: false,
     customBranding: false,
     multiSite: false,
     apiAccess: false,
@@ -88,6 +92,7 @@ export const TIER_FEATURES: Record<TierName, TierFeatures> = {
     storageLimit: 100,
     transactionFeePercent: 0.5,
     aiAssistant: true,
+    workflows: false,
     customBranding: false,
     multiSite: false,
     apiAccess: false,
@@ -108,6 +113,7 @@ export const TIER_FEATURES: Record<TierName, TierFeatures> = {
     storageLimit: -1,
     transactionFeePercent: 0,
     aiAssistant: true,
+    workflows: true,
     customBranding: true,
     multiSite: true,
     apiAccess: true,

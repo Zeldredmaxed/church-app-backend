@@ -96,6 +96,12 @@ import { AssistantModule } from './assistant/assistant.module';
 import { MemberProfilesModule } from './member-profiles/member-profiles.module';
 import { MemberJourney } from './member-profiles/entities/member-journey.entity';
 import { MemberNote } from './member-profiles/entities/member-note.entity';
+import { WorkflowsModule } from './workflows/workflows.module';
+import { Workflow } from './workflows/entities/workflow.entity';
+import { WorkflowNode } from './workflows/entities/workflow-node.entity';
+import { WorkflowConnection } from './workflows/entities/workflow-connection.entity';
+import { WorkflowExecution } from './workflows/entities/workflow-execution.entity';
+import { WorkflowExecutionLog } from './workflows/entities/workflow-execution-log.entity';
 
 @Module({
   imports: [
@@ -125,6 +131,7 @@ import { MemberNote } from './member-profiles/entities/member-note.entity';
           Task, CareCase, CareNote,
           AudienceSegment, MessageTemplate, SentMessage,
           MemberJourney, MemberNote,
+          Workflow, WorkflowNode, WorkflowConnection, WorkflowExecution, WorkflowExecutionLog,
         ],
 
         // CRITICAL: synchronize must ALWAYS be false.
@@ -241,6 +248,7 @@ import { MemberNote } from './member-profiles/entities/member-note.entity';
     ReportsModule,
     AssistantModule,
     MemberProfilesModule,
+    WorkflowsModule,
 
     // GraphQL — Apollo Driver (code-first approach)
     // The FeedModule provides the FeedResolver which registers the globalFeed query.
