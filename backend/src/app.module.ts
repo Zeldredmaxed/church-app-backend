@@ -70,6 +70,9 @@ import { RecurringGift } from './recurring-giving/entities/recurring-gift.entity
 import { TagsModule } from './tags/tags.module';
 import { Tag } from './tags/entities/tag.entity';
 import { MemberTag } from './tags/entities/member-tag.entity';
+import { StoriesModule } from './stories/stories.module';
+import { Story } from './stories/entities/story.entity';
+import { StoryView } from './stories/entities/story-view.entity';
 
 @Module({
   imports: [
@@ -92,6 +95,7 @@ import { MemberTag } from './tags/entities/member-tag.entity';
           Group, GroupMember, GroupMessage, Announcement, Sermon,
           Opportunity, VolunteerSignup, ServiceSchedule, CheckIn,
           GalleryPhoto, PostReport, RecurringGift, Tag, MemberTag,
+          Story, StoryView,
         ],
 
         // CRITICAL: synchronize must ALWAYS be false.
@@ -194,6 +198,7 @@ import { MemberTag } from './tags/entities/member-tag.entity';
     ModerationModule,
     RecurringGivingModule,
     TagsModule,
+    StoriesModule,
 
     // GraphQL — Apollo Driver (code-first approach)
     // The FeedModule provides the FeedResolver which registers the globalFeed query.
