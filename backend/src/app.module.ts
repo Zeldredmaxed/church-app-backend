@@ -107,12 +107,17 @@ import { StoryView } from './stories/entities/story-view.entity';
         // rejectUnauthorized must be false for Supabase connections.
         ssl: { rejectUnauthorized: false },
 
+        // Retry quickly on startup to avoid Render port scan timeout.
+        retryAttempts: 3,
+        retryDelay: 2000,
+
         // Connection pool configuration.
         // Keep extra connections low — Supabase free/pro plans have connection limits.
         // Use PgBouncer in Phase 2 (100k users) to multiplex connections.
         extra: {
           max: 10,
           idleTimeoutMillis: 30000,
+          connectionTimeoutMillis: 10000,
         },
       }),
     }),
