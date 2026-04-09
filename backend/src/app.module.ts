@@ -105,6 +105,10 @@ import { WorkflowExecutionLog } from './workflows/entities/workflow-execution-lo
 import { BadgesModule } from './badges/badges.module';
 import { Badge } from './badges/entities/badge.entity';
 import { MemberBadge } from './badges/entities/member-badge.entity';
+import { MarketplaceModule } from './workflow-marketplace/marketplace.module';
+import { WorkflowTemplate } from './workflow-marketplace/entities/workflow-template.entity';
+import { TemplateInstall } from './workflow-marketplace/entities/template-install.entity';
+import { TemplateRating } from './workflow-marketplace/entities/template-rating.entity';
 
 @Module({
   imports: [
@@ -136,6 +140,7 @@ import { MemberBadge } from './badges/entities/member-badge.entity';
           MemberJourney, MemberNote,
           Workflow, WorkflowNode, WorkflowConnection, WorkflowExecution, WorkflowExecutionLog,
           Badge, MemberBadge,
+          WorkflowTemplate, TemplateInstall, TemplateRating,
         ],
 
         // CRITICAL: synchronize must ALWAYS be false.
@@ -254,6 +259,7 @@ import { MemberBadge } from './badges/entities/member-badge.entity';
     MemberProfilesModule,
     WorkflowsModule,
     BadgesModule,
+    MarketplaceModule,
 
     // GraphQL — Apollo Driver (code-first approach)
     // The FeedModule provides the FeedResolver which registers the globalFeed query.
