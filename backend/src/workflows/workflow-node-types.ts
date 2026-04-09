@@ -45,6 +45,9 @@ export const ACTION_TYPES = [
   'trigger_workflow',
   'webhook',
   'log_activity',
+  'award_badge',
+  'revoke_badge',
+  'check_auto_badges',
 ] as const;
 
 // ─── CONDITION TYPES ───
@@ -59,6 +62,7 @@ export const CONDITION_TYPES = [
   'check_engagement',
   'check_journey_stage',
   'always_true',
+  'check_badge',
 ] as const;
 
 // ─── DELAY TYPES ───
@@ -106,7 +110,7 @@ export interface NodeTypeInfo {
   configFields: Array<{
     key: string;
     label: string;
-    type: 'text' | 'number' | 'select' | 'boolean' | 'date' | 'member' | 'tag' | 'group' | 'template' | 'workflow';
+    type: 'text' | 'number' | 'select' | 'boolean' | 'date' | 'member' | 'tag' | 'group' | 'template' | 'workflow' | 'badge';
     options?: string[];
     required?: boolean;
     placeholder?: string;
@@ -151,6 +155,9 @@ export const NODE_TYPE_REGISTRY: NodeTypeInfo[] = [
   { type: 'trigger_workflow', category: 'action', label: 'Start Workflow', description: 'Trigger another workflow', icon: 'GitBranch', color: 'blue', configFields: [{ key: 'workflowId', label: 'Workflow', type: 'workflow', required: true }] },
   { type: 'webhook', category: 'action', label: 'Call Webhook', description: 'POST to an external URL', icon: 'Globe', color: 'blue', configFields: [{ key: 'url', label: 'URL', type: 'text', required: true }, { key: 'headers', label: 'Headers (JSON)', type: 'text', required: false }] },
   { type: 'log_activity', category: 'action', label: 'Log Activity', description: 'Record a custom note', icon: 'FileText', color: 'blue', configFields: [{ key: 'message', label: 'Message', type: 'text', required: true }] },
+  { type: 'award_badge', category: 'action', label: 'Award Badge', description: 'Give a badge to the member', icon: 'Award', color: 'blue', configFields: [{ key: 'badgeId', label: 'Badge', type: 'badge', required: true }, { key: 'reason', label: 'Reason', type: 'text', required: false }] },
+  { type: 'revoke_badge', category: 'action', label: 'Revoke Badge', description: 'Remove a badge from the member', icon: 'XCircle', color: 'blue', configFields: [{ key: 'badgeId', label: 'Badge', type: 'badge', required: true }] },
+  { type: 'check_auto_badges', category: 'action', label: 'Check All Badges', description: 'Run all auto-award rules for this member', icon: 'RefreshCw', color: 'blue', configFields: [] },
 
   // CONDITIONS
   { type: 'check_member_data', category: 'condition', label: 'Check Member', description: 'Branch on member data', icon: 'GitFork', color: 'amber', configFields: [{ key: 'field', label: 'Field', type: 'select', options: ['role', 'has_phone', 'has_email', 'full_name'], required: true }, { key: 'operator', label: 'Operator', type: 'select', options: ['equals', 'not_equals', 'exists', 'not_exists'], required: true }, { key: 'value', label: 'Value', type: 'text', required: false }] },
@@ -162,6 +169,7 @@ export const NODE_TYPE_REGISTRY: NodeTypeInfo[] = [
   { type: 'check_engagement', category: 'condition', label: 'Engagement Level', description: 'Check engagement score', icon: 'Activity', color: 'amber', configFields: [{ key: 'level', label: 'Min Level', type: 'select', options: ['inactive', 'low', 'medium', 'high'], required: true }] },
   { type: 'check_journey_stage', category: 'condition', label: 'Journey Stage', description: 'Check spiritual milestone', icon: 'Milestone', color: 'amber', configFields: [{ key: 'milestone', label: 'Milestone', type: 'select', options: ['attended_members_class', 'is_baptized', 'salvation_date', 'discipleship_foundations', 'discipleship_growth', 'discipleship_leadership', 'discipleship_completed'], required: true }] },
   { type: 'always_true', category: 'condition', label: 'Always True', description: 'Always takes the true branch', icon: 'Check', color: 'amber', configFields: [] },
+  { type: 'check_badge', category: 'condition', label: 'Has Badge?', description: 'Check if member has a specific badge', icon: 'Award', color: 'amber', configFields: [{ key: 'badgeId', label: 'Badge', type: 'badge', required: true }] },
 
   // DELAYS
   { type: 'wait_duration', category: 'delay', label: 'Wait', description: 'Pause for a duration', icon: 'Timer', color: 'purple', configFields: [{ key: 'amount', label: 'Amount', type: 'number', required: true }, { key: 'unit', label: 'Unit', type: 'select', options: ['minutes', 'hours', 'days', 'weeks'], required: true }] },

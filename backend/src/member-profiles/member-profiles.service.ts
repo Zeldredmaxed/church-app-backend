@@ -18,6 +18,7 @@ export class MemberProfilesService {
       givingHistory,
       activityTimeline,
       notes,
+      badges,
     ] = await Promise.all([
       this.getPersonalInfo(tenantId, memberId),
       this.getTags(tenantId, memberId),
@@ -26,6 +27,7 @@ export class MemberProfilesService {
       this.getGivingHistory(tenantId, memberId),
       this.getActivityTimeline(tenantId, memberId),
       this.getNotes(tenantId, memberId),
+      this.getBadges(tenantId, memberId),
     ]);
 
     if (!personalInfo) {
@@ -40,6 +42,7 @@ export class MemberProfilesService {
       giving: givingHistory,
       activityTimeline,
       notes,
+      badges,
     };
   }
 
@@ -191,6 +194,30 @@ export class MemberProfilesService {
       id: r.id,
       description: r.description,
       occurredAt: r.occurred_at,
+    }));
+  }
+
+  private async getBadges(tenantId: string, memberId: string) {
+    const rows = await this.dataSource.query(
+      `SELECT b.id, b.name, b.description, b.icon, b.color, b.tier, b.category,
+        mb.awarded_at, mb.awarded_reason
+       FROM public.member_badges mb
+       JOIN public.badges b ON b.id = mb.badge_id
+       WHERE mb.user_id = $2 AND mb.tenant_id = $1
+       ORDER BY b.display_order, mb.awarded_at DESC`,
+      [tenantId, memberId],
+    );
+
+    return rows.map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      description: r.description,
+      icon: r.icon,
+      color: r.color,
+      tier: r.tier,
+      category: r.category,
+      awardedAt: r.awarded_at,
+      awardedReason: r.awarded_reason,
     }));
   }
 

@@ -427,6 +427,107 @@ export class WorkflowEngineService {
         return { status: 'success', inputData, outputData: { message: config.message ?? '' } };
       }
 
+      case 'award_badge': {
+        if (!ctx.targetUserId || !config.badgeId) return { status: 'success', inputData, outputData: { skipped: true } };
+        await this.dataSource.query(
+          `INSERT INTO public.member_badges (badge_id, user_id, tenant_id, awarded_by, awarded_reason)
+           VALUES ($1, $2, $3, NULL, $4)
+           ON CONFLICT (badge_id, user_id) DO NOTHING`,
+          [config.badgeId, ctx.targetUserId, ctx.tenantId, config.reason ?? 'Awarded by workflow'],
+        );
+        return { status: 'success', inputData, outputData: { badgeAwarded: true } };
+      }
+
+      case 'revoke_badge': {
+        if (!ctx.targetUserId || !config.badgeId) return { status: 'success', inputData, outputData: { skipped: true } };
+        await this.dataSource.query(
+          `DELETE FROM public.member_badges WHERE badge_id = $1 AND user_id = $2`,
+          [config.badgeId, ctx.targetUserId],
+        );
+        return { status: 'success', inputData, outputData: { badgeRevoked: true } };
+      }
+
+      case 'check_auto_badges': {
+        if (!ctx.targetUserId) return { status: 'success', inputData, outputData: { skipped: true, reason: 'No target user' } };
+        // Load all active badges with auto_award_rules for this tenant
+        const autoBadges = await this.dataSource.query(
+          `SELECT id, name, auto_award_rule FROM public.badges
+           WHERE tenant_id = $1 AND is_active = true AND auto_award_rule IS NOT NULL`,
+          [ctx.tenantId],
+        );
+        const awarded: string[] = [];
+        for (const badge of autoBadges) {
+          const rule = badge.auto_award_rule;
+          if (!rule || !rule.type) continue;
+          const [existing] = await this.dataSource.query(
+            `SELECT 1 FROM public.member_badges WHERE badge_id = $1 AND user_id = $2`,
+            [badge.id, ctx.targetUserId],
+          );
+          if (existing) continue;
+          let qualified = false;
+          switch (rule.type) {
+            case 'giving_lifetime': {
+              const [r] = await this.dataSource.query(
+                `SELECT COALESCE(SUM(amount), 0)::float AS total FROM public.transactions WHERE user_id = $1 AND tenant_id = $2 AND status = 'succeeded'`,
+                [ctx.targetUserId, ctx.tenantId],
+              );
+              qualified = (r?.total ?? 0) >= (rule.threshold ?? 0);
+              break;
+            }
+            case 'attendance_count': {
+              const [r] = await this.dataSource.query(
+                `SELECT COUNT(*)::int AS cnt FROM public.check_ins WHERE user_id = $1 AND tenant_id = $2`,
+                [ctx.targetUserId, ctx.tenantId],
+              );
+              qualified = (r?.cnt ?? 0) >= (rule.count ?? 0);
+              break;
+            }
+            case 'baptized': {
+              const [r] = await this.dataSource.query(
+                `SELECT is_baptized FROM public.member_journeys WHERE user_id = $1 AND tenant_id = $2`,
+                [ctx.targetUserId, ctx.tenantId],
+              );
+              qualified = r?.is_baptized === true;
+              break;
+            }
+            case 'members_class': {
+              const [r] = await this.dataSource.query(
+                `SELECT attended_members_class FROM public.member_journeys WHERE user_id = $1 AND tenant_id = $2`,
+                [ctx.targetUserId, ctx.tenantId],
+              );
+              qualified = r?.attended_members_class === true;
+              break;
+            }
+            case 'group_count': {
+              const [r] = await this.dataSource.query(
+                `SELECT COUNT(DISTINCT group_id)::int AS cnt FROM public.group_members WHERE user_id = $1`,
+                [ctx.targetUserId],
+              );
+              qualified = (r?.cnt ?? 0) >= (rule.min ?? 1);
+              break;
+            }
+            case 'volunteer_hours': {
+              const [r] = await this.dataSource.query(
+                `SELECT COALESCE(SUM(hours), 0)::float AS total FROM public.volunteer_hours WHERE user_id = $1 AND tenant_id = $2`,
+                [ctx.targetUserId, ctx.tenantId],
+              );
+              qualified = (r?.total ?? 0) >= (rule.min ?? 0);
+              break;
+            }
+          }
+          if (qualified) {
+            await this.dataSource.query(
+              `INSERT INTO public.member_badges (badge_id, user_id, tenant_id, awarded_reason)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (badge_id, user_id) DO NOTHING`,
+              [badge.id, ctx.targetUserId, ctx.tenantId, `Auto-awarded: ${rule.type}`],
+            );
+            awarded.push(badge.name);
+          }
+        }
+        return { status: 'success', inputData, outputData: { awarded } };
+      }
+
       default:
         return { status: 'failed', inputData, outputData: {}, errorMessage: `Unknown action: ${nodeType}` };
     }
@@ -568,6 +669,15 @@ export class WorkflowEngineService {
 
       case 'always_true': {
         return { status: 'success', branch: 'true', inputData, outputData: { always: true } };
+      }
+
+      case 'check_badge': {
+        if (!ctx.targetUserId || !config.badgeId) return { status: 'success', branch: 'false', inputData, outputData: { reason: 'Missing target or badge' } };
+        const [row] = await this.dataSource.query(
+          `SELECT 1 FROM public.member_badges WHERE badge_id = $1 AND user_id = $2`,
+          [config.badgeId, ctx.targetUserId],
+        );
+        return { status: 'success', branch: row ? 'true' : 'false', inputData, outputData: { hasBadge: !!row } };
       }
 
       default:
