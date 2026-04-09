@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Put,
   Patch,
   Delete,
   Body,
@@ -12,6 +13,7 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdateSettingsDto } from './dto/update-settings.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -51,6 +53,31 @@ export class UsersController {
   @ApiResponse({ status: 404, description: 'User not found' })
   deleteMe(@CurrentUser() user: SupabaseJwtPayload) {
     return this.usersService.deleteMe(user.sub);
+  }
+
+  @Get('me/settings')
+  @ApiOperation({ summary: 'Get notification settings' })
+  @ApiResponse({ status: 200, description: 'User notification settings' })
+  getSettings(@CurrentUser() user: SupabaseJwtPayload) {
+    return this.usersService.getSettings(user.sub);
+  }
+
+  @Put('me/settings')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Update notification settings' })
+  @ApiResponse({ status: 200, description: 'Updated notification settings' })
+  updateSettings(
+    @CurrentUser() user: SupabaseJwtPayload,
+    @Body() dto: UpdateSettingsDto,
+  ) {
+    return this.usersService.updateSettings(user.sub, dto);
+  }
+
+  @Get('me/streak')
+  @ApiOperation({ summary: 'Get login streak info' })
+  @ApiResponse({ status: 200, description: 'Current and longest login streak' })
+  getStreak(@CurrentUser() user: SupabaseJwtPayload) {
+    return this.usersService.getStreak(user.sub);
   }
 
   @Get('me/export')

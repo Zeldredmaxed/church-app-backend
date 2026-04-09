@@ -58,6 +58,8 @@ import { Sermon } from './sermons/entities/sermon.entity';
 import { VolunteerModule } from './volunteer/volunteer.module';
 import { Opportunity } from './volunteer/entities/opportunity.entity';
 import { VolunteerSignup } from './volunteer/entities/volunteer-signup.entity';
+import { VolunteerHours } from './volunteer/entities/volunteer-hours.entity';
+import { GivingFund } from './giving/entities/giving-fund.entity';
 import { CheckinModule } from './checkin/checkin.module';
 import { ServiceSchedule } from './checkin/entities/service-schedule.entity';
 import { CheckIn } from './checkin/entities/check-in.entity';
@@ -73,6 +75,9 @@ import { MemberTag } from './tags/entities/member-tag.entity';
 import { StoriesModule } from './stories/stories.module';
 import { Story } from './stories/entities/story.entity';
 import { StoryView } from './stories/entities/story-view.entity';
+import { DashboardModule } from './dashboard/dashboard.module';
+import { UserSettings } from './users/entities/user-settings.entity';
+import { LoginStreak } from './users/entities/login-streak.entity';
 
 @Module({
   imports: [
@@ -96,6 +101,8 @@ import { StoryView } from './stories/entities/story-view.entity';
           Opportunity, VolunteerSignup, ServiceSchedule, CheckIn,
           GalleryPhoto, PostReport, RecurringGift, Tag, MemberTag,
           Story, StoryView,
+          UserSettings, LoginStreak,
+          GivingFund, VolunteerHours,
         ],
 
         // CRITICAL: synchronize must ALWAYS be false.
@@ -204,6 +211,7 @@ import { StoryView } from './stories/entities/story-view.entity';
     RecurringGivingModule,
     TagsModule,
     StoriesModule,
+    DashboardModule,
 
     // GraphQL — Apollo Driver (code-first approach)
     // The FeedModule provides the FeedResolver which registers the globalFeed query.

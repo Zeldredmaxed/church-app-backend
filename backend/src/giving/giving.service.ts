@@ -9,6 +9,7 @@ import { rlsStorage } from '../common/storage/rls.storage';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { Transaction } from './entities/transaction.entity';
 import { DonateDto } from './dto/donate.dto';
+import { CreateFundDto } from './dto/create-fund.dto';
 import { getTierFeatures } from '../common/config/tier-features.config';
 
 @Injectable()
@@ -147,6 +148,98 @@ export class GivingService {
     const nextCursor = hasMore ? transactions[transactions.length - 1].id : null;
 
     return { transactions, nextCursor };
+  }
+
+  /**
+   * Returns giving KPI metrics for the dashboard.
+   * Uses service-role DataSource.
+   */
+  async getGivingKpis(tenantId: string) {
+    const rows = await this.dataSource.query(
+      `SELECT
+        COALESCE(SUM(CASE WHEN status = 'succeeded' THEN amount ELSE 0 END), 0)::float AS total_giving,
+        COALESCE(SUM(CASE WHEN status = 'succeeded' AND created_at >= date_trunc('month', now()) THEN amount ELSE 0 END), 0)::float AS this_month,
+        COUNT(CASE WHEN status = 'pending' THEN 1 END)::int AS pending_count,
+        COUNT(DISTINCT user_id)::int AS unique_donors
+       FROM public.transactions WHERE tenant_id = $1`,
+      [tenantId],
+    );
+
+    const row = rows[0] ?? {};
+    return {
+      totalGiving: row.total_giving ?? 0,
+      thisMonth: row.this_month ?? 0,
+      pendingCount: row.pending_count ?? 0,
+      uniqueDonors: row.unique_donors ?? 0,
+    };
+  }
+
+  /**
+   * Returns a list of unique donors for a tenant.
+   * Uses service-role DataSource.
+   */
+  async getDonors(tenantId: string) {
+    const rows = await this.dataSource.query(
+      `SELECT DISTINCT u.id, u.full_name, u.email, u.avatar_url
+       FROM public.transactions t
+       JOIN public.users u ON u.id = t.user_id
+       WHERE t.tenant_id = $1 AND t.user_id IS NOT NULL
+       ORDER BY u.full_name`,
+      [tenantId],
+    );
+
+    return rows.map((r: any) => ({
+      id: r.id,
+      fullName: r.full_name,
+      email: r.email,
+      avatarUrl: r.avatar_url,
+    }));
+  }
+
+  /**
+   * Returns active giving funds for a tenant.
+   * Uses service-role DataSource.
+   */
+  async getFunds(tenantId: string) {
+    const rows = await this.dataSource.query(
+      `SELECT id, tenant_id, name, description, is_active, created_at
+       FROM public.giving_funds
+       WHERE tenant_id = $1 AND is_active = true
+       ORDER BY name`,
+      [tenantId],
+    );
+
+    return rows.map((r: any) => ({
+      id: r.id,
+      tenantId: r.tenant_id,
+      name: r.name,
+      description: r.description,
+      isActive: r.is_active,
+      createdAt: r.created_at,
+    }));
+  }
+
+  /**
+   * Creates a new giving fund for a tenant.
+   * Uses service-role DataSource.
+   */
+  async createFund(tenantId: string, dto: CreateFundDto) {
+    const rows = await this.dataSource.query(
+      `INSERT INTO public.giving_funds (tenant_id, name, description)
+       VALUES ($1, $2, $3)
+       RETURNING id, tenant_id, name, description, is_active, created_at`,
+      [tenantId, dto.name, dto.description ?? null],
+    );
+
+    const r = rows[0];
+    return {
+      id: r.id,
+      tenantId: r.tenant_id,
+      name: r.name,
+      description: r.description,
+      isActive: r.is_active,
+      createdAt: r.created_at,
+    };
   }
 
   /**

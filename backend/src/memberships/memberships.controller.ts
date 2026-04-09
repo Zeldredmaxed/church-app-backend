@@ -7,6 +7,7 @@ import {
   Body,
   Param,
   Query,
+  Res,
   ParseUUIDPipe,
   UseGuards,
   UseInterceptors,
@@ -25,6 +26,7 @@ import { RlsContextInterceptor } from '../common/interceptors/rls-context.interc
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequiresTier } from '../common/decorators/requires-tier.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
+import { Response } from 'express';
 
 @ApiTags('Memberships')
 @ApiBearerAuth()
@@ -55,6 +57,36 @@ export class MembershipsController {
     @Body() dto: CreateMembershipDto,
   ) {
     return this.membershipsService.createMembership(dto, user);
+  }
+
+  @Get('tenants/:tenantId/members/kpis')
+  @UseInterceptors(RlsContextInterceptor)
+  @ApiOperation({ summary: 'Get member KPI metrics for dashboard' })
+  @ApiResponse({ status: 200, description: 'Member KPIs: totalMembers, newThisMonth, activeLast30d' })
+  getMemberKpis(
+    @Param('tenantId', ParseUUIDPipe) tenantId: string,
+  ) {
+    return this.membershipsService.getMemberKpis(tenantId);
+  }
+
+  @Get('tenants/:tenantId/members/export')
+  @UseInterceptors(RlsContextInterceptor)
+  @ApiOperation({ summary: 'Export tenant members as CSV' })
+  @ApiResponse({ status: 200, description: 'CSV file download' })
+  async exportMembers(
+    @Param('tenantId', ParseUUIDPipe) tenantId: string,
+    @Res() res: Response,
+  ) {
+    const rows = await this.membershipsService.exportMembers(tenantId);
+    const header = 'email,full_name,role,created_at';
+    const csvRows = rows.map(
+      (r) =>
+        `"${(r.email ?? '').replace(/"/g, '""')}","${(r.full_name ?? '').replace(/"/g, '""')}","${r.role}","${r.created_at}"`,
+    );
+    const csv = [header, ...csvRows].join('\n');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="members.csv"');
+    res.send(csv);
   }
 
   @Get('tenants/:tenantId/members')

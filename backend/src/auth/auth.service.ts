@@ -176,6 +176,9 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
+    // Record login for streak tracking (fire-and-forget)
+    this.recordLogin(data.user!.id).catch(() => {});
+
     return {
       accessToken: data.session!.access_token,
       refreshToken: data.session!.refresh_token,
@@ -281,6 +284,54 @@ export class AuthService {
    * This uses dataSource.manager (service role) intentionally — we need to verify
    * membership across tenant boundaries without the old JWT's RLS restriction.
    */
+  /**
+   * Logout endpoint. Since Supabase JWTs are stateless, the client simply
+   * discards the token. This endpoint exists for API completeness.
+   */
+  async logout() {
+    return { message: 'Logged out successfully. Discard your tokens.' };
+  }
+
+  /**
+   * Returns a session summary: user profile, tenant memberships, and current tenant.
+   * Used by the frontend to bootstrap the app on page load.
+   */
+  async getSession(userId: string) {
+    const user = await this.dataSource.manager.findOne(User, {
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    const memberships = await this.dataSource.manager.query(
+      `SELECT tm.tenant_id, tm.role, tm.permissions, t.name AS tenant_name, t.slug AS tenant_slug
+       FROM public.tenant_memberships tm
+       JOIN public.tenants t ON t.id = tm.tenant_id
+       WHERE tm.user_id = $1
+       ORDER BY t.name ASC`,
+      [userId],
+    );
+
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        avatarUrl: user.avatarUrl,
+      },
+      memberships: memberships.map((m: any) => ({
+        tenantId: m.tenant_id,
+        tenantName: m.tenant_name,
+        tenantSlug: m.tenant_slug,
+        role: m.role,
+        permissions: m.permissions,
+      })),
+      currentTenantId: user.lastAccessedTenantId,
+    };
+  }
+
   async switchTenant(user: SupabaseJwtPayload, dto: SwitchTenantDto) {
     const membership = await this.dataSource.manager.findOne(TenantMembership, {
       where: { userId: user.sub, tenantId: dto.tenantId },
@@ -301,5 +352,33 @@ export class AuthService {
       currentTenantId: dto.tenantId,
       yourRole: membership.role,
     };
+  }
+
+  /**
+   * Records a login for streak tracking. Uses a raw upsert query
+   * so it works without the LoginStreak entity imported here.
+   */
+  private async recordLogin(userId: string): Promise<void> {
+    await this.dataSource.query(
+      `INSERT INTO public.login_streaks (user_id, current_streak, longest_streak, last_login_date, updated_at)
+       VALUES ($1, 1, 1, CURRENT_DATE, now())
+       ON CONFLICT (user_id) DO UPDATE SET
+         current_streak = CASE
+           WHEN login_streaks.last_login_date = CURRENT_DATE - 1 THEN login_streaks.current_streak + 1
+           WHEN login_streaks.last_login_date = CURRENT_DATE THEN login_streaks.current_streak
+           ELSE 1
+         END,
+         longest_streak = GREATEST(
+           login_streaks.longest_streak,
+           CASE
+             WHEN login_streaks.last_login_date = CURRENT_DATE - 1 THEN login_streaks.current_streak + 1
+             WHEN login_streaks.last_login_date = CURRENT_DATE THEN login_streaks.current_streak
+             ELSE 1
+           END
+         ),
+         last_login_date = CURRENT_DATE,
+         updated_at = now()`,
+      [userId],
+    );
   }
 }

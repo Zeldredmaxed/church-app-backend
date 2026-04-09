@@ -1,5 +1,6 @@
 import {
   Controller,
+  Get,
   Post,
   Body,
   Query,
@@ -86,6 +87,25 @@ export class AuthController {
   ) {
     const token = (req.headers.authorization ?? '').replace('Bearer ', '');
     return this.authService.resetPassword(dto, token);
+  }
+
+  @Post('logout')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Logout (client should discard tokens)' })
+  @ApiResponse({ status: 200, description: 'Logged out successfully' })
+  logout() {
+    return this.authService.logout();
+  }
+
+  @Get('session')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get current session (user profile, memberships, current tenant)' })
+  @ApiResponse({ status: 200, description: 'Session data for frontend bootstrap' })
+  getSession(@CurrentUser() user: SupabaseJwtPayload) {
+    return this.authService.getSession(user.sub);
   }
 
   @Post('switch-tenant')

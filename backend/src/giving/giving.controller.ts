@@ -14,6 +14,7 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { GivingService } from './giving.service';
 import { DonateDto } from './dto/donate.dto';
+import { CreateFundDto } from './dto/create-fund.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
@@ -28,6 +29,46 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 @UseInterceptors(RlsContextInterceptor)
 export class GivingController {
   constructor(private readonly givingService: GivingService) {}
+
+  @Get('giving/kpis')
+  @ApiOperation({ summary: 'Get giving KPI metrics for dashboard' })
+  @ApiResponse({ status: 200, description: 'Giving KPIs: totalGiving, thisMonth, pendingCount, uniqueDonors' })
+  getGivingKpis(@CurrentUser() user: SupabaseJwtPayload) {
+    const tenantId = user.app_metadata?.current_tenant_id;
+    if (!tenantId) throw new Error('No active tenant context');
+    return this.givingService.getGivingKpis(tenantId);
+  }
+
+  @Get('giving/donors')
+  @ApiOperation({ summary: 'List unique donors for current tenant' })
+  @ApiResponse({ status: 200, description: 'Array of donor profiles' })
+  getDonors(@CurrentUser() user: SupabaseJwtPayload) {
+    const tenantId = user.app_metadata?.current_tenant_id;
+    if (!tenantId) throw new Error('No active tenant context');
+    return this.givingService.getDonors(tenantId);
+  }
+
+  @Get('giving/funds')
+  @ApiOperation({ summary: 'List active giving funds' })
+  @ApiResponse({ status: 200, description: 'Array of giving funds' })
+  getFunds(@CurrentUser() user: SupabaseJwtPayload) {
+    const tenantId = user.app_metadata?.current_tenant_id;
+    if (!tenantId) throw new Error('No active tenant context');
+    return this.givingService.getFunds(tenantId);
+  }
+
+  @Post('giving/funds')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Create a new giving fund' })
+  @ApiResponse({ status: 201, description: 'Fund created' })
+  createFund(
+    @CurrentUser() user: SupabaseJwtPayload,
+    @Body() dto: CreateFundDto,
+  ) {
+    const tenantId = user.app_metadata?.current_tenant_id;
+    if (!tenantId) throw new Error('No active tenant context');
+    return this.givingService.createFund(tenantId, dto);
+  }
 
   @Post('giving/donate')
   @HttpCode(HttpStatus.CREATED)

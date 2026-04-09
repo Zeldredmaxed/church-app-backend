@@ -10,7 +10,10 @@ import { SupabaseAdminService } from '../common/services/supabase-admin.service'
 import { rlsStorage } from '../common/storage/rls.storage';
 import { MediaService } from '../media/media.service';
 import { User } from './entities/user.entity';
+import { UserSettings } from './entities/user-settings.entity';
+import { LoginStreak } from './entities/login-streak.entity';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdateSettingsDto } from './dto/update-settings.dto';
 
 @Injectable()
 export class UsersService {
@@ -263,6 +266,101 @@ export class UsersService {
     );
 
     return exportData;
+  }
+
+  /**
+   * Returns the user's notification settings.
+   * If no row exists yet, returns defaults.
+   */
+  async getSettings(userId: string): Promise<UserSettings> {
+    const settings = await this.dataSource.manager.findOne(UserSettings, {
+      where: { userId },
+    });
+
+    if (!settings) {
+      return {
+        userId,
+        emailNotifications: true,
+        pushNotifications: true,
+        smsNotifications: false,
+        updatedAt: new Date(),
+      } as UserSettings;
+    }
+
+    return settings;
+  }
+
+  /**
+   * Upserts the user's notification settings.
+   */
+  async updateSettings(userId: string, dto: UpdateSettingsDto): Promise<UserSettings> {
+    const existing = await this.dataSource.manager.findOne(UserSettings, {
+      where: { userId },
+    });
+
+    if (existing) {
+      if (dto.emailNotifications !== undefined) existing.emailNotifications = dto.emailNotifications;
+      if (dto.pushNotifications !== undefined) existing.pushNotifications = dto.pushNotifications;
+      if (dto.smsNotifications !== undefined) existing.smsNotifications = dto.smsNotifications;
+      return this.dataSource.manager.save(UserSettings, existing);
+    }
+
+    const settings = this.dataSource.manager.create(UserSettings, {
+      userId,
+      emailNotifications: dto.emailNotifications ?? true,
+      pushNotifications: dto.pushNotifications ?? true,
+      smsNotifications: dto.smsNotifications ?? false,
+    });
+    return this.dataSource.manager.save(UserSettings, settings);
+  }
+
+  /**
+   * Returns the user's login streak info.
+   * If no row exists yet, returns zero streaks.
+   */
+  async getStreak(userId: string) {
+    const streak = await this.dataSource.manager.findOne(LoginStreak, {
+      where: { userId },
+    });
+
+    if (!streak) {
+      return { currentStreak: 0, longestStreak: 0 };
+    }
+
+    return {
+      currentStreak: streak.currentStreak,
+      longestStreak: streak.longestStreak,
+      lastLoginDate: streak.lastLoginDate,
+    };
+  }
+
+  /**
+   * Records a login for streak tracking.
+   * If last_login_date is yesterday, increments the streak.
+   * If today, no-op. Otherwise resets to 1.
+   */
+  async recordLogin(userId: string): Promise<void> {
+    await this.dataSource.query(
+      `INSERT INTO public.login_streaks (user_id, current_streak, longest_streak, last_login_date, updated_at)
+       VALUES ($1, 1, 1, CURRENT_DATE, now())
+       ON CONFLICT (user_id) DO UPDATE SET
+         current_streak = CASE
+           WHEN login_streaks.last_login_date = CURRENT_DATE - 1 THEN login_streaks.current_streak + 1
+           WHEN login_streaks.last_login_date = CURRENT_DATE THEN login_streaks.current_streak
+           ELSE 1
+         END,
+         longest_streak = GREATEST(
+           login_streaks.longest_streak,
+           CASE
+             WHEN login_streaks.last_login_date = CURRENT_DATE - 1 THEN login_streaks.current_streak + 1
+             WHEN login_streaks.last_login_date = CURRENT_DATE THEN login_streaks.current_streak
+             ELSE 1
+           END
+         ),
+         last_login_date = CURRENT_DATE,
+         updated_at = now()`,
+      [userId],
+    );
   }
 
   private getRlsContext() {

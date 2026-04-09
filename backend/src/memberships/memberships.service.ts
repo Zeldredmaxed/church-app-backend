@@ -451,6 +451,46 @@ export class MembershipsService {
     };
   }
 
+  /**
+   * Returns KPI metrics for the members dashboard.
+   * Uses service-role DataSource (cross-tenant aggregation).
+   */
+  async getMemberKpis(tenantId: string) {
+    // Note: tenant_memberships has no created_at/joined_at column,
+    // so newThisMonth counts users whose account was created this month as a proxy.
+    const rows = await this.dataSource.query(
+      `SELECT
+        (SELECT COUNT(*)::int FROM public.tenant_memberships WHERE tenant_id = $1) AS total_members,
+        (SELECT COUNT(*)::int FROM public.tenant_memberships tm JOIN public.users u ON u.id = tm.user_id WHERE tm.tenant_id = $1 AND u.created_at >= date_trunc('month', now())) AS new_this_month,
+        (SELECT COUNT(DISTINCT user_id)::int FROM public.check_ins WHERE tenant_id = $1 AND checked_in_at >= now() - interval '30 days') AS active_last_30d`,
+      [tenantId],
+    );
+
+    const row = rows[0] ?? {};
+    return {
+      totalMembers: row.total_members ?? 0,
+      newThisMonth: row.new_this_month ?? 0,
+      activeLast30d: row.active_last_30d ?? 0,
+    };
+  }
+
+  /**
+   * Exports all members of a tenant as raw rows (controller converts to CSV).
+   * Uses service-role DataSource.
+   */
+  async exportMembers(tenantId: string) {
+    const rows = await this.dataSource.query(
+      `SELECT u.email, u.full_name, tm.role, u.created_at
+       FROM public.tenant_memberships tm
+       JOIN public.users u ON u.id = tm.user_id
+       WHERE tm.tenant_id = $1
+       ORDER BY u.full_name`,
+      [tenantId],
+    );
+
+    return rows as Array<{ email: string; full_name: string | null; role: string; created_at: string }>;
+  }
+
   private getRlsContext() {
     const context = rlsStorage.getStore();
     if (!context) {
