@@ -37,7 +37,7 @@ DROP POLICY IF EXISTS stories_select ON public.stories;
 CREATE POLICY stories_select ON public.stories
   FOR SELECT
   USING (
-    tenant_id = (current_setting('app.current_tenant_id', true))::uuid
+    tenant_id = (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid
     AND expires_at > now()
   );
 
@@ -45,15 +45,16 @@ DROP POLICY IF EXISTS stories_insert ON public.stories;
 CREATE POLICY stories_insert ON public.stories
   FOR INSERT
   WITH CHECK (
-    tenant_id = (current_setting('app.current_tenant_id', true))::uuid
+    tenant_id = (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid
+    AND author_id = (auth.jwt() ->> 'sub')::uuid
   );
 
 DROP POLICY IF EXISTS stories_delete ON public.stories;
 CREATE POLICY stories_delete ON public.stories
   FOR DELETE
   USING (
-    tenant_id = (current_setting('app.current_tenant_id', true))::uuid
-    AND author_id = (current_setting('app.current_user_id', true))::uuid
+    tenant_id = (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid
+    AND author_id = (auth.jwt() ->> 'sub')::uuid
   );
 
 -- RLS — story_views
@@ -66,7 +67,7 @@ CREATE POLICY story_views_select ON public.story_views
   USING (
     story_id IN (
       SELECT id FROM public.stories
-      WHERE tenant_id = (current_setting('app.current_tenant_id', true))::uuid
+      WHERE tenant_id = (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid
     )
   );
 
@@ -74,10 +75,7 @@ DROP POLICY IF EXISTS story_views_insert ON public.story_views;
 CREATE POLICY story_views_insert ON public.story_views
   FOR INSERT
   WITH CHECK (
-    story_id IN (
-      SELECT id FROM public.stories
-      WHERE tenant_id = (current_setting('app.current_tenant_id', true))::uuid
-    )
+    viewer_id = (auth.jwt() ->> 'sub')::uuid
   );
 
 COMMIT;
