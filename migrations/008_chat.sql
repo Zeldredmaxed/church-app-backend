@@ -38,6 +38,7 @@ COMMENT ON TABLE public.chat_channels IS
   'direct = 1:1 messaging between two users.';
 
 -- Reuse the set_updated_at trigger function from migration 003
+DROP TRIGGER IF EXISTS trg_chat_channels_updated_at ON public.chat_channels;
 CREATE TRIGGER trg_chat_channels_updated_at
   BEFORE UPDATE ON public.chat_channels
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -79,6 +80,7 @@ ALTER TABLE public.channel_members FORCE ROW LEVEL SECURITY;
 
 -- SELECT: A user can see memberships for channels they have access to.
 -- This is scoped by joining to chat_channels to enforce tenant isolation.
+DROP POLICY IF EXISTS "channel_members: select visible" ON public.channel_members;
 CREATE POLICY "channel_members: select visible"
   ON public.channel_members
   FOR SELECT
@@ -101,6 +103,7 @@ CREATE POLICY "channel_members: select visible"
 -- INSERT: Admin/pastor can add members to private channels.
 -- For direct channels, either participant can add the other.
 -- For public channels, any tenant member can join (add themselves).
+DROP POLICY IF EXISTS "channel_members: insert member" ON public.channel_members;
 CREATE POLICY "channel_members: insert member"
   ON public.channel_members
   FOR INSERT
@@ -135,6 +138,7 @@ CREATE POLICY "channel_members: insert member"
   );
 
 -- DELETE: A user can remove themselves (leave). Admin can remove others from private.
+DROP POLICY IF EXISTS "channel_members: delete member" ON public.channel_members;
 CREATE POLICY "channel_members: delete member"
   ON public.channel_members
   FOR DELETE
@@ -159,6 +163,7 @@ CREATE POLICY "channel_members: delete member"
 
 -- SELECT: Tenant members can see public channels in their tenant.
 -- For private/direct channels, user must be a member of the channel.
+DROP POLICY IF EXISTS "chat_channels: select accessible" ON public.chat_channels;
 CREATE POLICY "chat_channels: select accessible"
   ON public.chat_channels
   FOR SELECT
@@ -176,6 +181,7 @@ CREATE POLICY "chat_channels: select accessible"
 -- INSERT: Tenant admins/pastors can create public/private channels.
 -- Any tenant member can create direct channels.
 -- The created_by must match the authenticated user.
+DROP POLICY IF EXISTS "chat_channels: insert by member" ON public.chat_channels;
 CREATE POLICY "chat_channels: insert by member"
   ON public.chat_channels
   FOR INSERT
@@ -195,6 +201,7 @@ CREATE POLICY "chat_channels: insert by member"
   );
 
 -- UPDATE: Only tenant admins/pastors can update public/private channels.
+DROP POLICY IF EXISTS "chat_channels: update by admin" ON public.chat_channels;
 CREATE POLICY "chat_channels: update by admin"
   ON public.chat_channels
   FOR UPDATE
@@ -210,6 +217,7 @@ CREATE POLICY "chat_channels: update by admin"
   );
 
 -- DELETE: Only tenant admins can delete public/private channels.
+DROP POLICY IF EXISTS "chat_channels: delete by admin" ON public.chat_channels;
 CREATE POLICY "chat_channels: delete by admin"
   ON public.chat_channels
   FOR DELETE
@@ -249,6 +257,7 @@ ALTER TABLE public.chat_messages FORCE ROW LEVEL SECURITY;
 
 -- SELECT: A user can see messages in channels they have access to.
 -- Public channels: any tenant member. Private/direct: must be a channel member.
+DROP POLICY IF EXISTS "chat_messages: select in accessible channel" ON public.chat_messages;
 CREATE POLICY "chat_messages: select in accessible channel"
   ON public.chat_messages
   FOR SELECT
@@ -271,6 +280,7 @@ CREATE POLICY "chat_messages: select in accessible channel"
 -- INSERT: A user can send messages to channels they are a member of.
 -- For public channels, any tenant member can post.
 -- user_id must match the authenticated user (no impersonation).
+DROP POLICY IF EXISTS "chat_messages: insert in accessible channel" ON public.chat_messages;
 CREATE POLICY "chat_messages: insert in accessible channel"
   ON public.chat_messages
   FOR INSERT
@@ -299,23 +309,23 @@ CREATE POLICY "chat_messages: insert in accessible channel"
 -- ============================================================================
 
 -- Query: list channels for a tenant (channel list screen)
-CREATE INDEX idx_chat_channels_tenant
+CREATE INDEX IF NOT EXISTS idx_chat_channels_tenant
   ON public.chat_channels (tenant_id, type, created_at DESC);
 
 -- Query: find channel memberships for a user (my channels)
-CREATE INDEX idx_channel_members_user
+CREATE INDEX IF NOT EXISTS idx_channel_members_user
   ON public.channel_members (user_id, channel_id);
 
 -- Query: list members of a channel
-CREATE INDEX idx_channel_members_channel
+CREATE INDEX IF NOT EXISTS idx_channel_members_channel
   ON public.channel_members (channel_id, user_id);
 
 -- Query: messages in a channel, newest first (chat scroll)
-CREATE INDEX idx_chat_messages_channel_created
+CREATE INDEX IF NOT EXISTS idx_chat_messages_channel_created
   ON public.chat_messages (channel_id, created_at DESC);
 
 -- Query: messages by user (moderation, user profile)
-CREATE INDEX idx_chat_messages_user
+CREATE INDEX IF NOT EXISTS idx_chat_messages_user
   ON public.chat_messages (user_id, created_at DESC);
 
 -- ============================================================================

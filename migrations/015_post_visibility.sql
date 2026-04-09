@@ -13,13 +13,19 @@
 BEGIN;
 
 ALTER TABLE public.posts
-  ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'
-    CHECK (visibility IN ('public', 'private'));
+  ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'public';
+
+-- Add the check constraint idempotently
+DO $$ BEGIN
+  ALTER TABLE public.posts
+    ADD CONSTRAINT posts_visibility_check CHECK (visibility IN ('public', 'private'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 COMMENT ON COLUMN public.posts.visibility IS
   'public = visible to all tenant members; private = author-only';
 
 -- Index to keep the feed query fast when filtering out private posts
-CREATE INDEX idx_posts_visibility ON public.posts (visibility);
+CREATE INDEX IF NOT EXISTS idx_posts_visibility ON public.posts (visibility);
 
 COMMIT;

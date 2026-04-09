@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS public.notifications (
 );
 
 -- Reuse the set_updated_at() trigger function from migration 003
+DROP TRIGGER IF EXISTS set_notifications_updated_at ON public.notifications;
 CREATE TRIGGER set_notifications_updated_at
   BEFORE UPDATE ON public.notifications
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
@@ -58,6 +59,7 @@ ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications FORCE ROW LEVEL SECURITY;
 
 -- Policy 1: Users can only see their own notifications within the current tenant
+DROP POLICY IF EXISTS "notifications: select own within tenant" ON public.notifications;
 CREATE POLICY "notifications: select own within tenant"
   ON public.notifications
   FOR SELECT
@@ -67,6 +69,7 @@ CREATE POLICY "notifications: select own within tenant"
   );
 
 -- Policy 2: Users can only update (mark as read) their own notifications
+DROP POLICY IF EXISTS "notifications: update own within tenant" ON public.notifications;
 CREATE POLICY "notifications: update own within tenant"
   ON public.notifications
   FOR UPDATE
@@ -91,12 +94,12 @@ CREATE POLICY "notifications: update own within tenant"
 -- ============================================================================
 
 -- Primary query: GET /notifications (my unread notifications, newest first)
-CREATE INDEX idx_notifications_recipient_unread
+CREATE INDEX IF NOT EXISTS idx_notifications_recipient_unread
   ON public.notifications (recipient_id, created_at DESC)
   WHERE read_at IS NULL;
 
 -- Secondary query: GET /notifications?all=true (all notifications, paginated)
-CREATE INDEX idx_notifications_recipient_created
+CREATE INDEX IF NOT EXISTS idx_notifications_recipient_created
   ON public.notifications (recipient_id, tenant_id, created_at DESC);
 
 -- ============================================================================

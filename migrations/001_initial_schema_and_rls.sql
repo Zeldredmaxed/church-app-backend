@@ -32,7 +32,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- Each row represents one church / organisation on the platform.
 -- stripe_account_id is populated during Stripe Connect onboarding (Phase 3).
 -- -----------------------------------------------------------------------------
-CREATE TABLE public.tenants (
+CREATE TABLE IF NOT EXISTS public.tenants (
     id                UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
     name              TEXT        NOT NULL,
     stripe_account_id TEXT,                          -- Nullable until onboarding
@@ -53,7 +53,7 @@ COMMENT ON COLUMN public.tenants.stripe_account_id  IS 'Stripe Connected Account
 -- source of truth that the auth sync trigger (Section 4) reads to inject
 -- current_tenant_id into the JWT. NULL = user has no active tenant yet.
 -- -----------------------------------------------------------------------------
-CREATE TABLE public.users (
+CREATE TABLE IF NOT EXISTS public.users (
     id                      UUID        PRIMARY KEY REFERENCES auth.users ON DELETE CASCADE,
     email                   TEXT        NOT NULL UNIQUE,
     last_accessed_tenant_id UUID        REFERENCES public.tenants(id) ON DELETE SET NULL,
@@ -73,7 +73,7 @@ COMMENT ON COLUMN public.users.last_accessed_tenant_id  IS 'The tenant the user 
 --   - Deleting a user removes all their memberships.
 --   - Deleting a tenant removes all its memberships.
 -- -----------------------------------------------------------------------------
-CREATE TABLE public.tenant_memberships (
+CREATE TABLE IF NOT EXISTS public.tenant_memberships (
     user_id   UUID  NOT NULL REFERENCES public.users(id)   ON DELETE CASCADE,
     tenant_id UUID  NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
     role      TEXT  NOT NULL CHECK (role IN ('admin', 'pastor', 'member')),
@@ -91,13 +91,13 @@ COMMENT ON COLUMN public.tenant_memberships.role     IS 'admin: full control | p
 -- =============================================================================
 
 -- Speeds up: "which memberships belong to this tenant?" (used by SELECT/INSERT/UPDATE/DELETE policies)
-CREATE INDEX idx_tenant_memberships_tenant_id ON public.tenant_memberships (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_tenant_memberships_tenant_id ON public.tenant_memberships (tenant_id);
 
 -- Speeds up: "which tenants does this user belong to?" (used by users SELECT policy)
-CREATE INDEX idx_tenant_memberships_user_id   ON public.tenant_memberships (user_id);
+CREATE INDEX IF NOT EXISTS idx_tenant_memberships_user_id   ON public.tenant_memberships (user_id);
 
 -- Speeds up: lookups by the context-switch trigger and FK integrity checks
-CREATE INDEX idx_users_last_accessed_tenant   ON public.users (last_accessed_tenant_id);
+CREATE INDEX IF NOT EXISTS idx_users_last_accessed_tenant   ON public.users (last_accessed_tenant_id);
 
 
 -- =============================================================================
@@ -126,6 +126,7 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
     AFTER INSERT ON auth.users
     FOR EACH ROW
@@ -170,6 +171,7 @@ $$;
 -- Guard: WHEN clause ensures the trigger body only executes when the value
 -- has actually changed. Prevents unnecessary auth.users writes on unrelated
 -- UPDATE statements that touch other public.users columns.
+DROP TRIGGER IF EXISTS on_tenant_switch ON public.users;
 CREATE TRIGGER on_tenant_switch
     AFTER UPDATE OF last_accessed_tenant_id ON public.users
     FOR EACH ROW
@@ -230,6 +232,7 @@ ALTER TABLE public.tenant_memberships  FORCE ROW LEVEL SECURITY;
 -- platform admin action executed via service role only.
 -- =============================================================================
 
+DROP POLICY IF EXISTS "tenants: select own current context" ON public.tenants;
 CREATE POLICY "tenants: select own current context"
     ON public.tenants
     FOR SELECT
@@ -237,6 +240,7 @@ CREATE POLICY "tenants: select own current context"
         id = (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid
     );
 
+DROP POLICY IF EXISTS "tenants: update by tenant admin only" ON public.tenants;
 CREATE POLICY "tenants: update by tenant admin only"
     ON public.tenants
     FOR UPDATE
@@ -276,6 +280,7 @@ CREATE POLICY "tenants: update by tenant admin only"
 -- are permitted from the application layer.
 -- =============================================================================
 
+DROP POLICY IF EXISTS "users: select self or same-tenant member" ON public.users;
 CREATE POLICY "users: select self or same-tenant member"
     ON public.users
     FOR SELECT
@@ -291,6 +296,7 @@ CREATE POLICY "users: select self or same-tenant member"
         )
     );
 
+DROP POLICY IF EXISTS "users: update self only" ON public.users;
 CREATE POLICY "users: update self only"
     ON public.users
     FOR UPDATE
@@ -320,6 +326,7 @@ CREATE POLICY "users: update self only"
 -- (leave a church). Pastors cannot forcibly remove members.
 -- =============================================================================
 
+DROP POLICY IF EXISTS "memberships: select within current tenant" ON public.tenant_memberships;
 CREATE POLICY "memberships: select within current tenant"
     ON public.tenant_memberships
     FOR SELECT
@@ -327,6 +334,7 @@ CREATE POLICY "memberships: select within current tenant"
         tenant_id = (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid
     );
 
+DROP POLICY IF EXISTS "memberships: insert by admin or pastor" ON public.tenant_memberships;
 CREATE POLICY "memberships: insert by admin or pastor"
     ON public.tenant_memberships
     FOR INSERT
@@ -344,6 +352,7 @@ CREATE POLICY "memberships: insert by admin or pastor"
         )
     );
 
+DROP POLICY IF EXISTS "memberships: update role by admin only" ON public.tenant_memberships;
 CREATE POLICY "memberships: update role by admin only"
     ON public.tenant_memberships
     FOR UPDATE
@@ -362,6 +371,7 @@ CREATE POLICY "memberships: update role by admin only"
         tenant_id = (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid
     );
 
+DROP POLICY IF EXISTS "memberships: delete by admin or self-removal" ON public.tenant_memberships;
 CREATE POLICY "memberships: delete by admin or self-removal"
     ON public.tenant_memberships
     FOR DELETE

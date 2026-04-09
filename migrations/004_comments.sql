@@ -20,7 +20,7 @@ BEGIN;
 -- SECTION 1: COMMENTS TABLE
 -- =============================================================================
 
-CREATE TABLE public.comments (
+CREATE TABLE IF NOT EXISTS public.comments (
     id        UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
     post_id   UUID        NOT NULL REFERENCES public.posts(id)    ON DELETE CASCADE,
     tenant_id UUID        NOT NULL REFERENCES public.tenants(id)  ON DELETE CASCADE,
@@ -34,11 +34,12 @@ COMMENT ON TABLE  public.comments           IS 'Comments on posts. tenant_id is 
 COMMENT ON COLUMN public.comments.tenant_id IS 'Must always equal the parent post''s tenant_id — enforced by validate_comment_tenant trigger.';
 
 -- Performance indexes
-CREATE INDEX idx_comments_post_id           ON public.comments (post_id);
-CREATE INDEX idx_comments_tenant_id         ON public.comments (tenant_id);
-CREATE INDEX idx_comments_post_created_desc ON public.comments (post_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_comments_post_id           ON public.comments (post_id);
+CREATE INDEX IF NOT EXISTS idx_comments_tenant_id         ON public.comments (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_comments_post_created_desc ON public.comments (post_id, created_at DESC);
 
 -- Reuse the set_updated_at function from migration 003
+DROP TRIGGER IF EXISTS comments_set_updated_at ON public.comments;
 CREATE TRIGGER comments_set_updated_at
   BEFORE UPDATE ON public.comments
   FOR EACH ROW
@@ -73,6 +74,7 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS validate_comment_tenant ON public.comments;
 CREATE TRIGGER validate_comment_tenant
   BEFORE INSERT OR UPDATE OF post_id, tenant_id ON public.comments
   FOR EACH ROW
@@ -87,6 +89,7 @@ ALTER TABLE public.comments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.comments FORCE ROW LEVEL SECURITY;
 
 -- SELECT: any tenant member can read comments in their current tenant
+DROP POLICY IF EXISTS "comments: select within current tenant" ON public.comments;
 CREATE POLICY "comments: select within current tenant"
   ON public.comments
   FOR SELECT
@@ -95,6 +98,7 @@ CREATE POLICY "comments: select within current tenant"
   );
 
 -- INSERT: tenant members can comment; tenant_id and author_id must match JWT
+DROP POLICY IF EXISTS "comments: insert by tenant member" ON public.comments;
 CREATE POLICY "comments: insert by tenant member"
   ON public.comments
   FOR INSERT
@@ -109,6 +113,7 @@ CREATE POLICY "comments: insert by tenant member"
   );
 
 -- UPDATE: comment author may edit only their own comments
+DROP POLICY IF EXISTS "comments: update by author only" ON public.comments;
 CREATE POLICY "comments: update by author only"
   ON public.comments
   FOR UPDATE
@@ -122,6 +127,7 @@ CREATE POLICY "comments: update by author only"
   );
 
 -- DELETE: comment author OR tenant admin may delete
+DROP POLICY IF EXISTS "comments: delete by author or admin" ON public.comments;
 CREATE POLICY "comments: delete by author or admin"
   ON public.comments
   FOR DELETE

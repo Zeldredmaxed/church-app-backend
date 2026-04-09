@@ -13,7 +13,7 @@ BEGIN;
 -- SECTION 1: POSTS TABLE
 -- =============================================================================
 
-CREATE TABLE public.posts (
+CREATE TABLE IF NOT EXISTS public.posts (
     id                   UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id            UUID        NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
     author_id            UUID        NOT NULL REFERENCES public.users(id)   ON DELETE CASCADE,
@@ -29,9 +29,9 @@ COMMENT ON COLUMN public.posts.video_mux_playback_id   IS 'Mux playback ID — s
 COMMENT ON COLUMN public.posts.tenant_id               IS 'NOT NULL in Phase 1. Phase 2 will allow NULL for global/public posts.';
 
 -- Performance indexes — all RLS policies and feed queries hit these
-CREATE INDEX idx_posts_tenant_id           ON public.posts (tenant_id);
-CREATE INDEX idx_posts_author_id           ON public.posts (author_id);
-CREATE INDEX idx_posts_tenant_created_desc ON public.posts (tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_tenant_id           ON public.posts (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_posts_author_id           ON public.posts (author_id);
+CREATE INDEX IF NOT EXISTS idx_posts_tenant_created_desc ON public.posts (tenant_id, created_at DESC);
 
 -- updated_at auto-maintenance trigger
 CREATE OR REPLACE FUNCTION public.set_updated_at()
@@ -42,6 +42,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS posts_set_updated_at ON public.posts;
 CREATE TRIGGER posts_set_updated_at
   BEFORE UPDATE ON public.posts
   FOR EACH ROW
@@ -52,7 +53,7 @@ CREATE TRIGGER posts_set_updated_at
 -- SECTION 2: INVITATIONS TABLE
 -- =============================================================================
 
-CREATE TABLE public.invitations (
+CREATE TABLE IF NOT EXISTS public.invitations (
     id          UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id   UUID        NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
     invited_by  UUID        NOT NULL REFERENCES public.users(id)   ON DELETE CASCADE,
@@ -72,12 +73,12 @@ COMMENT ON COLUMN public.invitations.accepted_at IS 'NULL = pending. Set to NOW(
 
 -- Prevent duplicate pending invitations for the same email+tenant.
 -- An admin must delete (cancel) the existing invite before re-inviting.
-CREATE UNIQUE INDEX idx_invitations_pending_per_email_tenant
+CREATE UNIQUE INDEX IF NOT EXISTS idx_invitations_pending_per_email_tenant
   ON public.invitations (tenant_id, lower(email))
   WHERE accepted_at IS NULL;
 
-CREATE INDEX idx_invitations_token      ON public.invitations (token);
-CREATE INDEX idx_invitations_tenant_id  ON public.invitations (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_invitations_token      ON public.invitations (token);
+CREATE INDEX IF NOT EXISTS idx_invitations_tenant_id  ON public.invitations (tenant_id);
 
 
 -- =============================================================================
@@ -88,6 +89,7 @@ ALTER TABLE public.posts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.posts FORCE ROW LEVEL SECURITY;
 
 -- SELECT: any tenant member can read posts in their current tenant
+DROP POLICY IF EXISTS "posts: select within current tenant" ON public.posts;
 CREATE POLICY "posts: select within current tenant"
   ON public.posts
   FOR SELECT
@@ -98,6 +100,7 @@ CREATE POLICY "posts: select within current tenant"
 -- INSERT: any tenant member can create a post, but:
 --   1. tenant_id must match current context (cannot post into another tenant)
 --   2. author_id must match the authenticated user (cannot impersonate another author)
+DROP POLICY IF EXISTS "posts: insert by tenant member" ON public.posts;
 CREATE POLICY "posts: insert by tenant member"
   ON public.posts
   FOR INSERT
@@ -112,6 +115,7 @@ CREATE POLICY "posts: insert by tenant member"
   );
 
 -- UPDATE: only the original author can edit their own post content
+DROP POLICY IF EXISTS "posts: update by author only" ON public.posts;
 CREATE POLICY "posts: update by author only"
   ON public.posts
   FOR UPDATE
@@ -126,6 +130,7 @@ CREATE POLICY "posts: update by author only"
   );
 
 -- DELETE: author can delete their own post; tenant admin can delete any post
+DROP POLICY IF EXISTS "posts: delete by author or admin" ON public.posts;
 CREATE POLICY "posts: delete by author or admin"
   ON public.posts
   FOR DELETE
@@ -151,6 +156,7 @@ ALTER TABLE public.invitations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.invitations FORCE ROW LEVEL SECURITY;
 
 -- SELECT: only admins and pastors can see invitations for their current tenant
+DROP POLICY IF EXISTS "invitations: select by admin or pastor" ON public.invitations;
 CREATE POLICY "invitations: select by admin or pastor"
   ON public.invitations
   FOR SELECT
@@ -165,6 +171,7 @@ CREATE POLICY "invitations: select by admin or pastor"
   );
 
 -- INSERT: only admins and pastors; invited_by must match the caller
+DROP POLICY IF EXISTS "invitations: insert by admin or pastor" ON public.invitations;
 CREATE POLICY "invitations: insert by admin or pastor"
   ON public.invitations
   FOR INSERT
@@ -180,6 +187,7 @@ CREATE POLICY "invitations: insert by admin or pastor"
   );
 
 -- DELETE (cancel): only admins can cancel a pending invitation
+DROP POLICY IF EXISTS "invitations: delete by admin" ON public.invitations;
 CREATE POLICY "invitations: delete by admin"
   ON public.invitations
   FOR DELETE

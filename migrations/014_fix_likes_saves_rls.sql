@@ -34,6 +34,7 @@ GRANT SELECT ON public.post_saves TO anon;
 DROP POLICY IF EXISTS "post_likes: select within current tenant" ON public.post_likes;
 DROP POLICY IF EXISTS "post_likes: insert own like"              ON public.post_likes;
 DROP POLICY IF EXISTS "post_likes: delete own like"              ON public.post_likes;
+DROP POLICY IF EXISTS "post_likes: select authenticated"         ON public.post_likes;
 
 -- Anyone authenticated can read likes — needed for like count and isLikedByMe subqueries
 CREATE POLICY "post_likes: select authenticated"
@@ -67,6 +68,7 @@ CREATE POLICY "post_likes: delete own like"
 DROP POLICY IF EXISTS "post_saves: select within current tenant" ON public.post_saves;
 DROP POLICY IF EXISTS "post_saves: insert own save"              ON public.post_saves;
 DROP POLICY IF EXISTS "post_saves: delete own save"              ON public.post_saves;
+DROP POLICY IF EXISTS "post_saves: select own saves"             ON public.post_saves;
 
 -- User can always read their own saves regardless of current tenant context
 -- This ensures isSavedByMe is never blocked by a tenant mismatch

@@ -81,6 +81,7 @@ ALTER TABLE public.transactions FORCE ROW LEVEL SECURITY;
 
 -- SELECT: A user can see their own transactions across tenants.
 -- A tenant admin can see ALL transactions for their current tenant.
+DROP POLICY IF EXISTS "transactions: select own or admin" ON public.transactions;
 CREATE POLICY "transactions: select own or admin"
   ON public.transactions
   FOR SELECT
@@ -102,6 +103,7 @@ CREATE POLICY "transactions: select own or admin"
 
 -- INSERT: A user can create a transaction for themselves in the current tenant.
 -- The user_id must match the authenticated user (no impersonation).
+DROP POLICY IF EXISTS "transactions: insert own donation" ON public.transactions;
 CREATE POLICY "transactions: insert own donation"
   ON public.transactions
   FOR INSERT
@@ -121,11 +123,11 @@ CREATE POLICY "transactions: insert own donation"
 -- ============================================================================
 
 -- Query: "my donations" (user's giving history)
-CREATE INDEX idx_transactions_user
+CREATE INDEX IF NOT EXISTS idx_transactions_user
   ON public.transactions (user_id, created_at DESC);
 
 -- Query: "tenant transactions" (admin dashboard)
-CREATE INDEX idx_transactions_tenant
+CREATE INDEX IF NOT EXISTS idx_transactions_tenant
   ON public.transactions (tenant_id, created_at DESC);
 
 -- Query: lookup by Stripe PaymentIntent ID (webhook processing)

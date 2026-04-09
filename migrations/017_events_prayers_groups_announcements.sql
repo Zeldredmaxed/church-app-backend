@@ -35,30 +35,35 @@ CREATE TABLE IF NOT EXISTS public.event_rsvps (
   PRIMARY KEY (event_id, user_id)
 );
 
-CREATE INDEX idx_events_tenant_start ON public.events (tenant_id, start_at DESC);
-CREATE INDEX idx_event_rsvps_event ON public.event_rsvps (event_id, status);
+CREATE INDEX IF NOT EXISTS idx_events_tenant_start ON public.events (tenant_id, start_at DESC);
+CREATE INDEX IF NOT EXISTS idx_event_rsvps_event ON public.event_rsvps (event_id, status);
 
 ALTER TABLE public.events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.events FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.event_rsvps ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.event_rsvps FORCE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "events: select within tenant" ON public.events;
 CREATE POLICY "events: select within tenant" ON public.events
   FOR SELECT USING (
     tenant_id = (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid
   );
 
+DROP POLICY IF EXISTS "event_rsvps: select within tenant" ON public.event_rsvps;
 CREATE POLICY "event_rsvps: select within tenant" ON public.event_rsvps
   FOR SELECT USING (
     event_id IN (SELECT id FROM public.events WHERE tenant_id = (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid)
   );
 
+DROP POLICY IF EXISTS "event_rsvps: insert own" ON public.event_rsvps;
 CREATE POLICY "event_rsvps: insert own" ON public.event_rsvps
   FOR INSERT WITH CHECK (user_id = (auth.jwt() ->> 'sub')::uuid);
 
+DROP POLICY IF EXISTS "event_rsvps: update own" ON public.event_rsvps;
 CREATE POLICY "event_rsvps: update own" ON public.event_rsvps
   FOR UPDATE USING (user_id = (auth.jwt() ->> 'sub')::uuid);
 
+DROP POLICY IF EXISTS "event_rsvps: delete own" ON public.event_rsvps;
 CREATE POLICY "event_rsvps: delete own" ON public.event_rsvps
   FOR DELETE USING (user_id = (auth.jwt() ->> 'sub')::uuid);
 
@@ -84,26 +89,30 @@ CREATE TABLE IF NOT EXISTS public.prayer_prays (
   PRIMARY KEY (prayer_id, user_id)
 );
 
-CREATE INDEX idx_prayers_tenant_created ON public.prayers (tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_prayers_tenant_created ON public.prayers (tenant_id, created_at DESC);
 
 ALTER TABLE public.prayers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.prayers FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.prayer_prays ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.prayer_prays FORCE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "prayers: select within tenant" ON public.prayers;
 CREATE POLICY "prayers: select within tenant" ON public.prayers
   FOR SELECT USING (
     tenant_id = (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid
   );
 
+DROP POLICY IF EXISTS "prayer_prays: select within tenant" ON public.prayer_prays;
 CREATE POLICY "prayer_prays: select within tenant" ON public.prayer_prays
   FOR SELECT USING (
     prayer_id IN (SELECT id FROM public.prayers WHERE tenant_id = (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid)
   );
 
+DROP POLICY IF EXISTS "prayer_prays: insert own" ON public.prayer_prays;
 CREATE POLICY "prayer_prays: insert own" ON public.prayer_prays
   FOR INSERT WITH CHECK (user_id = (auth.jwt() ->> 'sub')::uuid);
 
+DROP POLICY IF EXISTS "prayer_prays: delete own" ON public.prayer_prays;
 CREATE POLICY "prayer_prays: delete own" ON public.prayer_prays
   FOR DELETE USING (user_id = (auth.jwt() ->> 'sub')::uuid);
 
@@ -137,8 +146,8 @@ CREATE TABLE IF NOT EXISTS public.group_messages (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_groups_tenant ON public.groups (tenant_id);
-CREATE INDEX idx_group_messages_group_created ON public.group_messages (group_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_groups_tenant ON public.groups (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_group_messages_group_created ON public.group_messages (group_id, created_at DESC);
 
 ALTER TABLE public.groups ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.groups FORCE ROW LEVEL SECURITY;
@@ -147,27 +156,33 @@ ALTER TABLE public.group_members FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.group_messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.group_messages FORCE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "groups: select within tenant" ON public.groups;
 CREATE POLICY "groups: select within tenant" ON public.groups
   FOR SELECT USING (
     tenant_id = (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid
   );
 
+DROP POLICY IF EXISTS "group_members: select within tenant" ON public.group_members;
 CREATE POLICY "group_members: select within tenant" ON public.group_members
   FOR SELECT USING (
     group_id IN (SELECT id FROM public.groups WHERE tenant_id = (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid)
   );
 
+DROP POLICY IF EXISTS "group_members: insert own" ON public.group_members;
 CREATE POLICY "group_members: insert own" ON public.group_members
   FOR INSERT WITH CHECK (user_id = (auth.jwt() ->> 'sub')::uuid);
 
+DROP POLICY IF EXISTS "group_members: delete own" ON public.group_members;
 CREATE POLICY "group_members: delete own" ON public.group_members
   FOR DELETE USING (user_id = (auth.jwt() ->> 'sub')::uuid);
 
+DROP POLICY IF EXISTS "group_messages: select for members" ON public.group_messages;
 CREATE POLICY "group_messages: select for members" ON public.group_messages
   FOR SELECT USING (
     group_id IN (SELECT group_id FROM public.group_members WHERE user_id = (auth.jwt() ->> 'sub')::uuid)
   );
 
+DROP POLICY IF EXISTS "group_messages: insert for members" ON public.group_messages;
 CREATE POLICY "group_messages: insert for members" ON public.group_messages
   FOR INSERT WITH CHECK (
     author_id = (auth.jwt() ->> 'sub')::uuid
@@ -190,11 +205,12 @@ CREATE TABLE IF NOT EXISTS public.announcements (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_announcements_tenant_created ON public.announcements (tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_announcements_tenant_created ON public.announcements (tenant_id, created_at DESC);
 
 ALTER TABLE public.announcements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.announcements FORCE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "announcements: select within tenant" ON public.announcements;
 CREATE POLICY "announcements: select within tenant" ON public.announcements
   FOR SELECT USING (
     tenant_id = (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid
@@ -219,11 +235,12 @@ CREATE TABLE IF NOT EXISTS public.sermons (
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_sermons_tenant_created ON public.sermons (tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sermons_tenant_created ON public.sermons (tenant_id, created_at DESC);
 
 ALTER TABLE public.sermons ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sermons FORCE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "sermons: select within tenant" ON public.sermons;
 CREATE POLICY "sermons: select within tenant" ON public.sermons
   FOR SELECT USING (
     tenant_id = (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid
@@ -256,17 +273,21 @@ ALTER TABLE public.volunteer_opportunities FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.volunteer_signups ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.volunteer_signups FORCE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "volunteer_opportunities: select within tenant" ON public.volunteer_opportunities;
 CREATE POLICY "volunteer_opportunities: select within tenant" ON public.volunteer_opportunities
   FOR SELECT USING (
     tenant_id = (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid
   );
 
+DROP POLICY IF EXISTS "volunteer_signups: select own" ON public.volunteer_signups;
 CREATE POLICY "volunteer_signups: select own" ON public.volunteer_signups
   FOR SELECT USING (user_id = (auth.jwt() ->> 'sub')::uuid);
 
+DROP POLICY IF EXISTS "volunteer_signups: insert own" ON public.volunteer_signups;
 CREATE POLICY "volunteer_signups: insert own" ON public.volunteer_signups
   FOR INSERT WITH CHECK (user_id = (auth.jwt() ->> 'sub')::uuid);
 
+DROP POLICY IF EXISTS "volunteer_signups: delete own" ON public.volunteer_signups;
 CREATE POLICY "volunteer_signups: delete own" ON public.volunteer_signups
   FOR DELETE USING (user_id = (auth.jwt() ->> 'sub')::uuid);
 
@@ -292,21 +313,24 @@ CREATE TABLE IF NOT EXISTS public.check_ins (
   checked_in_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_check_ins_tenant_date ON public.check_ins (tenant_id, checked_in_at DESC);
+CREATE INDEX IF NOT EXISTS idx_check_ins_tenant_date ON public.check_ins (tenant_id, checked_in_at DESC);
 
 ALTER TABLE public.services ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.services FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.check_ins ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.check_ins FORCE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "services: select within tenant" ON public.services;
 CREATE POLICY "services: select within tenant" ON public.services
   FOR SELECT USING (
     tenant_id = (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid
   );
 
+DROP POLICY IF EXISTS "check_ins: insert own" ON public.check_ins;
 CREATE POLICY "check_ins: insert own" ON public.check_ins
   FOR INSERT WITH CHECK (user_id = (auth.jwt() ->> 'sub')::uuid);
 
+DROP POLICY IF EXISTS "check_ins: select own" ON public.check_ins;
 CREATE POLICY "check_ins: select own" ON public.check_ins
   FOR SELECT USING (user_id = (auth.jwt() ->> 'sub')::uuid);
 
@@ -324,11 +348,12 @@ CREATE TABLE IF NOT EXISTS public.gallery_photos (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_gallery_tenant_album ON public.gallery_photos (tenant_id, album, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_gallery_tenant_album ON public.gallery_photos (tenant_id, album, created_at DESC);
 
 ALTER TABLE public.gallery_photos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.gallery_photos FORCE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "gallery: select within tenant" ON public.gallery_photos;
 CREATE POLICY "gallery: select within tenant" ON public.gallery_photos
   FOR SELECT USING (
     tenant_id = (auth.jwt() -> 'app_metadata' ->> 'current_tenant_id')::uuid
@@ -351,7 +376,7 @@ CREATE TABLE IF NOT EXISTS public.post_reports (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_post_reports_tenant_status ON public.post_reports (tenant_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_post_reports_tenant_status ON public.post_reports (tenant_id, status, created_at DESC);
 
 ALTER TABLE public.post_reports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.post_reports FORCE ROW LEVEL SECURITY;
@@ -378,11 +403,12 @@ CREATE TABLE IF NOT EXISTS public.recurring_gifts (
   created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_recurring_gifts_user ON public.recurring_gifts (user_id, status);
+CREATE INDEX IF NOT EXISTS idx_recurring_gifts_user ON public.recurring_gifts (user_id, status);
 
 ALTER TABLE public.recurring_gifts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.recurring_gifts FORCE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "recurring_gifts: select own" ON public.recurring_gifts;
 CREATE POLICY "recurring_gifts: select own" ON public.recurring_gifts
   FOR SELECT USING (user_id = (auth.jwt() ->> 'sub')::uuid);
 

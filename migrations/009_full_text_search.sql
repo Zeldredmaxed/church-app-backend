@@ -58,6 +58,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_posts_search_vector ON public.posts;
 CREATE TRIGGER trg_posts_search_vector
   BEFORE INSERT OR UPDATE OF content ON public.posts
   FOR EACH ROW EXECUTE FUNCTION posts_search_vector_update();
@@ -93,6 +94,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_users_search_vector ON public.users;
 CREATE TRIGGER trg_users_search_vector
   BEFORE INSERT OR UPDATE OF full_name, email ON public.users
   FOR EACH ROW EXECUTE FUNCTION users_search_vector_update();

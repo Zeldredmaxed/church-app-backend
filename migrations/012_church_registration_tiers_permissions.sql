@@ -114,6 +114,7 @@ ALTER TABLE public.roles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.roles FORCE ROW LEVEL SECURITY;
 
 -- Roles are a public reference table — any authenticated user can read them
+DROP POLICY IF EXISTS "roles: select for authenticated users" ON public.roles;
 CREATE POLICY "roles: select for authenticated users"
   ON public.roles
   FOR SELECT
@@ -158,9 +159,13 @@ ALTER TABLE public.registration_keys FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.tenant_memberships
   DROP CONSTRAINT IF EXISTS tenant_memberships_role_check;
 
-ALTER TABLE public.tenant_memberships
-  ADD CONSTRAINT tenant_memberships_role_check
-  CHECK (role IN ('admin', 'pastor', 'accountant', 'worship_leader', 'member'));
+DO $$
+BEGIN
+  ALTER TABLE public.tenant_memberships
+    ADD CONSTRAINT tenant_memberships_role_check
+    CHECK (role IN ('admin', 'pastor', 'accountant', 'worship_leader', 'member'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 
 -- ============================================================================

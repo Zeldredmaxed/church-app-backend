@@ -38,6 +38,7 @@ CREATE INDEX IF NOT EXISTS idx_posts_global_feed
 -- Drop the existing SELECT policy and replace with one that handles both cases
 DROP POLICY IF EXISTS "posts: select within current tenant" ON public.posts;
 
+DROP POLICY IF EXISTS "posts: select tenant or global" ON public.posts;
 CREATE POLICY "posts: select tenant or global"
   ON public.posts
   FOR SELECT
@@ -50,6 +51,7 @@ CREATE POLICY "posts: select tenant or global"
   );
 
 -- Add INSERT policy for global posts (author_id must match, no tenant membership check)
+DROP POLICY IF EXISTS "posts: insert global post" ON public.posts;
 CREATE POLICY "posts: insert global post"
   ON public.posts
   FOR INSERT
@@ -89,12 +91,14 @@ ALTER TABLE public.follows FORCE ROW LEVEL SECURITY;
 
 -- SELECT: A user can see follows involving themselves (who they follow + who follows them)
 -- Also allow seeing follow lists of other users (public social feature)
+DROP POLICY IF EXISTS "follows: select all" ON public.follows;
 CREATE POLICY "follows: select all"
   ON public.follows
   FOR SELECT
   USING (true);
 
 -- INSERT: A user can only follow someone (they must be the follower_id)
+DROP POLICY IF EXISTS "follows: insert as follower" ON public.follows;
 CREATE POLICY "follows: insert as follower"
   ON public.follows
   FOR INSERT
@@ -104,6 +108,7 @@ CREATE POLICY "follows: insert as follower"
 
 -- DELETE: A user can unfollow (where they are follower_id)
 -- or remove a follower (where they are following_id)
+DROP POLICY IF EXISTS "follows: delete own relationships" ON public.follows;
 CREATE POLICY "follows: delete own relationships"
   ON public.follows
   FOR DELETE
@@ -120,11 +125,11 @@ CREATE POLICY "follows: delete own relationships"
 -- ============================================================================
 
 -- Query: "who does user X follow?" (fan-out source query)
-CREATE INDEX idx_follows_follower
+CREATE INDEX IF NOT EXISTS idx_follows_follower
   ON public.follows (follower_id, created_at DESC);
 
 -- Query: "who follows user X?" (follower list)
-CREATE INDEX idx_follows_following
+CREATE INDEX IF NOT EXISTS idx_follows_following
   ON public.follows (following_id, created_at DESC);
 
 -- ============================================================================

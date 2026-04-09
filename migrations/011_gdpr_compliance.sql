@@ -66,10 +66,14 @@ END $$;
 -- Step 3: Re-create with ON DELETE SET NULL.
 -- When a user is deleted, their transaction records are preserved
 -- with user_id = NULL (anonymized).
-ALTER TABLE public.transactions
-  ADD CONSTRAINT transactions_user_id_fkey
-  FOREIGN KEY (user_id) REFERENCES public.users(id)
-  ON DELETE SET NULL;
+DO $$
+BEGIN
+  ALTER TABLE public.transactions
+    ADD CONSTRAINT transactions_user_id_fkey
+    FOREIGN KEY (user_id) REFERENCES public.users(id)
+    ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 -- Step 4: Update the RLS INSERT policy to allow NULL user_id check
 -- (the existing INSERT policy checks user_id = auth.uid(), which still works
