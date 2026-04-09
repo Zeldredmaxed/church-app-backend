@@ -23,6 +23,7 @@ export const TRIGGER_TYPES = [
   'member_inactive',
   'baptism_completed',
   'members_class_completed',
+  'inbound_webhook',         // Receives data from external services via POST
 ] as const;
 
 // ─── ACTION TYPES ───
@@ -131,6 +132,7 @@ export const NODE_TYPE_REGISTRY: NodeTypeInfo[] = [
   { type: 'member_inactive', category: 'trigger', label: 'Member Inactive', description: 'Fires when inactive for X days', icon: 'UserX', color: 'emerald', configFields: [{ key: 'days', label: 'Days inactive', type: 'number', required: true, placeholder: '30' }] },
   { type: 'baptism_completed', category: 'trigger', label: 'Baptism Completed', description: 'Fires when member is baptized', icon: 'Droplets', color: 'emerald', configFields: [] },
   { type: 'members_class_completed', category: 'trigger', label: 'Members Class Done', description: 'Fires when members class is completed', icon: 'GraduationCap', color: 'emerald', configFields: [] },
+  { type: 'inbound_webhook', category: 'trigger', label: 'Receive Webhook', description: 'Receives data from an external service via POST', icon: 'Webhook', color: 'emerald', configFields: [{ key: 'secret', label: 'Webhook Secret (optional)', type: 'text', required: false, placeholder: 'For signature verification' }] },
 
   // ACTIONS
   { type: 'send_email', category: 'action', label: 'Send Email', description: 'Send an email to the member', icon: 'Mail', color: 'blue', configFields: [{ key: 'subject', label: 'Subject', type: 'text', required: true }, { key: 'body', label: 'Body', type: 'text', required: true }, { key: 'templateId', label: 'Or use template', type: 'template', required: false }] },

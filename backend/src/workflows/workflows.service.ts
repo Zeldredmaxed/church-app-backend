@@ -1,14 +1,21 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { CreateWorkflowDto } from './dto/create-workflow.dto';
 import { UpdateWorkflowDto } from './dto/update-workflow.dto';
-import { NODE_TYPE_REGISTRY } from './workflow-node-types';
+import { NODE_TYPE_REGISTRY, TRIGGER_TYPES, ACTION_TYPES, CONDITION_TYPES, DELAY_TYPES, FILTER_TYPES } from './workflow-node-types';
 
 @Injectable()
 export class WorkflowsService {
   private readonly logger = new Logger(WorkflowsService.name);
+  private readonly anthropicKey: string | null;
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly config: ConfigService,
+  ) {
+    this.anthropicKey = this.config.get<string>('ANTHROPIC_API_KEY') ?? null;
+  }
 
   /* ───── List Workflows ───── */
 
@@ -388,5 +395,132 @@ export class WorkflowsService {
     );
     if (!row) throw new NotFoundException('Execution not found or already completed');
     return { id: row.id, status: row.status };
+  }
+
+  /* ───── AI Workflow Generation ───── */
+
+  async generateWorkflowFromAI(tenantId: string, prompt: string, userId: string) {
+    if (!this.anthropicKey) {
+      return {
+        message: 'AI workflow generation requires ANTHROPIC_API_KEY to be configured.',
+        suggestedWorkflow: this.getFallbackWorkflow(prompt),
+      };
+    }
+
+    const systemPrompt = `You are a workflow builder for a church management platform.
+Given a natural language description, generate a workflow definition as JSON.
+
+AVAILABLE TRIGGER TYPES: ${TRIGGER_TYPES.join(', ')}
+AVAILABLE ACTION TYPES: ${ACTION_TYPES.join(', ')}
+AVAILABLE CONDITION TYPES: ${CONDITION_TYPES.join(', ')}
+AVAILABLE DELAY TYPES: ${DELAY_TYPES.join(', ')}
+AVAILABLE FILTER TYPES: ${FILTER_TYPES.join(', ')}
+
+Return ONLY valid JSON with this shape (no markdown, no explanation):
+{
+  "name": "Workflow Name",
+  "description": "What this workflow does",
+  "triggerType": "one of the trigger types above",
+  "triggerConfig": {},
+  "nodes": [
+    { "id": "node-1", "nodeType": "trigger_type_here", "nodeConfig": {}, "positionX": 50, "positionY": 100, "label": "Display Name" },
+    { "id": "node-2", "nodeType": "action_or_condition", "nodeConfig": { "relevant": "config" }, "positionX": 300, "positionY": 100, "label": "Display Name" }
+  ],
+  "connections": [
+    { "fromNodeId": "node-1", "toNodeId": "node-2", "branch": "default" }
+  ]
+}
+
+Rules:
+- First node must match the triggerType
+- Position nodes left-to-right (increment positionX by 250 per step)
+- For conditions, create two branches: one connection with branch "true" and one with branch "false"
+- For delays, use nodeConfig like { "amount": 1, "unit": "days" }
+- For send_email, use nodeConfig like { "subject": "...", "body": "..." }
+- For send_sms, use nodeConfig like { "body": "..." }
+- For assign_tag, use nodeConfig like { "tagName": "..." } (tagId will be resolved later)
+- Keep workflows practical — 3-8 nodes typically`;
+
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': this.anthropicKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 2048,
+          messages: [
+            { role: 'user', content: `${systemPrompt}\n\nCreate a workflow for: "${prompt}"` },
+          ],
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Claude API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const text = data.content?.[0]?.text?.trim();
+
+      if (!text) throw new Error('No response from AI');
+
+      // Parse and validate the JSON
+      const workflow = JSON.parse(text);
+
+      return {
+        message: 'Workflow generated successfully. Review and save when ready.',
+        suggestedWorkflow: workflow,
+      };
+    } catch (err: any) {
+      this.logger.warn(`AI workflow generation failed: ${err.message}`);
+      return {
+        message: 'AI generation failed. Here is a suggested template instead.',
+        suggestedWorkflow: this.getFallbackWorkflow(prompt),
+      };
+    }
+  }
+
+  private getFallbackWorkflow(prompt: string) {
+    const lower = prompt.toLowerCase();
+
+    if (lower.includes('new member') || lower.includes('welcome')) {
+      return {
+        name: 'New Member Welcome Flow',
+        description: 'Welcomes new members with email, follow-up, and tag assignment',
+        triggerType: 'new_member',
+        triggerConfig: {},
+        nodes: [
+          { id: 'node-1', nodeType: 'new_member', nodeConfig: {}, positionX: 50, positionY: 100, label: 'New Member Joins' },
+          { id: 'node-2', nodeType: 'send_email', nodeConfig: { subject: 'Welcome to our church!', body: 'We are so glad you joined us...' }, positionX: 300, positionY: 100, label: 'Send Welcome Email' },
+          { id: 'node-3', nodeType: 'wait_duration', nodeConfig: { amount: 3, unit: 'days' }, positionX: 550, positionY: 100, label: 'Wait 3 Days' },
+          { id: 'node-4', nodeType: 'send_sms', nodeConfig: { body: 'Hey! Just checking in — how was your first experience with us?' }, positionX: 800, positionY: 100, label: 'Follow-up SMS' },
+          { id: 'node-5', nodeType: 'assign_tag', nodeConfig: { tagName: 'New Member' }, positionX: 1050, positionY: 100, label: 'Tag as New Member' },
+        ],
+        connections: [
+          { fromNodeId: 'node-1', toNodeId: 'node-2', branch: 'default' },
+          { fromNodeId: 'node-2', toNodeId: 'node-3', branch: 'default' },
+          { fromNodeId: 'node-3', toNodeId: 'node-4', branch: 'default' },
+          { fromNodeId: 'node-4', toNodeId: 'node-5', branch: 'default' },
+        ],
+      };
+    }
+
+    // Generic template
+    return {
+      name: 'Custom Workflow',
+      description: prompt,
+      triggerType: 'manual',
+      triggerConfig: {},
+      nodes: [
+        { id: 'node-1', nodeType: 'manual', nodeConfig: {}, positionX: 50, positionY: 100, label: 'Manual Trigger' },
+        { id: 'node-2', nodeType: 'send_email', nodeConfig: { subject: 'Notification', body: 'This is an automated message.' }, positionX: 300, positionY: 100, label: 'Send Email' },
+      ],
+      connections: [
+        { fromNodeId: 'node-1', toNodeId: 'node-2', branch: 'default' },
+      ],
+    };
   }
 }

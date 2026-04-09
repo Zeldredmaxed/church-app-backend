@@ -7,13 +7,22 @@ import {
   Body,
   Param,
   Query,
+  Req,
   ParseUUIDPipe,
   UseGuards,
   UseInterceptors,
   ForbiddenException,
+  BadRequestException,
+  HttpCode,
+  HttpStatus,
+  Logger,
+  RawBodyRequest,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import { DataSource } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
+import { Request } from 'express';
 import { WorkflowsService } from './workflows.service';
 import { WorkflowEngineService } from './workflow-engine.service';
 import { CreateWorkflowDto } from './dto/create-workflow.dto';
@@ -22,7 +31,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
-import { getTierFeatures } from '../common/config/tier-features.config';
+import { getTierFeatures, TierFeatures } from '../common/config/tier-features.config';
 import { Tenant } from '../tenants/entities/tenant.entity';
 
 @ApiTags('Workflows')
@@ -31,24 +40,56 @@ import { Tenant } from '../tenants/entities/tenant.entity';
 @UseGuards(JwtAuthGuard)
 @UseInterceptors(RlsContextInterceptor)
 export class WorkflowsController {
+  private readonly logger = new Logger(WorkflowsController.name);
+
   constructor(
     private readonly workflowsService: WorkflowsService,
     private readonly workflowEngineService: WorkflowEngineService,
     private readonly dataSource: DataSource,
+    private readonly config: ConfigService,
   ) {}
 
   /* ───── Tier Gate Helper ───── */
 
-  private async ensureWorkflowsEnabled(tenantId: string) {
+  private async getTenantFeatures(tenantId: string): Promise<TierFeatures> {
     const tenant = await this.dataSource.manager.findOne(Tenant, {
       where: { id: tenantId },
       select: ['tier'],
     });
-    const features = getTierFeatures(tenant?.tier ?? 'standard');
+    return getTierFeatures(tenant?.tier ?? 'standard');
+  }
+
+  private async ensureWorkflowsEnabled(tenantId: string): Promise<TierFeatures> {
+    const features = await this.getTenantFeatures(tenantId);
     if (!features.workflows) {
       throw new ForbiddenException(
-        'Workflow Automation requires an Enterprise plan. Upgrade to unlock automated workflows for your church.',
+        'Workflow Automation requires a paid plan. Upgrade to unlock automated workflows for your church.',
       );
+    }
+    return features;
+  }
+
+  private async enforceWorkflowLimits(tenantId: string, features: TierFeatures, nodeCount?: number) {
+    // Check workflow count limit
+    if (features.maxWorkflows !== -1) {
+      const [{ count }] = await this.dataSource.query(
+        `SELECT COUNT(*)::int AS count FROM public.workflows WHERE tenant_id = $1`,
+        [tenantId],
+      );
+      if (count >= features.maxWorkflows) {
+        throw new ForbiddenException(
+          `Your plan allows ${features.maxWorkflows} workflow(s). Upgrade to Enterprise for unlimited workflows.`,
+        );
+      }
+    }
+
+    // Check node count limit
+    if (nodeCount !== undefined && features.maxWorkflowNodes !== -1) {
+      if (nodeCount > features.maxWorkflowNodes) {
+        throw new ForbiddenException(
+          `Your plan allows up to ${features.maxWorkflowNodes} nodes per workflow. Upgrade to Enterprise for unlimited nodes.`,
+        );
+      }
     }
   }
 
@@ -111,7 +152,8 @@ export class WorkflowsController {
     @Body() dto: CreateWorkflowDto,
   ) {
     const tenantId = user.app_metadata?.current_tenant_id!;
-    await this.ensureWorkflowsEnabled(tenantId);
+    const features = await this.ensureWorkflowsEnabled(tenantId);
+    await this.enforceWorkflowLimits(tenantId, features, dto.nodes?.length);
     return this.workflowsService.createWorkflow(tenantId, dto, user.sub);
   }
 
@@ -197,5 +239,106 @@ export class WorkflowsController {
     await this.ensureWorkflowsEnabled(tenantId);
     const parsedLimit = Math.min(Math.max(parseInt(limit ?? '20', 10) || 20, 1), 100);
     return this.workflowsService.getExecutions(tenantId, id, status, parsedLimit, cursor);
+  }
+
+  /* ───── AI Workflow Generation (Enterprise only) ───── */
+
+  @Post('generate')
+  @ApiOperation({ summary: 'Generate a workflow from a natural language description (Enterprise only)' })
+  @ApiResponse({ status: 201, description: 'Generated workflow definition' })
+  async generateWorkflow(
+    @CurrentUser() user: SupabaseJwtPayload,
+    @Body() body: { prompt: string },
+  ) {
+    const tenantId = user.app_metadata?.current_tenant_id!;
+    const features = await this.ensureWorkflowsEnabled(tenantId);
+
+    if (features.maxWorkflows !== -1) {
+      throw new ForbiddenException(
+        'AI workflow generation requires an Enterprise plan.',
+      );
+    }
+
+    if (!body.prompt || body.prompt.length > 1000) {
+      throw new BadRequestException('Prompt is required (max 1000 characters)');
+    }
+
+    return this.workflowsService.generateWorkflowFromAI(tenantId, body.prompt, user.sub);
+  }
+}
+
+/* ───── Inbound Webhook Controller (separate, no JWT) ───── */
+
+@ApiTags('Workflow Webhooks')
+@Controller('webhooks/workflows')
+@SkipThrottle()
+export class WorkflowWebhookController {
+  private readonly logger = new Logger(WorkflowWebhookController.name);
+
+  constructor(
+    private readonly workflowsService: WorkflowsService,
+    private readonly workflowEngineService: WorkflowEngineService,
+    private readonly dataSource: DataSource,
+  ) {}
+
+  /**
+   * Receives inbound webhooks from external services.
+   * URL pattern: POST /api/webhooks/workflows/:workflowId
+   *
+   * The workflowId is embedded in the URL — the external service configures
+   * this URL as their webhook endpoint. No JWT required.
+   *
+   * The workflow must have trigger_type = 'inbound_webhook' and be active.
+   */
+  @Post(':workflowId')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Receive inbound webhook for a workflow (no auth, URL-based)' })
+  @ApiResponse({ status: 200, description: '{ received: true, executionId }' })
+  @ApiResponse({ status: 404, description: 'Workflow not found or not an inbound webhook type' })
+  async receiveWebhook(
+    @Param('workflowId', ParseUUIDPipe) workflowId: string,
+    @Body() payload: any,
+    @Req() req: Request,
+  ) {
+    // Look up the workflow (service-role — no RLS)
+    const [workflow] = await this.dataSource.query(
+      `SELECT id, tenant_id, trigger_type, trigger_config, is_active
+       FROM public.workflows WHERE id = $1`,
+      [workflowId],
+    );
+
+    if (!workflow) {
+      throw new BadRequestException('Workflow not found');
+    }
+
+    if (workflow.trigger_type !== 'inbound_webhook') {
+      throw new BadRequestException('This workflow is not configured for inbound webhooks');
+    }
+
+    if (!workflow.is_active) {
+      this.logger.warn(`Inbound webhook received for inactive workflow ${workflowId}`);
+      return { received: true, message: 'Workflow is inactive', executionId: null };
+    }
+
+    // Optional: verify webhook secret if configured
+    const secret = workflow.trigger_config?.secret;
+    if (secret) {
+      const providedSecret = req.headers['x-webhook-secret'] as string;
+      if (providedSecret !== secret) {
+        throw new BadRequestException('Invalid webhook secret');
+      }
+    }
+
+    this.logger.log(`Inbound webhook received for workflow ${workflowId}`);
+
+    // Execute the workflow asynchronously
+    const execution = await this.workflowEngineService.executeWorkflow(
+      workflowId,
+      workflow.tenant_id,
+      undefined,
+      { source: 'inbound_webhook', payload, headers: req.headers },
+    );
+
+    return { received: true, executionId: execution?.executionId ?? null };
   }
 }

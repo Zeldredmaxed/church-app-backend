@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { WorkflowsController } from './workflows.controller';
+import { WorkflowsController, WorkflowWebhookController } from './workflows.controller';
 import { WorkflowsService } from './workflows.service';
 import { WorkflowEngineService } from './workflow-engine.service';
 import { EmailService } from '../communications/email.service';
@@ -8,7 +8,7 @@ import { OneSignalService } from '../notifications/onesignal.service';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 
 @Module({
-  controllers: [WorkflowsController],
+  controllers: [WorkflowsController, WorkflowWebhookController],
   providers: [
     WorkflowsService,
     WorkflowEngineService,

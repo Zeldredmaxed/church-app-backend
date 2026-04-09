@@ -48,6 +48,8 @@ export interface TierFeatures {
 
   // Workflows
   workflows: boolean;
+  maxWorkflows: number;     // -1 = unlimited
+  maxWorkflowNodes: number; // -1 = unlimited
 
   // Enterprise extras
   customBranding: boolean;
@@ -71,7 +73,9 @@ export const TIER_FEATURES: Record<TierName, TierFeatures> = {
     storageLimit: 10,
     transactionFeePercent: 1.0,
     aiAssistant: false,
-    workflows: false,
+    workflows: true,
+    maxWorkflows: 1,
+    maxWorkflowNodes: 5,
     customBranding: false,
     multiSite: false,
     apiAccess: false,
@@ -92,7 +96,9 @@ export const TIER_FEATURES: Record<TierName, TierFeatures> = {
     storageLimit: 100,
     transactionFeePercent: 0.5,
     aiAssistant: true,
-    workflows: false,
+    workflows: true,
+    maxWorkflows: 1,
+    maxWorkflowNodes: 5,
     customBranding: false,
     multiSite: false,
     apiAccess: false,
@@ -114,6 +120,8 @@ export const TIER_FEATURES: Record<TierName, TierFeatures> = {
     transactionFeePercent: 0,
     aiAssistant: true,
     workflows: true,
+    maxWorkflows: -1,
+    maxWorkflowNodes: -1,
     customBranding: true,
     multiSite: true,
     apiAccess: true,
