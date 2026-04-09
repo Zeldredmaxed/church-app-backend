@@ -93,6 +93,9 @@ import { MessageTemplate } from './communications/entities/message-template.enti
 import { SentMessage } from './communications/entities/sent-message.entity';
 import { ReportsModule } from './reports/reports.module';
 import { AssistantModule } from './assistant/assistant.module';
+import { MemberProfilesModule } from './member-profiles/member-profiles.module';
+import { MemberJourney } from './member-profiles/entities/member-journey.entity';
+import { MemberNote } from './member-profiles/entities/member-note.entity';
 
 @Module({
   imports: [
@@ -121,6 +124,7 @@ import { AssistantModule } from './assistant/assistant.module';
           Room, RoomBooking,
           Task, CareCase, CareNote,
           AudienceSegment, MessageTemplate, SentMessage,
+          MemberJourney, MemberNote,
         ],
 
         // CRITICAL: synchronize must ALWAYS be false.
@@ -236,6 +240,7 @@ import { AssistantModule } from './assistant/assistant.module';
     CommunicationsModule,
     ReportsModule,
     AssistantModule,
+    MemberProfilesModule,
 
     // GraphQL — Apollo Driver (code-first approach)
     // The FeedModule provides the FeedResolver which registers the globalFeed query.
