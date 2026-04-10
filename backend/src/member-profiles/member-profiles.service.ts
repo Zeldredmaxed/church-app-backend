@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { UpdateJourneyDto } from './dto/update-journey.dto';
 import { CreateNoteDto } from './dto/create-note.dto';
+import { FIELD_LIBRARY_MAP } from '../onboarding/onboarding-field-library';
 
 @Injectable()
 export class MemberProfilesService {
@@ -19,6 +20,8 @@ export class MemberProfilesService {
       activityTimeline,
       notes,
       badges,
+      onboarding,
+      family,
     ] = await Promise.all([
       this.getPersonalInfo(tenantId, memberId),
       this.getTags(tenantId, memberId),
@@ -28,6 +31,8 @@ export class MemberProfilesService {
       this.getActivityTimeline(tenantId, memberId),
       this.getNotes(tenantId, memberId),
       this.getBadges(tenantId, memberId),
+      this.getOnboardingResponses(tenantId, memberId),
+      this.getDirectFamily(tenantId, memberId),
     ]);
 
     if (!personalInfo) {
@@ -43,6 +48,8 @@ export class MemberProfilesService {
       activityTimeline,
       notes,
       badges,
+      onboarding,
+      family,
     };
   }
 
@@ -219,6 +226,58 @@ export class MemberProfilesService {
       awardedAt: r.awarded_at,
       awardedReason: r.awarded_reason,
     }));
+  }
+
+  private async getDirectFamily(tenantId: string, memberId: string) {
+    const rows = await this.dataSource.query(
+      `SELECT fc.id, fc.related_user_id, fc.relationship, fc.relationship_label, fc.is_inferred,
+              u.full_name, u.avatar_url
+       FROM public.family_connections fc
+       JOIN public.users u ON u.id = fc.related_user_id
+       WHERE fc.tenant_id = $1 AND fc.user_id = $2 AND fc.status = 'accepted'
+       ORDER BY fc.relationship, fc.relationship_label`,
+      [tenantId, memberId],
+    );
+
+    return rows.map((r: any) => ({
+      userId: r.related_user_id,
+      fullName: r.full_name,
+      avatarUrl: r.avatar_url,
+      relationship: r.relationship,
+      relationshipLabel: r.relationship_label,
+      isInferred: r.is_inferred,
+    }));
+  }
+
+  private async getOnboardingResponses(tenantId: string, memberId: string) {
+    const [row] = await this.dataSource.query(
+      `SELECT r.responses, r.submitted_at, f.fields AS form_fields, f.welcome_message
+       FROM public.onboarding_responses r
+       LEFT JOIN public.onboarding_forms f ON f.id = r.form_id
+       WHERE r.tenant_id = $1 AND r.user_id = $2`,
+      [tenantId, memberId],
+    );
+
+    if (!row) return null;
+
+    const rawResponses: Record<string, any> = row.responses ?? {};
+
+    // Resolve each answer with its field metadata so the frontend can render labels + types
+    const resolvedAnswers = Object.entries(rawResponses).map(([key, value]) => {
+      const libraryDef = FIELD_LIBRARY_MAP[key];
+      return {
+        key,
+        label: libraryDef?.label ?? key,
+        type: libraryDef?.type ?? 'text',
+        category: libraryDef?.category ?? 'custom',
+        value,
+      };
+    });
+
+    return {
+      submittedAt: row.submitted_at,
+      answers: resolvedAnswers,
+    };
   }
 
   async getNotes(tenantId: string, memberId: string) {

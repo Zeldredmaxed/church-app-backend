@@ -1,0 +1,562 @@
+import { Injectable, Logger, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
+import { DataSource } from 'typeorm';
+import {
+  Relationship,
+  ALL_RELATIONSHIPS,
+  INVERSE,
+  SPOUSE_PROPAGATION,
+  resolveLabel,
+} from './family-types';
+
+@Injectable()
+export class FamilyService {
+  private readonly logger = new Logger(FamilyService.name);
+
+  constructor(private readonly dataSource: DataSource) {}
+
+  // ────────────────────────────────────────────────────────
+  // POST /family/request
+  // ────────────────────────────────────────────────────────
+
+  async sendRequest(tenantId: string, requesterId: string, targetUserId: string, relationship: string) {
+    if (requesterId === targetUserId) {
+      throw new BadRequestException('Cannot add yourself as family');
+    }
+    if (!ALL_RELATIONSHIPS.includes(relationship as Relationship)) {
+      throw new BadRequestException('Invalid relationship');
+    }
+
+    // Check for existing connection or pending request between these two
+    const [existing] = await this.dataSource.query(
+      `SELECT id, status FROM public.family_connections
+       WHERE tenant_id = $1 AND user_id = $2 AND related_user_id = $3
+         AND status IN ('pending', 'accepted')
+       LIMIT 1`,
+      [tenantId, requesterId, targetUserId],
+    );
+    if (existing?.status === 'accepted') throw new ConflictException('Family connection already exists');
+    if (existing?.status === 'pending') throw new ConflictException('A pending request already exists');
+
+    // Resolve label using target's gender
+    const targetGender = await this.getUserGender(targetUserId);
+    const label = resolveLabel(relationship as Relationship, targetGender);
+
+    const [row] = await this.dataSource.query(
+      `INSERT INTO public.family_connections
+        (tenant_id, user_id, related_user_id, relationship, relationship_label, status, is_inferred)
+       VALUES ($1, $2, $3, $4, $5, 'pending', false)
+       RETURNING *`,
+      [tenantId, requesterId, targetUserId, relationship, label],
+    );
+
+    // Notification to target
+    const [requester] = await this.dataSource.query(
+      `SELECT full_name FROM public.users WHERE id = $1`, [requesterId],
+    );
+    const fromName = requester?.full_name || 'Someone';
+
+    await this.dataSource.query(
+      `INSERT INTO public.notifications (tenant_id, user_id, type, title, body, metadata)
+       VALUES ($1, $2, 'family_request', $3, $4, $5::jsonb)`,
+      [
+        tenantId, targetUserId,
+        'Family Connection Request',
+        `${fromName} wants to add you as their ${label}`,
+        JSON.stringify({ requestId: row.id, requesterId, relationship, actionUrl: '/family/requests' }),
+      ],
+    );
+
+    return this.mapRow(row);
+  }
+
+  // ────────────────────────────────────────────────────────
+  // GET /family/requests  (sent + received)
+  // ────────────────────────────────────────────────────────
+
+  async getRequests(tenantId: string, userId: string) {
+    const rows = await this.dataSource.query(
+      `SELECT fc.*,
+              u1.full_name AS user_name,     u1.avatar_url AS user_avatar,
+              u2.full_name AS related_name,   u2.avatar_url AS related_avatar
+       FROM public.family_connections fc
+       JOIN public.users u1 ON u1.id = fc.user_id
+       JOIN public.users u2 ON u2.id = fc.related_user_id
+       WHERE fc.tenant_id = $1
+         AND (fc.user_id = $2 OR fc.related_user_id = $2)
+         AND fc.status = 'pending' AND fc.is_inferred = false
+       ORDER BY fc.created_at DESC`,
+      [tenantId, userId],
+    );
+
+    return rows.map((r: any) => ({
+      id: r.id,
+      userId: r.user_id,
+      userName: r.user_name,
+      userAvatar: r.user_avatar,
+      relatedUserId: r.related_user_id,
+      relatedUserName: r.related_name,
+      relatedUserAvatar: r.related_avatar,
+      relationship: r.relationship,
+      relationshipLabel: r.relationship_label,
+      status: r.status,
+      direction: r.user_id === userId ? 'sent' : 'received',
+      createdAt: r.created_at,
+    }));
+  }
+
+  // ────────────────────────────────────────────────────────
+  // POST /family/requests/:id/accept
+  // ────────────────────────────────────────────────────────
+
+  async acceptRequest(tenantId: string, userId: string, requestId: string) {
+    const [req] = await this.dataSource.query(
+      `SELECT * FROM public.family_connections
+       WHERE id = $1 AND tenant_id = $2 AND related_user_id = $3 AND status = 'pending'`,
+      [requestId, tenantId, userId],
+    );
+    if (!req) throw new NotFoundException('Pending request not found');
+
+    const rel = req.relationship as Relationship;
+
+    // 1. Accept the forward row + set label (target gender may have been set after request)
+    const targetGender = await this.getUserGender(req.related_user_id);
+    const forwardLabel = resolveLabel(rel, targetGender);
+
+    await this.dataSource.query(
+      `UPDATE public.family_connections
+       SET status = 'accepted', accepted_at = now(), relationship_label = $2
+       WHERE id = $1`,
+      [requestId, forwardLabel],
+    );
+
+    // 2. Create reverse row (B → A)
+    const inverseRel = INVERSE[rel];
+    const requesterGender = await this.getUserGender(req.user_id);
+    const reverseLabel = resolveLabel(inverseRel, requesterGender);
+
+    await this.upsertInferred(
+      tenantId, req.related_user_id, req.user_id,
+      inverseRel, reverseLabel, requestId,
+    );
+
+    // 3. Run inference engine
+    await this.runInference(tenantId, req.user_id, req.related_user_id, rel, requestId);
+
+    // 4. Notify requester of acceptance
+    const [target] = await this.dataSource.query(
+      `SELECT full_name FROM public.users WHERE id = $1`, [req.related_user_id],
+    );
+    const targetName = target?.full_name || 'Someone';
+
+    await this.dataSource.query(
+      `INSERT INTO public.notifications (tenant_id, user_id, type, title, body, metadata)
+       VALUES ($1, $2, 'family_accepted', $3, $4, $5::jsonb)`,
+      [
+        tenantId, req.user_id,
+        'Family Connection Accepted',
+        `${targetName} accepted your family request (${forwardLabel})`,
+        JSON.stringify({ connectionId: requestId, relationship: rel }),
+      ],
+    );
+
+    return { status: 'accepted' };
+  }
+
+  // ────────────────────────────────────────────────────────
+  // POST /family/requests/:id/decline
+  // ────────────────────────────────────────────────────────
+
+  async declineRequest(tenantId: string, userId: string, requestId: string) {
+    const result = await this.dataSource.query(
+      `UPDATE public.family_connections
+       SET status = 'declined'
+       WHERE id = $1 AND tenant_id = $2 AND related_user_id = $3 AND status = 'pending'
+       RETURNING id`,
+      [requestId, tenantId, userId],
+    );
+    if (result.length === 0) throw new NotFoundException('Pending request not found');
+    return { status: 'declined' };
+  }
+
+  // ────────────────────────────────────────────────────────
+  // GET /family/:userId  (flat list)
+  // ────────────────────────────────────────────────────────
+
+  async getFlatFamily(tenantId: string, userId: string) {
+    const rows = await this.dataSource.query(
+      `SELECT fc.*, u.full_name, u.avatar_url, u.email
+       FROM public.family_connections fc
+       JOIN public.users u ON u.id = fc.related_user_id
+       WHERE fc.tenant_id = $1 AND fc.user_id = $2 AND fc.status = 'accepted'
+       ORDER BY fc.relationship, fc.relationship_label`,
+      [tenantId, userId],
+    );
+
+    return rows.map((r: any) => ({
+      userId: r.related_user_id,
+      fullName: r.full_name,
+      avatarUrl: r.avatar_url,
+      relationship: r.relationship,
+      relationshipLabel: r.relationship_label,
+      status: r.status,
+      isInferred: r.is_inferred,
+    }));
+  }
+
+  // ────────────────────────────────────────────────────────
+  // GET /family/:userId/tree  (structured)
+  // ────────────────────────────────────────────────────────
+
+  async getFamilyTree(tenantId: string, userId: string) {
+    // Get the root user info + gender
+    const [rootRow] = await this.dataSource.query(
+      `SELECT id, full_name, avatar_url FROM public.users WHERE id = $1`,
+      [userId],
+    );
+    const rootGender = await this.getUserGender(userId);
+
+    // Get all accepted connections from this user
+    const rows = await this.dataSource.query(
+      `SELECT fc.*, u.full_name, u.avatar_url
+       FROM public.family_connections fc
+       JOIN public.users u ON u.id = fc.related_user_id
+       WHERE fc.tenant_id = $1 AND fc.user_id = $2 AND fc.status = 'accepted'
+       ORDER BY fc.relationship, fc.relationship_label`,
+      [tenantId, userId],
+    );
+
+    const mapMember = (r: any) => ({
+      userId: r.related_user_id,
+      fullName: r.full_name,
+      avatarUrl: r.avatar_url,
+      relationship: r.relationship,
+      relationshipLabel: r.relationship_label,
+      status: r.status,
+      isInferred: r.is_inferred,
+    });
+
+    // Group by relationship category
+    const byRel: Record<string, any[]> = {};
+    for (const r of rows) {
+      if (!byRel[r.relationship]) byRel[r.relationship] = [];
+      byRel[r.relationship].push(mapMember(r));
+    }
+
+    return {
+      rootUser: {
+        userId: rootRow?.id || userId,
+        fullName: rootRow?.full_name || null,
+        avatarUrl: rootRow?.avatar_url || null,
+        gender: rootGender?.toLowerCase() || null,
+      },
+      spouse: (byRel['spouse'] || [])[0] || null,
+      children: byRel['child'] || [],
+      parents: [
+        ...(byRel['parent'] || []),
+        ...(byRel['parent_in_law'] || []),
+      ],
+      siblings: [
+        ...(byRel['sibling'] || []),
+        ...(byRel['sibling_in_law'] || []),
+      ],
+      grandparents: [
+        ...(byRel['grandparent'] || []),
+      ],
+      grandchildren: [
+        ...(byRel['grandchild'] || []),
+      ],
+      extended: [
+        ...(byRel['uncle_aunt'] || []),
+        ...(byRel['nephew_niece'] || []),
+        ...(byRel['cousin'] || []),
+        ...(byRel['cousin_in_law'] || []),
+        ...(byRel['child_in_law'] || []),
+      ],
+    };
+  }
+
+  // ────────────────────────────────────────────────────────
+  // DELETE /family/:userId/:familyMemberId
+  // ────────────────────────────────────────────────────────
+
+  async removeConnection(tenantId: string, userId: string, familyMemberId: string) {
+    // Find the forward row
+    const [fwd] = await this.dataSource.query(
+      `SELECT id FROM public.family_connections
+       WHERE tenant_id = $1 AND user_id = $2 AND related_user_id = $3 AND status = 'accepted'`,
+      [tenantId, userId, familyMemberId],
+    );
+    if (!fwd) throw new NotFoundException('Connection not found');
+
+    // Find the reverse row
+    const [rev] = await this.dataSource.query(
+      `SELECT id FROM public.family_connections
+       WHERE tenant_id = $1 AND user_id = $2 AND related_user_id = $3 AND status = 'accepted'`,
+      [tenantId, familyMemberId, userId],
+    );
+
+    // Cascade: delete all inferred rows triggered by either direction
+    await this.cascadeDelete(fwd.id, tenantId);
+    if (rev) await this.cascadeDelete(rev.id, tenantId);
+
+    // Delete both directions
+    await this.dataSource.query(
+      `DELETE FROM public.family_connections
+       WHERE tenant_id = $1 AND (
+         (user_id = $2 AND related_user_id = $3) OR
+         (user_id = $3 AND related_user_id = $2)
+       )`,
+      [tenantId, userId, familyMemberId],
+    );
+  }
+
+  // ════════════════════════════════════════════════════════
+  //  INFERENCE ENGINE
+  // ═══════════════════════════════════════════════════════��
+
+  /**
+   * Runs all 5 inference rules after a connection is accepted.
+   * @param A  user_id of the original request (the person who initiated)
+   * @param B  related_user_id (the person who accepted)
+   * @param rel  the relationship A→B
+   * @param sourceId  the connection ID that triggered inference
+   */
+  private async runInference(
+    tenantId: string, A: string, B: string,
+    rel: Relationship, sourceId: string,
+  ) {
+    // ─── Rule 1: Spouse + Child = Both Parents' Child ───
+    if (rel === 'spouse') {
+      // A's existing children → also become B's children
+      await this.propagateChildrenToSpouse(tenantId, A, B, sourceId);
+      // B's existing children → also become A's children
+      await this.propagateChildrenToSpouse(tenantId, B, A, sourceId);
+    }
+
+    // ─── Rule 2: Spouse + Parent = In-Law ───
+    if (rel === 'spouse') {
+      await this.propagateRelationshipsToSpouse(tenantId, A, B, sourceId);
+      await this.propagateRelationshipsToSpouse(tenantId, B, A, sourceId);
+    }
+
+    // Rules 1–4 also apply when the NEW connection is a non-spouse type
+    // and one party already has a spouse.
+    if (rel !== 'spouse') {
+      // A added B as <rel>. If A has a spouse S, propagate B→S.
+      await this.propagateSingleToSpouse(tenantId, A, B, rel, sourceId);
+    }
+
+    // ─── Rule 5: Parent + Existing Children = Siblings ───
+    if (rel === 'parent') {
+      // A set B as parent. B already has other children → they're A's siblings.
+      await this.inferSiblingsFromParent(tenantId, A, B, sourceId);
+    }
+    if (rel === 'child') {
+      // A set B as child. A already has other children → they're B's siblings.
+      await this.inferSiblingsFromExistingChildren(tenantId, A, B, sourceId);
+    }
+  }
+
+  /** Rule 1: When A↔B become spouses, A's children become B's children too */
+  private async propagateChildrenToSpouse(
+    tenantId: string, owner: string, spouse: string, sourceId: string,
+  ) {
+    const children = await this.dataSource.query(
+      `SELECT related_user_id FROM public.family_connections
+       WHERE tenant_id = $1 AND user_id = $2 AND relationship = 'child' AND status = 'accepted'`,
+      [tenantId, owner],
+    );
+
+    for (const c of children) {
+      if (c.related_user_id === spouse) continue;
+      const childGender = await this.getUserGender(c.related_user_id);
+      const spouseGender = await this.getUserGender(spouse);
+
+      // spouse → child
+      await this.upsertInferred(
+        tenantId, spouse, c.related_user_id,
+        'child', resolveLabel('child', childGender), sourceId,
+      );
+      // child → spouse (as parent)
+      await this.upsertInferred(
+        tenantId, c.related_user_id, spouse,
+        'parent', resolveLabel('parent', spouseGender), sourceId,
+      );
+    }
+  }
+
+  /** Rules 2–4: When A↔B become spouses, propagate A's parents/siblings/cousins as B's in-laws */
+  private async propagateRelationshipsToSpouse(
+    tenantId: string, owner: string, spouse: string, sourceId: string,
+  ) {
+    const rels = await this.dataSource.query(
+      `SELECT related_user_id, relationship FROM public.family_connections
+       WHERE tenant_id = $1 AND user_id = $2 AND status = 'accepted'
+         AND relationship IN ('parent', 'sibling', 'cousin')`,
+      [tenantId, owner],
+    );
+
+    for (const r of rels) {
+      if (r.related_user_id === spouse) continue;
+      const propagated = SPOUSE_PROPAGATION[r.relationship as Relationship];
+      if (!propagated) continue;
+
+      const relatedGender = await this.getUserGender(r.related_user_id);
+      const spouseGender = await this.getUserGender(spouse);
+      const inverseOfPropagated = INVERSE[propagated];
+
+      // spouse → related (in-law version)
+      await this.upsertInferred(
+        tenantId, spouse, r.related_user_id,
+        propagated, resolveLabel(propagated, relatedGender), sourceId,
+      );
+      // related ��� spouse (inverse in-law)
+      await this.upsertInferred(
+        tenantId, r.related_user_id, spouse,
+        inverseOfPropagated, resolveLabel(inverseOfPropagated, spouseGender), sourceId,
+      );
+    }
+  }
+
+  /** When A adds B as a non-spouse, and A has spouse S, propagate to S */
+  private async propagateSingleToSpouse(
+    tenantId: string, A: string, B: string,
+    rel: Relationship, sourceId: string,
+  ) {
+    const [spouseRow] = await this.dataSource.query(
+      `SELECT related_user_id FROM public.family_connections
+       WHERE tenant_id = $1 AND user_id = $2 AND relationship = 'spouse' AND status = 'accepted'
+       LIMIT 1`,
+      [tenantId, A],
+    );
+    if (!spouseRow) return;
+    const S = spouseRow.related_user_id;
+    if (S === B) return;
+
+    const propagated = SPOUSE_PROPAGATION[rel];
+    if (!propagated) return;
+
+    const bGender = await this.getUserGender(B);
+    const sGender = await this.getUserGender(S);
+    const inversePropagated = INVERSE[propagated];
+
+    // S → B
+    await this.upsertInferred(
+      tenantId, S, B,
+      propagated, resolveLabel(propagated, bGender), sourceId,
+    );
+    // B → S
+    await this.upsertInferred(
+      tenantId, B, S,
+      inversePropagated, resolveLabel(inversePropagated, sGender), sourceId,
+    );
+  }
+
+  /** Rule 5: A sets B as parent. B's other children become A's siblings. */
+  private async inferSiblingsFromParent(
+    tenantId: string, A: string, parentB: string, sourceId: string,
+  ) {
+    // Find B's other children (excluding A)
+    const siblings = await this.dataSource.query(
+      `SELECT related_user_id FROM public.family_connections
+       WHERE tenant_id = $1 AND user_id = $2 AND relationship = 'child' AND status = 'accepted'
+         AND related_user_id != $3`,
+      [tenantId, parentB, A],
+    );
+
+    for (const s of siblings) {
+      const sibGender = await this.getUserGender(s.related_user_id);
+      const aGender = await this.getUserGender(A);
+
+      // A → sibling
+      await this.upsertInferred(
+        tenantId, A, s.related_user_id,
+        'sibling', resolveLabel('sibling', sibGender), sourceId,
+      );
+      // sibling → A
+      await this.upsertInferred(
+        tenantId, s.related_user_id, A,
+        'sibling', resolveLabel('sibling', aGender), sourceId,
+      );
+    }
+  }
+
+  /** Rule 5 reverse: A sets B as child. A's other children become B's siblings. */
+  private async inferSiblingsFromExistingChildren(
+    tenantId: string, parentA: string, childB: string, sourceId: string,
+  ) {
+    const otherChildren = await this.dataSource.query(
+      `SELECT related_user_id FROM public.family_connections
+       WHERE tenant_id = $1 AND user_id = $2 AND relationship = 'child' AND status = 'accepted'
+         AND related_user_id != $3`,
+      [tenantId, parentA, childB],
+    );
+
+    for (const c of otherChildren) {
+      const cGender = await this.getUserGender(c.related_user_id);
+      const bGender = await this.getUserGender(childB);
+
+      await this.upsertInferred(
+        tenantId, childB, c.related_user_id,
+        'sibling', resolveLabel('sibling', cGender), sourceId,
+      );
+      await this.upsertInferred(
+        tenantId, c.related_user_id, childB,
+        'sibling', resolveLabel('sibling', bGender), sourceId,
+      );
+    }
+  }
+
+  // ════════════════════════════════════════════════════════
+  //  HELPERS
+  // ═══════════════════════════════════════════════════��════
+
+  private async upsertInferred(
+    tenantId: string, userId: string, relatedUserId: string,
+    relationship: string, label: string, inferredVia: string,
+  ) {
+    await this.dataSource.query(
+      `INSERT INTO public.family_connections
+        (tenant_id, user_id, related_user_id, relationship, relationship_label,
+         status, is_inferred, inferred_via, accepted_at)
+       VALUES ($1, $2, $3, $4, $5, 'accepted', true, $6, now())
+       ON CONFLICT (tenant_id, user_id, related_user_id, relationship) DO NOTHING`,
+      [tenantId, userId, relatedUserId, relationship, label, inferredVia],
+    );
+  }
+
+  private async cascadeDelete(sourceId: string, tenantId: string) {
+    const derived = await this.dataSource.query(
+      `SELECT id FROM public.family_connections WHERE inferred_via = $1 AND tenant_id = $2`,
+      [sourceId, tenantId],
+    );
+    for (const d of derived) {
+      await this.cascadeDelete(d.id, tenantId);
+      await this.dataSource.query(`DELETE FROM public.family_connections WHERE id = $1`, [d.id]);
+    }
+  }
+
+  async getUserGender(userId: string): Promise<string | null> {
+    // Try onboarding responses
+    const [resp] = await this.dataSource.query(
+      `SELECT responses->>'gender' AS gender FROM public.onboarding_responses WHERE user_id = $1 LIMIT 1`,
+      [userId],
+    );
+    if (resp?.gender) return resp.gender;
+    return null;
+  }
+
+  private mapRow(r: any) {
+    return {
+      id: r.id,
+      userId: r.user_id,
+      relatedUserId: r.related_user_id,
+      relationship: r.relationship,
+      relationshipLabel: r.relationship_label,
+      status: r.status,
+      isInferred: r.is_inferred,
+      createdAt: r.created_at,
+      acceptedAt: r.accepted_at,
+    };
+  }
+}
