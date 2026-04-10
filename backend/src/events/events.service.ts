@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { DataSource } from 'typeorm';
 import { rlsStorage } from '../common/storage/rls.storage';
 import { Event } from './entities/event.entity';
 import { EventRsvp } from './entities/event-rsvp.entity';
@@ -6,6 +7,8 @@ import { CreateEventDto } from './dto/create-event.dto';
 
 @Injectable()
 export class EventsService {
+  constructor(private readonly dataSource: DataSource) {}
+
   private getRlsContext() {
     const ctx = rlsStorage.getStore();
     if (!ctx) throw new InternalServerErrorException('RLS context unavailable');
@@ -156,5 +159,52 @@ export class EventsService {
       attendeeCount: Number(r.attendee_count ?? 0),
       createdAt: r.created_at,
     };
+  }
+
+  /**
+   * Generate an iCal feed for all upcoming events in a tenant.
+   * Public — no auth required (used for calendar subscription URLs).
+   */
+  async getICalFeed(tenantId: string): Promise<string> {
+    const [tenant] = await this.dataSource.query(
+      `SELECT name FROM public.tenants WHERE id = $1`, [tenantId],
+    );
+    const churchName = tenant?.name ?? 'Church';
+
+    const events = await this.dataSource.query(
+      `SELECT title, description, start_at, end_at, location
+       FROM public.events
+       WHERE tenant_id = $1 AND start_at >= now() - interval '30 days'
+       ORDER BY start_at ASC LIMIT 100`,
+      [tenantId],
+    );
+
+    const lines = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      `PRODID:-//Shepard//${churchName}//EN`,
+      `X-WR-CALNAME:${churchName} Events`,
+      'CALSCALE:GREGORIAN',
+      'METHOD:PUBLISH',
+    ];
+
+    for (const e of events) {
+      const uid = Buffer.from(e.title + e.start_at).toString('base64').substring(0, 20);
+      const dtStart = new Date(e.start_at).toISOString().replace(/[-:]/g, '').replace('.000Z', 'Z');
+      const dtEnd = new Date(e.end_at).toISOString().replace(/[-:]/g, '').replace('.000Z', 'Z');
+      lines.push(
+        'BEGIN:VEVENT',
+        `UID:${uid}@shepard.app`,
+        `DTSTART:${dtStart}`,
+        `DTEND:${dtEnd}`,
+        `SUMMARY:${(e.title || '').replace(/[,;\\]/g, '')}`,
+        `DESCRIPTION:${(e.description || '').replace(/\n/g, '\\n').replace(/[,;\\]/g, '')}`,
+        `LOCATION:${(e.location || '').replace(/[,;\\]/g, '')}`,
+        'END:VEVENT',
+      );
+    }
+
+    lines.push('END:VCALENDAR');
+    return lines.join('\r\n');
   }
 }

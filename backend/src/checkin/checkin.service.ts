@@ -161,4 +161,168 @@ export class CheckinService {
       checkedInAt: rows[0].checked_in_at,
     };
   }
+
+  // ─── CHILD CHECK-IN SAFETY ───
+
+  /**
+   * Check in a child with guardian linking and security code generation.
+   * Generates a 4-digit security code for pickup verification.
+   */
+  async checkInChild(tenantId: string, dto: {
+    childId?: string;
+    childName?: string;
+    guardianId: string;
+    serviceId?: string;
+  }) {
+    // Generate a random 4-digit security code
+    const securityCode = String(Math.floor(1000 + Math.random() * 9000));
+
+    const [row] = await this.dataSource.query(
+      `INSERT INTO public.check_ins
+        (tenant_id, user_id, service_id, guardian_id, security_code, child_name, check_in_type)
+       VALUES ($1, $2, $3, $4, $5, $6, 'manual')
+       RETURNING id, checked_in_at, security_code`,
+      [
+        tenantId,
+        dto.childId ?? null,
+        dto.serviceId ?? null,
+        dto.guardianId,
+        securityCode,
+        dto.childName ?? null,
+      ],
+    );
+
+    // Get medical alerts for the child (if they have a user account)
+    let medicalAlerts: any[] = [];
+    if (dto.childId) {
+      medicalAlerts = await this.dataSource.query(
+        `SELECT id, alert_type, description, severity
+         FROM public.member_medical_alerts
+         WHERE tenant_id = $1 AND user_id = $2
+         ORDER BY severity DESC`,
+        [tenantId, dto.childId],
+      );
+    }
+
+    return {
+      checkInId: row.id,
+      securityCode: row.security_code,
+      checkedInAt: row.checked_in_at,
+      childName: dto.childName,
+      childId: dto.childId,
+      guardianId: dto.guardianId,
+      medicalAlerts: medicalAlerts.map((a: any) => ({
+        id: a.id,
+        type: a.alert_type,
+        description: a.description,
+        severity: a.severity,
+      })),
+      labelData: {
+        childName: dto.childName,
+        securityCode: row.security_code,
+        serviceName: null, // frontend can resolve from serviceId
+        checkedInAt: row.checked_in_at,
+        hasAlerts: medicalAlerts.length > 0,
+        alertCount: medicalAlerts.length,
+      },
+    };
+  }
+
+  /**
+   * Verify a pickup security code.
+   */
+  async verifyPickupCode(tenantId: string, securityCode: string) {
+    const rows = await this.dataSource.query(
+      `SELECT ci.id, ci.user_id, ci.guardian_id, ci.child_name, ci.checked_in_at,
+              g.full_name AS guardian_name,
+              c.full_name AS child_full_name
+       FROM public.check_ins ci
+       LEFT JOIN public.users g ON g.id = ci.guardian_id
+       LEFT JOIN public.users c ON c.id = ci.user_id
+       WHERE ci.tenant_id = $1 AND ci.security_code = $2
+         AND ci.checked_in_at >= CURRENT_DATE
+       ORDER BY ci.checked_in_at DESC LIMIT 1`,
+      [tenantId, securityCode],
+    );
+
+    if (rows.length === 0) {
+      return { valid: false, message: 'Invalid security code or no check-in found for today' };
+    }
+
+    const r = rows[0];
+
+    // Get authorized pickups
+    const pickups = r.user_id ? await this.dataSource.query(
+      `SELECT pickup_name, relationship FROM public.authorized_pickups
+       WHERE tenant_id = $1 AND child_id = $2`,
+      [tenantId, r.user_id],
+    ) : [];
+
+    return {
+      valid: true,
+      childName: r.child_name || r.child_full_name,
+      guardianName: r.guardian_name,
+      checkedInAt: r.checked_in_at,
+      authorizedPickups: [
+        { name: r.guardian_name, relationship: 'Guardian (checked in)' },
+        ...pickups.map((p: any) => ({ name: p.pickup_name, relationship: p.relationship })),
+      ],
+    };
+  }
+
+  /**
+   * Get medical alerts for a member.
+   */
+  async getMedicalAlerts(tenantId: string, userId: string) {
+    const rows = await this.dataSource.query(
+      `SELECT id, alert_type, description, severity, created_at
+       FROM public.member_medical_alerts
+       WHERE tenant_id = $1 AND user_id = $2
+       ORDER BY severity DESC, created_at DESC`,
+      [tenantId, userId],
+    );
+
+    return rows.map((r: any) => ({
+      id: r.id,
+      type: r.alert_type,
+      description: r.description,
+      severity: r.severity,
+      createdAt: r.created_at,
+    }));
+  }
+
+  /**
+   * Add a medical alert for a member.
+   */
+  async addMedicalAlert(tenantId: string, userId: string, dto: {
+    alertType: string;
+    description: string;
+    severity?: string;
+  }, createdBy: string) {
+    const [row] = await this.dataSource.query(
+      `INSERT INTO public.member_medical_alerts (tenant_id, user_id, alert_type, description, severity, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [tenantId, userId, dto.alertType, dto.description, dto.severity ?? 'medium', createdBy],
+    );
+
+    return {
+      id: row.id,
+      type: row.alert_type,
+      description: row.description,
+      severity: row.severity,
+      createdAt: row.created_at,
+    };
+  }
+
+  /**
+   * Delete a medical alert.
+   */
+  async deleteMedicalAlert(tenantId: string, alertId: string) {
+    const rows = await this.dataSource.query(
+      `DELETE FROM public.member_medical_alerts WHERE id = $1 AND tenant_id = $2 RETURNING id`,
+      [alertId, tenantId],
+    );
+    if (rows.length === 0) throw new BadRequestException('Alert not found');
+  }
 }

@@ -10,6 +10,7 @@ import { Tenant } from '../tenants/entities/tenant.entity';
 import { Transaction } from './entities/transaction.entity';
 import { DonateDto } from './dto/donate.dto';
 import { CreateFundDto } from './dto/create-fund.dto';
+import { CreateBatchDto } from './dto/create-batch.dto';
 import { getTierFeatures } from '../common/config/tier-features.config';
 
 @Injectable()
@@ -282,5 +283,143 @@ export class GivingService {
     const nextCursor = hasMore ? transactions[transactions.length - 1].id : null;
 
     return { transactions, nextCursor };
+  }
+
+  // ─── BATCH ENTRY (Cash/Check) ───
+
+  /**
+   * Record a batch of offline donations (cash/check envelopes).
+   * Creates a batch header + individual transactions.
+   */
+  async createBatch(tenantId: string, userId: string, dto: CreateBatchDto) {
+    const totalAmount = dto.items.reduce((sum, item) => sum + item.amount, 0);
+
+    // Create batch header
+    const [batch] = await this.dataSource.query(
+      `INSERT INTO public.giving_batches (tenant_id, created_by, name, total_amount, item_count, status, committed_at)
+       VALUES ($1, $2, $3, $4, $5, 'committed', now())
+       RETURNING *`,
+      [tenantId, userId, dto.name ?? `Batch ${new Date().toLocaleDateString()}`, totalAmount, dto.items.length],
+    );
+
+    // Insert each donation as a transaction
+    for (const item of dto.items) {
+      const donationDate = item.date ? new Date(item.date) : new Date();
+      await this.dataSource.query(
+        `INSERT INTO public.transactions
+          (tenant_id, user_id, amount, currency, stripe_payment_intent_id, status, payment_method, check_number, batch_id, notes, fund_id, created_at)
+         VALUES ($1, $2, $3, 'usd', $4, 'succeeded', $5, $6, $7, $8, $9, $10)`,
+        [
+          tenantId,
+          item.donorId ?? null,
+          item.amount,
+          `offline_${item.method}_${batch.id}_${Math.random().toString(36).substring(7)}`,
+          item.method,
+          item.checkNumber ?? null,
+          batch.id,
+          item.notes ?? null,
+          item.fundId ?? null,
+          donationDate.toISOString(),
+        ],
+      );
+    }
+
+    this.logger.log(`Batch created: ${batch.id} — ${dto.items.length} items, $${totalAmount}`);
+
+    return {
+      batchId: batch.id,
+      name: batch.name,
+      totalAmount,
+      itemCount: dto.items.length,
+      status: 'committed',
+      createdAt: batch.created_at,
+    };
+  }
+
+  /**
+   * List past batches for audit trail.
+   */
+  async getBatches(tenantId: string) {
+    const rows = await this.dataSource.query(
+      `SELECT gb.*, u.full_name AS created_by_name
+       FROM public.giving_batches gb
+       JOIN public.users u ON u.id = gb.created_by
+       WHERE gb.tenant_id = $1
+       ORDER BY gb.created_at DESC`,
+      [tenantId],
+    );
+
+    return {
+      batches: rows.map((r: any) => ({
+        id: r.id,
+        name: r.name,
+        totalAmount: Number(r.total_amount),
+        itemCount: r.item_count,
+        status: r.status,
+        createdByName: r.created_by_name,
+        committedAt: r.committed_at,
+        createdAt: r.created_at,
+      })),
+    };
+  }
+
+  // ─── GIVING STATEMENTS ───
+
+  /**
+   * Generate a giving statement for a donor (for a specific year).
+   * Returns structured data — the frontend renders/prints as PDF.
+   */
+  async getGivingStatement(tenantId: string, donorUserId: string, year: number) {
+    // Get church info
+    const [tenant] = await this.dataSource.query(
+      `SELECT name FROM public.tenants WHERE id = $1`, [tenantId],
+    );
+
+    // Get donor info
+    const [donor] = await this.dataSource.query(
+      `SELECT full_name, email FROM public.users WHERE id = $1`, [donorUserId],
+    );
+
+    if (!donor) throw new BadRequestException('Donor not found');
+
+    // Get all succeeded donations for this donor in the given year
+    const donations = await this.dataSource.query(
+      `SELECT t.amount, t.currency, t.payment_method, t.created_at,
+              COALESCE(gf.name, 'General Fund') AS fund_name
+       FROM public.transactions t
+       LEFT JOIN public.giving_funds gf ON gf.id = t.fund_id
+       WHERE t.tenant_id = $1 AND t.user_id = $2 AND t.status = 'succeeded'
+         AND EXTRACT(year FROM t.created_at) = $3
+       ORDER BY t.created_at ASC`,
+      [tenantId, donorUserId, year],
+    );
+
+    const totalAmount = donations.reduce((sum: number, d: any) => sum + Number(d.amount), 0);
+
+    // Group by fund
+    const byFund: Record<string, number> = {};
+    for (const d of donations) {
+      byFund[d.fund_name] = (byFund[d.fund_name] ?? 0) + Number(d.amount);
+    }
+
+    return {
+      churchName: tenant?.name ?? 'Church',
+      year,
+      donor: {
+        fullName: donor.full_name,
+        email: donor.email,
+      },
+      donations: donations.map((d: any) => ({
+        date: d.created_at,
+        amount: Number(d.amount),
+        currency: d.currency,
+        fundName: d.fund_name,
+        method: d.payment_method,
+      })),
+      totalAmount,
+      donationCount: donations.length,
+      byFund: Object.entries(byFund).map(([fund, total]) => ({ fund, total })),
+      taxStatement: `No goods or services were provided in exchange for these contributions. ${tenant?.name ?? 'This church'} is a tax-exempt organization under Section 501(c)(3) of the Internal Revenue Code. Your contributions are tax-deductible to the extent allowed by law.`,
+    };
   }
 }

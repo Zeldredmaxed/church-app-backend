@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, Query, ParseUUIDPipe, UseGuards, UseInterceptors, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, Res, ParseUUIDPipe, UseGuards, UseInterceptors, HttpCode, HttpStatus } from '@nestjs/common';
+import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { EventsService } from './events.service';
 import { CreateEventDto } from './dto/create-event.dto';
@@ -62,5 +63,19 @@ export class EventsController {
   @ApiOperation({ summary: 'List event attendees' })
   getAttendees(@Param('id', ParseUUIDPipe) id: string, @Query('limit') limit?: string, @Query('cursor') cursor?: string) {
     return this.eventsService.getAttendees(id, Math.min(parseInt(limit ?? '20', 10) || 20, 100), cursor);
+  }
+
+  @Get('ical/:tenantId')
+  @ApiOperation({ summary: 'Public iCal feed for calendar subscription (no auth)' })
+  async getICalFeed(
+    @Param('tenantId', ParseUUIDPipe) tenantId: string,
+    @Res() res: Response,
+  ) {
+    const ical = await this.eventsService.getICalFeed(tenantId);
+    res.set({
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="events.ics"',
+    });
+    res.send(ical);
   }
 }

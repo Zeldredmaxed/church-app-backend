@@ -10,11 +10,14 @@ import {
   UseInterceptors,
   HttpCode,
   HttpStatus,
+  BadRequestException,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { GivingService } from './giving.service';
 import { DonateDto } from './dto/donate.dto';
 import { CreateFundDto } from './dto/create-fund.dto';
+import { CreateBatchDto } from './dto/create-batch.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
@@ -35,7 +38,7 @@ export class GivingController {
   @ApiResponse({ status: 200, description: 'Giving KPIs: totalGiving, thisMonth, pendingCount, uniqueDonors' })
   getGivingKpis(@CurrentUser() user: SupabaseJwtPayload) {
     const tenantId = user.app_metadata?.current_tenant_id;
-    if (!tenantId) throw new Error('No active tenant context');
+    if (!tenantId) throw new BadRequestException('No tenant context');
     return this.givingService.getGivingKpis(tenantId);
   }
 
@@ -44,7 +47,7 @@ export class GivingController {
   @ApiResponse({ status: 200, description: 'Array of donor profiles' })
   getDonors(@CurrentUser() user: SupabaseJwtPayload) {
     const tenantId = user.app_metadata?.current_tenant_id;
-    if (!tenantId) throw new Error('No active tenant context');
+    if (!tenantId) throw new BadRequestException('No tenant context');
     return this.givingService.getDonors(tenantId);
   }
 
@@ -53,7 +56,7 @@ export class GivingController {
   @ApiResponse({ status: 200, description: 'Array of giving funds' })
   getFunds(@CurrentUser() user: SupabaseJwtPayload) {
     const tenantId = user.app_metadata?.current_tenant_id;
-    if (!tenantId) throw new Error('No active tenant context');
+    if (!tenantId) throw new BadRequestException('No tenant context');
     return this.givingService.getFunds(tenantId);
   }
 
@@ -66,7 +69,7 @@ export class GivingController {
     @Body() dto: CreateFundDto,
   ) {
     const tenantId = user.app_metadata?.current_tenant_id;
-    if (!tenantId) throw new Error('No active tenant context');
+    if (!tenantId) throw new BadRequestException('No tenant context');
     return this.givingService.createFund(tenantId, dto);
   }
 
@@ -106,5 +109,45 @@ export class GivingController {
   ) {
     const parsedLimit = Math.min(Math.max(parseInt(limit ?? '20', 10) || 20, 1), 100);
     return this.givingService.getTenantTransactions(tenantId, cursor, parsedLimit);
+  }
+
+  // ─── Batch Entry (Cash/Check) ───
+
+  @Post('giving/batch')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Record a batch of offline donations (cash/check)' })
+  @ApiResponse({ status: 201, description: 'Batch created with all transactions' })
+  createBatch(
+    @CurrentUser() user: SupabaseJwtPayload,
+    @Body() dto: CreateBatchDto,
+  ) {
+    const tenantId = user.app_metadata?.current_tenant_id;
+    if (!tenantId) throw new BadRequestException('No tenant context');
+    return this.givingService.createBatch(tenantId, user.sub, dto);
+  }
+
+  @Get('giving/batches')
+  @ApiOperation({ summary: 'List past giving batches for audit trail' })
+  @ApiResponse({ status: 200, description: 'Array of batch summaries' })
+  getBatches(@CurrentUser() user: SupabaseJwtPayload) {
+    const tenantId = user.app_metadata?.current_tenant_id;
+    if (!tenantId) throw new BadRequestException('No tenant context');
+    return this.givingService.getBatches(tenantId);
+  }
+
+  // ─── Giving Statements ───
+
+  @Get('giving/statements/:userId')
+  @ApiOperation({ summary: 'Generate giving statement for a donor (tax purposes)' })
+  @ApiResponse({ status: 200, description: 'Structured statement data for PDF rendering' })
+  getGivingStatement(
+    @Param('userId', ParseUUIDPipe) donorUserId: string,
+    @Query('year') year: string,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    const tenantId = user.app_metadata?.current_tenant_id;
+    if (!tenantId) throw new BadRequestException('No tenant context');
+    const parsedYear = parseInt(year, 10) || new Date().getFullYear();
+    return this.givingService.getGivingStatement(tenantId, donorUserId, parsedYear);
   }
 }

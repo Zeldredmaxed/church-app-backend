@@ -500,6 +500,73 @@ export class MembershipsService {
     }
     return context;
   }
+
+  /**
+   * Bulk import members from a parsed CSV array.
+   * Creates auth.users stubs + public.users + memberships.
+   * Skips rows where the email already exists.
+   */
+  async importMembers(tenantId: string, importedBy: string, members: Array<{ email: string; fullName?: string; phone?: string; role?: string }>) {
+    let created = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+
+    for (const m of members) {
+      if (!m.email || !m.email.includes('@')) {
+        errors.push(`Invalid email: ${m.email}`);
+        skipped++;
+        continue;
+      }
+
+      try {
+        // Check if user already exists
+        const [existing] = await this.dataSource.query(
+          `SELECT id FROM public.users WHERE email = $1`, [m.email.toLowerCase().trim()],
+        );
+
+        let userId: string;
+
+        if (existing) {
+          userId = existing.id;
+        } else {
+          // Create auth.users stub
+          userId = (await this.dataSource.query(
+            `SELECT gen_random_uuid() AS id`,
+          ))[0].id;
+
+          await this.dataSource.query(
+            `INSERT INTO auth.users (id, instance_id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at, confirmation_token, recovery_token, email_change_token_new, email_change)
+             VALUES ($1, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', $2, crypt('imported-no-password', gen_salt('bf')), now(), now(), now(), '', '', '', '')
+             ON CONFLICT (email) DO NOTHING`,
+            [userId, m.email.toLowerCase().trim()],
+          );
+
+          await this.dataSource.query(
+            `INSERT INTO public.users (id, email, full_name, phone)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (id) DO UPDATE SET full_name = COALESCE($3, users.full_name), phone = COALESCE($4, users.phone)`,
+            [userId, m.email.toLowerCase().trim(), m.fullName ?? null, m.phone ?? null],
+          );
+        }
+
+        // Add membership
+        const role = ['admin', 'pastor', 'accountant', 'worship_leader', 'member'].includes(m.role ?? '') ? m.role : 'member';
+        await this.dataSource.query(
+          `INSERT INTO public.tenant_memberships (user_id, tenant_id, role)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (user_id, tenant_id) DO NOTHING`,
+          [userId, tenantId, role],
+        );
+
+        created++;
+      } catch (err: any) {
+        errors.push(`${m.email}: ${err.message}`);
+        skipped++;
+      }
+    }
+
+    return { created, skipped, total: members.length, errors: errors.slice(0, 10) };
+  }
 }
 
 export interface TenantMemberDetail {

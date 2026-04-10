@@ -140,4 +140,17 @@ export class MembershipsController {
   ) {
     return this.membershipsService.removeMember(tenantId, userId);
   }
+
+  @Post('tenants/:tenantId/members/import')
+  @UseInterceptors(RlsContextInterceptor)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Bulk import members from CSV data (admin only)' })
+  @ApiResponse({ status: 200, description: '{ created, skipped, total, errors }' })
+  importMembers(
+    @Param('tenantId', ParseUUIDPipe) tenantId: string,
+    @Body() body: { members: Array<{ email: string; fullName?: string; phone?: string; role?: string }> },
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    return this.membershipsService.importMembers(tenantId, user.sub, body.members);
+  }
 }

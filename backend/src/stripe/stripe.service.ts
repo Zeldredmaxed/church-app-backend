@@ -90,6 +90,7 @@ export class StripeService {
     return this.ensureStripe().paymentIntents.create({
       amount: amountCents,
       currency,
+      automatic_payment_methods: { enabled: true }, // Enables card, Apple Pay, Google Pay, Link
       application_fee_amount: platformFeeCents,
       transfer_data: {
         destination: destinationAccountId,
