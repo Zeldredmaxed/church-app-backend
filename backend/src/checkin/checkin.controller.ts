@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Query, UseGuards, UseInterceptors, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, UseGuards, UseInterceptors, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { CheckinService } from './checkin.service';
 import { BulkCheckinDto } from './dto/bulk-checkin.dto';
@@ -34,7 +34,7 @@ export class CheckinController {
   @ApiResponse({ status: 200, description: 'Array of service schedules' })
   getAllServices(@CurrentUser() user: SupabaseJwtPayload) {
     const tenantId = user.app_metadata?.current_tenant_id;
-    if (!tenantId) throw new Error('No active tenant context');
+    if (!tenantId) throw new BadRequestException('No tenant context');
     return this.checkinService.getAllServices(tenantId);
   }
 
@@ -47,7 +47,7 @@ export class CheckinController {
     @Query('date') date?: string,
   ) {
     const tenantId = user.app_metadata?.current_tenant_id;
-    if (!tenantId) throw new Error('No active tenant context');
+    if (!tenantId) throw new BadRequestException('No tenant context');
     return this.checkinService.getRoster(tenantId, serviceId, date);
   }
 
@@ -60,7 +60,7 @@ export class CheckinController {
     @Body() dto: BulkCheckinDto,
   ) {
     const tenantId = user.app_metadata?.current_tenant_id;
-    if (!tenantId) throw new Error('No active tenant context');
+    if (!tenantId) throw new BadRequestException('No tenant context');
     return this.checkinService.bulkCheckIn(tenantId, dto.userIds, dto.serviceId);
   }
 
@@ -69,7 +69,7 @@ export class CheckinController {
   @ApiResponse({ status: 200, description: 'Attendance KPIs' })
   getAttendanceKpis(@CurrentUser() user: SupabaseJwtPayload) {
     const tenantId = user.app_metadata?.current_tenant_id;
-    if (!tenantId) throw new Error('No active tenant context');
+    if (!tenantId) throw new BadRequestException('No tenant context');
     return this.checkinService.getAttendanceKpis(tenantId);
   }
 
@@ -82,7 +82,7 @@ export class CheckinController {
     @Body() dto: AddVisitorDto,
   ) {
     const tenantId = user.app_metadata?.current_tenant_id;
-    if (!tenantId) throw new Error('No active tenant context');
+    if (!tenantId) throw new BadRequestException('No tenant context');
     return this.checkinService.addVisitor(tenantId, dto);
   }
 }

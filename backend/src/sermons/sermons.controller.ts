@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Query, ParseUUIDPipe, UseGuards, UseInterceptors, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, Query, ParseUUIDPipe, UseGuards, UseInterceptors, HttpCode, HttpStatus, BadRequestException, Logger } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { SermonsService } from './sermons.service';
 import { CreateSermonDto } from './dto/create-sermon.dto';
@@ -14,7 +14,15 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 @UseGuards(JwtAuthGuard)
 @UseInterceptors(RlsContextInterceptor)
 export class SermonsController {
+  private readonly logger = new Logger(SermonsController.name);
+
   constructor(private readonly sermonsService: SermonsService) {}
+
+  private getTenantId(user: SupabaseJwtPayload): string {
+    const tenantId = user.app_metadata?.current_tenant_id;
+    if (!tenantId) throw new BadRequestException('No tenant context');
+    return tenantId;
+  }
 
   @Get()
   @ApiOperation({ summary: 'List sermons (cursor-paginated)' })
@@ -30,13 +38,13 @@ export class SermonsController {
   @Get('featured')
   @ApiOperation({ summary: 'Get the featured sermon' })
   getFeatured(@CurrentUser() user: SupabaseJwtPayload) {
-    return this.sermonsService.getFeatured(user.app_metadata?.current_tenant_id!);
+    return this.sermonsService.getFeatured(this.getTenantId(user));
   }
 
   @Get('series')
   @ApiOperation({ summary: 'Get distinct sermon series with counts' })
   getSeries(@CurrentUser() user: SupabaseJwtPayload) {
-    return this.sermonsService.getSeries(user.app_metadata?.current_tenant_id!);
+    return this.sermonsService.getSeries(this.getTenantId(user));
   }
 
   @Get(':id')
@@ -49,7 +57,7 @@ export class SermonsController {
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create a sermon' })
   createSermon(@Body() dto: CreateSermonDto, @CurrentUser() user: SupabaseJwtPayload) {
-    return this.sermonsService.createSermon(dto, user.app_metadata?.current_tenant_id!);
+    return this.sermonsService.createSermon(dto, this.getTenantId(user));
   }
 
   @Put(':id')
@@ -59,7 +67,7 @@ export class SermonsController {
     @Body() dto: UpdateSermonDto,
     @CurrentUser() user: SupabaseJwtPayload,
   ) {
-    return this.sermonsService.updateSermon(user.app_metadata?.current_tenant_id!, id, dto);
+    return this.sermonsService.updateSermon(this.getTenantId(user), id, dto);
   }
 
   @Delete(':id')
@@ -69,7 +77,7 @@ export class SermonsController {
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: SupabaseJwtPayload,
   ) {
-    return this.sermonsService.deleteSermon(user.app_metadata?.current_tenant_id!, id);
+    return this.sermonsService.deleteSermon(this.getTenantId(user), id);
   }
 
   @Get(':id/engagement')
@@ -78,7 +86,7 @@ export class SermonsController {
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: SupabaseJwtPayload,
   ) {
-    return this.sermonsService.getEngagement(user.app_metadata?.current_tenant_id!, id);
+    return this.sermonsService.getEngagement(this.getTenantId(user), id);
   }
 
   @Post(':id/like')
@@ -88,7 +96,7 @@ export class SermonsController {
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: SupabaseJwtPayload,
   ) {
-    await this.sermonsService.likeSermon(user.app_metadata?.current_tenant_id!, id, user.sub);
+    await this.sermonsService.likeSermon(this.getTenantId(user), id, user.sub);
   }
 
   @Post(':id/view')
@@ -98,7 +106,8 @@ export class SermonsController {
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: SupabaseJwtPayload,
   ) {
-    // Fire-and-forget: don't await
-    this.sermonsService.recordView(user.app_metadata?.current_tenant_id!, id);
+    // Fire-and-forget with error logging
+    this.sermonsService.recordView(this.getTenantId(user), id)
+      .catch(err => this.logger.error('Failed to record sermon view', err));
   }
 }

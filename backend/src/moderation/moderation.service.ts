@@ -18,7 +18,7 @@ export class ModerationService {
         u.full_name AS author_name
       FROM public.post_reports r
       LEFT JOIN public.posts p ON p.id = r.post_id
-      LEFT JOIN public.users u ON u.id = p.user_id
+      LEFT JOIN public.users u ON u.id = p.author_id
       WHERE r.status = $2
     `;
 
@@ -62,11 +62,11 @@ export class ModerationService {
 
   async approveReport(id: string, reviewerId: string) {
     const { queryRunner } = this.getRlsContext();
-    const result = await queryRunner.query(
-      `UPDATE public.post_reports SET status = 'reviewed', reviewed_by = $2 WHERE id = $1`,
+    const rows = await queryRunner.query(
+      `UPDATE public.post_reports SET status = 'reviewed', reviewed_by = $2 WHERE id = $1 RETURNING id`,
       [id, reviewerId],
     );
-    if (result[1] === 0) throw new NotFoundException('Report not found');
+    if (rows.length === 0) throw new NotFoundException('Report not found');
     return { message: 'Report approved' };
   }
 

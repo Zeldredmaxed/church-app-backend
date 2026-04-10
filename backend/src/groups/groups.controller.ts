@@ -50,7 +50,7 @@ export class GroupsController {
   }
 
   @Delete(':id')
-  @HttpCode(HttpStatus.OK)
+  @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Delete a group (cascades members + messages)' })
   deleteGroup(@Param('id', ParseUUIDPipe) id: string) {
     return this.groupsService.deleteGroup(id);

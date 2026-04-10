@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Query, ParseUUIDPipe, UseGuards, UseInterceptors, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query, ParseUUIDPipe, UseGuards, UseInterceptors, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { VolunteerService } from './volunteer.service';
 import { LogHoursDto } from './dto/log-hours.dto';
@@ -20,7 +20,7 @@ export class VolunteerController {
   @ApiResponse({ status: 200, description: 'Volunteer KPIs: activeVolunteers, hoursThisMonth' })
   getVolunteerKpis(@CurrentUser() user: SupabaseJwtPayload) {
     const tenantId = user.app_metadata?.current_tenant_id;
-    if (!tenantId) throw new Error('No active tenant context');
+    if (!tenantId) throw new BadRequestException('No tenant context');
     return this.volunteerService.getVolunteerKpis(tenantId);
   }
 
@@ -29,7 +29,7 @@ export class VolunteerController {
   @ApiResponse({ status: 200, description: 'Array of opportunities with volunteer lists' })
   getSchedule(@CurrentUser() user: SupabaseJwtPayload) {
     const tenantId = user.app_metadata?.current_tenant_id;
-    if (!tenantId) throw new Error('No active tenant context');
+    if (!tenantId) throw new BadRequestException('No tenant context');
     return this.volunteerService.getSchedule(tenantId);
   }
 
@@ -51,7 +51,7 @@ export class VolunteerController {
     @Body() dto: LogHoursDto,
   ) {
     const tenantId = user.app_metadata?.current_tenant_id;
-    if (!tenantId) throw new Error('No active tenant context');
+    if (!tenantId) throw new BadRequestException('No tenant context');
     return this.volunteerService.logHours(tenantId, dto);
   }
 

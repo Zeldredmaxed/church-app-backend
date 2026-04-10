@@ -140,11 +140,11 @@ export class ReportsService {
     switch (type) {
       case 'members': {
         const rows = await this.dataSource.query(
-          `SELECT u.id, u.email, u.full_name, tm.role, tm.joined_at
+          `SELECT u.id, u.email, u.full_name, tm.role, tm.created_at AS joined_at
            FROM public.tenant_memberships tm
            JOIN public.users u ON u.id = tm.user_id
            WHERE tm.tenant_id = $1
-           ORDER BY tm.joined_at DESC`,
+           ORDER BY tm.created_at DESC`,
           [tenantId],
         );
         return {

@@ -10,6 +10,8 @@ import {
   ParseUUIDPipe,
   UseGuards,
   UseInterceptors,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { TasksService } from './tasks.service';
@@ -94,8 +96,9 @@ export class TasksController {
   }
 
   @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Delete a task' })
-  @ApiResponse({ status: 200, description: 'Task deleted' })
+  @ApiResponse({ status: 204, description: 'Task deleted' })
   deleteTask(
     @CurrentUser() user: SupabaseJwtPayload,
     @Param('id', ParseUUIDPipe) id: string,

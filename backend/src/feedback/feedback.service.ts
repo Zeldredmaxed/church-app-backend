@@ -73,10 +73,10 @@ export class FeedbackService {
   }
 
   async deleteFeedback(tenantId: string, id: string) {
-    const result = await this.dataSource.query(
-      `DELETE FROM public.feedback WHERE id = $1 AND tenant_id = $2`,
+    const rows = await this.dataSource.query(
+      `DELETE FROM public.feedback WHERE id = $1 AND tenant_id = $2 RETURNING id`,
       [id, tenantId],
     );
-    if (result[1] === 0) throw new NotFoundException('Feedback not found');
+    if (rows.length === 0) throw new NotFoundException('Feedback not found');
   }
 }

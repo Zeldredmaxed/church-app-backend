@@ -268,10 +268,12 @@ COMMON PATTERNS:
 
     let sql: string;
     let label: string;
+    let params: any[] = [tenantId];
 
     if (q.includes('haven\'t attended') || q.includes('absent') || q.includes('not attended') || q.includes('missing')) {
       const daysMatch = q.match(/(\d+)\s*days?/);
       const days = daysMatch ? parseInt(daysMatch[1], 10) : 30;
+      params.push(`${days} days`);
       sql = `
         SELECT u.id, u.full_name, u.email,
           MAX(c.checked_in_at) AS last_check_in
@@ -280,7 +282,7 @@ COMMON PATTERNS:
         LEFT JOIN public.check_ins c ON c.user_id = u.id AND c.tenant_id = $1
         WHERE tm.tenant_id = $1
         GROUP BY u.id, u.full_name, u.email
-        HAVING MAX(c.checked_in_at) < now() - interval '${days} days'
+        HAVING MAX(c.checked_in_at) < now() - ($2)::interval
            OR MAX(c.checked_in_at) IS NULL
         ORDER BY last_check_in ASC NULLS FIRST
         LIMIT 100`;
@@ -302,11 +304,12 @@ COMMON PATTERNS:
     } else if (q.includes('new member')) {
       const monthsMatch = q.match(/(\d+)\s*months?/);
       const months = monthsMatch ? parseInt(monthsMatch[1], 10) : 6;
+      params.push(`${months} months`);
       sql = `
         SELECT u.id, u.full_name, u.email, u.created_at AS joined_at, tm.role
         FROM public.tenant_memberships tm
         JOIN public.users u ON u.id = tm.user_id
-        WHERE tm.tenant_id = $1 AND u.created_at >= now() - interval '${months} months'
+        WHERE tm.tenant_id = $1 AND u.created_at >= now() - ($2)::interval
         ORDER BY u.created_at DESC
         LIMIT 100`;
       label = `New members in the last ${months} months`;
@@ -416,7 +419,7 @@ COMMON PATTERNS:
       };
     }
 
-    const rows = await this.dataSource.query(sql, [tenantId]);
+    const rows = await this.dataSource.query(sql, params);
 
     return {
       query,

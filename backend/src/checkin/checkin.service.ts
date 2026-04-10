@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, BadRequestException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { rlsStorage } from '../common/storage/rls.storage';
 import { CheckIn } from './entities/check-in.entity';
@@ -33,11 +33,14 @@ export class CheckinService {
   }
 
   async checkIn(userId: string, serviceId?: string) {
+    if (!serviceId) {
+      throw new BadRequestException('serviceId is required');
+    }
     const { queryRunner, currentTenantId } = this.getRlsContext();
     const checkIn = queryRunner.manager.create(CheckIn, {
       tenantId: currentTenantId!,
       userId,
-      serviceId: serviceId ?? null,
+      serviceId,
     });
     const saved = await queryRunner.manager.save(CheckIn, checkIn);
     return { message: 'Checked in successfully', checkedInAt: saved.checkedInAt };

@@ -114,11 +114,11 @@ export class SermonsService {
 
   async deleteSermon(tenantId: string, id: string) {
     const { queryRunner } = this.getRlsContext();
-    const result = await queryRunner.query(
-      `DELETE FROM public.sermons WHERE id = $1 AND tenant_id = $2`,
+    const rows = await queryRunner.query(
+      `DELETE FROM public.sermons WHERE id = $1 AND tenant_id = $2 RETURNING id`,
       [id, tenantId],
     );
-    if (result[1] === 0) throw new NotFoundException('Sermon not found');
+    if (rows.length === 0) throw new NotFoundException('Sermon not found');
   }
 
   async getFeatured(tenantId: string) {
@@ -160,7 +160,7 @@ export class SermonsService {
     if (!sermon.length) throw new NotFoundException('Sermon not found');
 
     await queryRunner.query(
-      `INSERT INTO public.sermon_likes (sermon_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      `INSERT INTO public.sermon_likes (sermon_id, user_id) VALUES ($1, $2) ON CONFLICT (sermon_id, user_id) DO NOTHING`,
       [sermonId, userId],
     );
     await queryRunner.query(
@@ -171,11 +171,11 @@ export class SermonsService {
 
   async recordView(tenantId: string, sermonId: string) {
     const { queryRunner } = this.getRlsContext();
-    const result = await queryRunner.query(
-      `UPDATE public.sermons SET view_count = view_count + 1 WHERE id = $1 AND tenant_id = $2`,
+    const rows = await queryRunner.query(
+      `UPDATE public.sermons SET view_count = view_count + 1 WHERE id = $1 AND tenant_id = $2 RETURNING id`,
       [sermonId, tenantId],
     );
-    if (result[1] === 0) throw new NotFoundException('Sermon not found');
+    if (rows.length === 0) throw new NotFoundException('Sermon not found');
   }
 
   private mapSermon(r: any) {
