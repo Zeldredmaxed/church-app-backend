@@ -23,6 +23,41 @@ export class RecurringGivingService {
     };
   }
 
+  /**
+   * Admin view: all recurring gifts for the tenant with donor names.
+   */
+  async getAllRecurringGifts(tenantId: string) {
+    const { queryRunner } = this.getRlsContext();
+    const rows = await queryRunner.query(
+      `SELECT rg.*, u.full_name AS donor_name, u.email AS donor_email
+       FROM public.recurring_gifts rg
+       JOIN public.users u ON u.id = rg.user_id
+       WHERE rg.tenant_id = $1
+       ORDER BY rg.status ASC, rg.amount DESC`,
+      [tenantId],
+    );
+
+    const gifts = rows.map((r: any) => ({
+      ...this.mapGift(r),
+      donorName: r.donor_name,
+      donorEmail: r.donor_email,
+    }));
+
+    const active = gifts.filter((g: any) => g.status === 'active');
+    const totalPledged = active.reduce((sum: number, g: any) => sum + g.amount, 0);
+
+    return {
+      gifts,
+      stats: {
+        totalPlans: gifts.length,
+        activePlans: active.length,
+        pausedPlans: gifts.filter((g: any) => g.status === 'paused').length,
+        cancelledPlans: gifts.filter((g: any) => g.status === 'cancelled').length,
+        totalPledged,
+      },
+    };
+  }
+
   async createRecurringGift(dto: CreateRecurringGiftDto, userId: string, tenantId: string) {
     const { queryRunner } = this.getRlsContext();
     // TODO: Create Stripe subscription and store stripe_subscription_id
@@ -44,7 +79,7 @@ export class RecurringGivingService {
       `UPDATE public.recurring_gifts SET status = 'paused' WHERE id = $1 AND user_id = $2`,
       [id, userId],
     );
-    if (result[1] === 0) throw new NotFoundException('Recurring gift not found');
+    if (Array.isArray(result) && result[1] === 0) throw new NotFoundException('Recurring gift not found');
     return { message: 'Gift paused' };
   }
 
@@ -54,7 +89,7 @@ export class RecurringGivingService {
       `UPDATE public.recurring_gifts SET status = 'active' WHERE id = $1 AND user_id = $2`,
       [id, userId],
     );
-    if (result[1] === 0) throw new NotFoundException('Recurring gift not found');
+    if (Array.isArray(result) && result[1] === 0) throw new NotFoundException('Recurring gift not found');
     return { message: 'Gift resumed' };
   }
 
@@ -64,7 +99,7 @@ export class RecurringGivingService {
       `UPDATE public.recurring_gifts SET status = 'cancelled' WHERE id = $1 AND user_id = $2`,
       [id, userId],
     );
-    if (result[1] === 0) throw new NotFoundException('Recurring gift not found');
+    if (Array.isArray(result) && result[1] === 0) throw new NotFoundException('Recurring gift not found');
     return { message: 'Gift cancelled' };
   }
 

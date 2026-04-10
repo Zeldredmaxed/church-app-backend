@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Body, Param, ParseUUIDPipe, UseGuards, UseInterceptors, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Param, ParseUUIDPipe, UseGuards, UseInterceptors, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { RecurringGivingService } from './recurring-giving.service';
 import { CreateRecurringGiftDto } from './dto/create-recurring-gift.dto';
@@ -19,6 +19,14 @@ export class RecurringGivingController {
   @ApiOperation({ summary: 'List active recurring gifts for the current user' })
   getRecurringGifts(@CurrentUser() user: SupabaseJwtPayload) {
     return this.recurringGivingService.getRecurringGifts(user.sub);
+  }
+
+  @Get('all')
+  @ApiOperation({ summary: 'List all recurring gifts for the tenant (admin — includes donor names)' })
+  getAllRecurringGifts(@CurrentUser() user: SupabaseJwtPayload) {
+    const tenantId = user.app_metadata?.current_tenant_id;
+    if (!tenantId) throw new BadRequestException('No tenant context');
+    return this.recurringGivingService.getAllRecurringGifts(tenantId);
   }
 
   @Post()
