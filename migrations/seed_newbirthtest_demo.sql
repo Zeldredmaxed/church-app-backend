@@ -846,9 +846,9 @@ BEGIN
     (b3, tid, 'Prayer Warrior',    'Submitted 5 prayer requests',           'hands-praying',  '#9C27B0', 'bronze', 'spiritual',   '{"type":"prayer_count","min":5}',              3, u01),
     (b4, tid, 'Generous Giver',    'Donated a total of $500+',             'heart-handshake','#E91E63', 'silver', 'giving',      '{"type":"giving_lifetime","threshold":500}',   4, u01),
     (b5, tid, 'Baptized',          'Publicly declared your faith',          'droplets',       '#00BCD4', 'gold',   'spiritual',   '{"type":"baptized"}',                          5, u01),
-    (b6, tid, 'Community Builder', 'Joined 3 or more groups',              'users',          '#FF9800', 'silver', 'community',   '{"type":"group_count","min":3}',               6, u01),
-    (b7, tid, 'Servant Heart',     'Logged 10+ volunteer hours',           'hand-heart',     '#795548', 'silver', 'volunteering','{"type":"volunteer_hours","min":10}',          7, u01),
-    (b8, tid, 'Social Butterfly',  'Created 5 or more posts',             'message-circle', '#607D8B', 'bronze', 'community',   '{"type":"post_count","min":5}',                8, u01)
+    (b6, tid, 'Community Builder', 'Joined 3 or more groups',              'users',          '#FF9800', 'silver', 'engagement',  '{"type":"group_count","min":3}',               6, u01),
+    (b7, tid, 'Servant Heart',     'Logged 10+ volunteer hours',           'hand-heart',     '#795548', 'silver', 'service',     '{"type":"volunteer_hours","min":10}',          7, u01),
+    (b8, tid, 'Social Butterfly',  'Created 5 or more posts',             'message-circle', '#607D8B', 'bronze', 'engagement',  '{"type":"post_count","min":5}',                8, u01)
   ON CONFLICT DO NOTHING;
 
   INSERT INTO public.member_badges (badge_id, user_id, tenant_id, awarded_reason) VALUES
