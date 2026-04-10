@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, MaxLength, Matches } from 'class-validator';
+import { IsString, IsNotEmpty, MaxLength, Matches, IsInt, Min, Max } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 /**
@@ -26,4 +26,10 @@ export class PresignedUrlDto {
     },
   )
   contentType: string;
+
+  @ApiProperty({ example: 2048576, description: 'File size in bytes. Required for storage limit enforcement.' })
+  @IsInt()
+  @Min(1)
+  @Max(524_288_000) // 500 MB hard cap per file
+  fileSize: number;
 }

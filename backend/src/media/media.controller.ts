@@ -14,6 +14,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 import { TierCheckService } from '../common/services/tier-check.service';
+import { StorageService } from '../storage/storage.service';
 
 @ApiTags('Media')
 @ApiBearerAuth()
@@ -23,6 +24,7 @@ export class MediaController {
   constructor(
     private readonly mediaService: MediaService,
     private readonly tierCheck: TierCheckService,
+    private readonly storageService: StorageService,
   ) {}
 
   @Post('presigned-url')
@@ -30,6 +32,7 @@ export class MediaController {
   @ApiOperation({ summary: 'Generate a pre-signed S3 upload URL (5 min expiry)' })
   @ApiResponse({ status: 200, description: 'Returns uploadUrl and fileKey for direct S3 upload' })
   @ApiResponse({ status: 400, description: 'No active tenant context' })
+  @ApiResponse({ status: 403, description: 'Storage limit reached or video uploads not allowed' })
   async generatePresignedUrl(
     @CurrentUser() user: SupabaseJwtPayload,
     @Body() dto: PresignedUrlDto,
@@ -44,6 +47,21 @@ export class MediaController {
       await this.tierCheck.requireFeature(tenantId, 'videoUploads');
     }
 
-    return this.mediaService.generatePresignedUrl(dto, tenantId, user.sub);
+    // Check storage limit before allowing upload
+    await this.storageService.checkStorageLimit(tenantId, dto.fileSize);
+
+    // Generate presigned URL
+    const result = await this.mediaService.generatePresignedUrl(dto, tenantId, user.sub);
+
+    // Record the upload in the storage ledger
+    await this.storageService.recordUpload(
+      tenantId,
+      user.sub,
+      result.fileKey,
+      dto.fileSize,
+      dto.contentType,
+    );
+
+    return result;
   }
 }

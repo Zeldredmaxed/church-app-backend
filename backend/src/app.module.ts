@@ -120,6 +120,9 @@ import { FeedbackModule } from './feedback/feedback.module';
 import { Feedback } from './feedback/entities/feedback.entity';
 import { FamilyModule } from './family/family.module';
 import { FamilyConnection } from './family/entities/family-relationship.entity';
+import { StorageModule } from './storage/storage.module';
+import { TenantStorageUsage } from './storage/entities/tenant-storage-usage.entity';
+import { StorageFile } from './storage/entities/storage-file.entity';
 
 @Module({
   imports: [
@@ -156,6 +159,8 @@ import { FamilyConnection } from './family/entities/family-relationship.entity';
           OnboardingForm, OnboardingResponse,
           Feedback,
           FamilyConnection,
+          TenantStorageUsage,
+          StorageFile,
         ],
 
         // CRITICAL: synchronize must ALWAYS be false.
@@ -279,6 +284,7 @@ import { FamilyConnection } from './family/entities/family-relationship.entity';
     OnboardingModule,
     FeedbackModule,
     FamilyModule,
+    StorageModule,
 
     // GraphQL — Apollo Driver (code-first approach)
     // The FeedModule provides the FeedResolver which registers the globalFeed query.
