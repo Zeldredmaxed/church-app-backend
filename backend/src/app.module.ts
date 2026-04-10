@@ -116,6 +116,8 @@ import { DailyAppOpen } from './leaderboard/entities/daily-app-open.entity';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { OnboardingForm } from './onboarding/entities/onboarding-form.entity';
 import { OnboardingResponse } from './onboarding/entities/onboarding-response.entity';
+import { FeedbackModule } from './feedback/feedback.module';
+import { Feedback } from './feedback/entities/feedback.entity';
 
 @Module({
   imports: [
@@ -150,6 +152,7 @@ import { OnboardingResponse } from './onboarding/entities/onboarding-response.en
           WorkflowTemplate, TemplateInstall, TemplateRating,
           LeaderboardSettings, CheckinConfig, DailyAppOpen,
           OnboardingForm, OnboardingResponse,
+          Feedback,
         ],
 
         // CRITICAL: synchronize must ALWAYS be false.
@@ -271,6 +274,7 @@ import { OnboardingResponse } from './onboarding/entities/onboarding-response.en
     MarketplaceModule,
     LeaderboardModule,
     OnboardingModule,
+    FeedbackModule,
 
     // GraphQL — Apollo Driver (code-first approach)
     // The FeedModule provides the FeedResolver which registers the globalFeed query.
