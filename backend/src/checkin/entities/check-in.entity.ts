@@ -20,6 +20,18 @@ export class CheckIn {
   @Column({ type: 'text', name: 'visitor_name', nullable: true })
   visitorName: string | null;
 
+  @Column({ type: 'float', nullable: true })
+  latitude: number | null;
+
+  @Column({ type: 'float', nullable: true })
+  longitude: number | null;
+
+  @Column({ type: 'float', nullable: true, name: 'distance_meters' })
+  distanceMeters: number | null;
+
+  @Column({ type: 'text', name: 'check_in_type', default: 'manual' })
+  checkInType: string;
+
   @CreateDateColumn({ name: 'checked_in_at' })
   checkedInAt: Date;
 }
