@@ -126,6 +126,28 @@ export class WorkflowsController {
     return this.workflowsService.cancelExecution(tenantId, executionId);
   }
 
+  @Post('executions/:executionId/approve')
+  @ApiOperation({ summary: 'Approve a paused workflow (approval gate)' })
+  @ApiResponse({ status: 200, description: 'Workflow resumed' })
+  async approveExecution(
+    @CurrentUser() user: SupabaseJwtPayload,
+    @Param('executionId', ParseUUIDPipe) executionId: string,
+  ) {
+    const tenantId = user.app_metadata?.current_tenant_id!;
+    return this.workflowEngineService.handleApproval(tenantId, executionId, true);
+  }
+
+  @Post('executions/:executionId/deny')
+  @ApiOperation({ summary: 'Deny a paused workflow (approval gate) — cancels execution' })
+  @ApiResponse({ status: 200, description: 'Workflow cancelled' })
+  async denyExecution(
+    @CurrentUser() user: SupabaseJwtPayload,
+    @Param('executionId', ParseUUIDPipe) executionId: string,
+  ) {
+    const tenantId = user.app_metadata?.current_tenant_id!;
+    return this.workflowEngineService.handleApproval(tenantId, executionId, false);
+  }
+
   /* ───── CRUD Routes ───── */
 
   @Get()

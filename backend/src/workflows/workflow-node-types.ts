@@ -63,6 +63,7 @@ export const CONDITION_TYPES = [
   'check_journey_stage',
   'always_true',
   'check_badge',
+  'weather_check',
 ] as const;
 
 // ─── DELAY TYPES ───
@@ -71,6 +72,7 @@ export const DELAY_TYPES = [
   'wait_duration',
   'wait_until_date',
   'wait_until_day',
+  'approval_gate',
 ] as const;
 
 // ─── FILTER TYPES ───
@@ -170,11 +172,13 @@ export const NODE_TYPE_REGISTRY: NodeTypeInfo[] = [
   { type: 'check_journey_stage', category: 'condition', label: 'Journey Stage', description: 'Check spiritual milestone', icon: 'Milestone', color: 'amber', configFields: [{ key: 'milestone', label: 'Milestone', type: 'select', options: ['attended_members_class', 'is_baptized', 'salvation_date', 'discipleship_foundations', 'discipleship_growth', 'discipleship_leadership', 'discipleship_completed'], required: true }] },
   { type: 'always_true', category: 'condition', label: 'Always True', description: 'Always takes the true branch', icon: 'Check', color: 'amber', configFields: [] },
   { type: 'check_badge', category: 'condition', label: 'Has Badge?', description: 'Check if member has a specific badge', icon: 'Award', color: 'amber', configFields: [{ key: 'badgeId', label: 'Badge', type: 'badge', required: true }] },
+  { type: 'weather_check', category: 'condition', label: 'Weather Check', description: 'Branch based on current weather (temperature, conditions). Uses church location.', icon: 'CloudSun', color: 'amber', configFields: [{ key: 'condition', label: 'Condition', type: 'select', options: ['temp_above', 'temp_below', 'temp_between', 'is_raining', 'is_snowing', 'is_stormy'], required: true }, { key: 'tempThreshold', label: 'Temperature (F)', type: 'number', required: false, placeholder: '95' }, { key: 'tempMin', label: 'Min Temp (F) — for between', type: 'number', required: false }, { key: 'tempMax', label: 'Max Temp (F) — for between', type: 'number', required: false }, { key: 'latitude', label: 'Latitude (leave blank for church location)', type: 'number', required: false }, { key: 'longitude', label: 'Longitude (leave blank for church location)', type: 'number', required: false }] },
 
   // DELAYS
   { type: 'wait_duration', category: 'delay', label: 'Wait', description: 'Pause for a duration', icon: 'Timer', color: 'purple', configFields: [{ key: 'amount', label: 'Amount', type: 'number', required: true }, { key: 'unit', label: 'Unit', type: 'select', options: ['minutes', 'hours', 'days', 'weeks'], required: true }] },
   { type: 'wait_until_date', category: 'delay', label: 'Wait Until Date', description: 'Pause until a specific date', icon: 'CalendarClock', color: 'purple', configFields: [{ key: 'date', label: 'Date', type: 'date', required: true }] },
   { type: 'wait_until_day', category: 'delay', label: 'Wait Until Day', description: 'Pause until next specific day', icon: 'CalendarDays', color: 'purple', configFields: [{ key: 'dayOfWeek', label: 'Day', type: 'select', options: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'], required: true }] },
+  { type: 'approval_gate', category: 'delay', label: 'Pastor Approval', description: 'Pause and ask the pastor to approve before continuing. Sends notification, email, and SMS.', icon: 'ShieldCheck', color: 'purple', configFields: [{ key: 'message', label: 'Approval Question', type: 'text', required: true, placeholder: 'Should we cancel Sunday service due to weather?' }, { key: 'notifyVia', label: 'Notify Via', type: 'select', options: ['notification', 'email', 'sms', 'all'], required: true }, { key: 'timeoutHours', label: 'Auto-expire after (hours)', type: 'number', required: false, placeholder: '24' }, { key: 'timeoutAction', label: 'If no response', type: 'select', options: ['continue', 'cancel'], required: false }] },
 
   // FILTERS
   { type: 'filter_by_tag', category: 'filter', label: 'Filter by Tag', description: 'Only continue if member has tag', icon: 'Filter', color: 'rose', configFields: [{ key: 'tagId', label: 'Tag', type: 'tag', required: true }] },

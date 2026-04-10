@@ -680,6 +680,69 @@ export class WorkflowEngineService {
         return { status: 'success', branch: row ? 'true' : 'false', inputData, outputData: { hasBadge: !!row } };
       }
 
+      case 'weather_check': {
+        try {
+          // Get church location from check-in config, or use provided coords
+          let lat = config.latitude;
+          let lng = config.longitude;
+
+          if (!lat || !lng) {
+            const [churchLoc] = await this.dataSource.query(
+              `SELECT latitude, longitude FROM public.checkin_configs WHERE tenant_id = $1`,
+              [ctx.tenantId],
+            );
+            lat = churchLoc?.latitude ?? 33.749;
+            lng = churchLoc?.longitude ?? -84.388;
+          }
+
+          // Fetch from Open-Meteo (free, no API key)
+          const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,weather_code&temperature_unit=fahrenheit`;
+          const res = await fetch(url);
+          const data = await res.json();
+          const tempF = data.current?.temperature_2m ?? 0;
+          const weatherCode = data.current?.weather_code ?? 0;
+
+          // WMO weather codes: 61-67=rain, 71-77=snow, 95-99=thunderstorm
+          const isRaining = weatherCode >= 61 && weatherCode <= 67;
+          const isSnowing = weatherCode >= 71 && weatherCode <= 77;
+          const isStormy = weatherCode >= 95 && weatherCode <= 99;
+
+          let conditionMet = false;
+          const condition = config.condition ?? 'temp_above';
+
+          switch (condition) {
+            case 'temp_above':
+              conditionMet = tempF > (config.tempThreshold ?? 95);
+              break;
+            case 'temp_below':
+              conditionMet = tempF < (config.tempThreshold ?? 32);
+              break;
+            case 'temp_between':
+              conditionMet = tempF >= (config.tempMin ?? 0) && tempF <= (config.tempMax ?? 100);
+              break;
+            case 'is_raining':
+              conditionMet = isRaining;
+              break;
+            case 'is_snowing':
+              conditionMet = isSnowing;
+              break;
+            case 'is_stormy':
+              conditionMet = isStormy;
+              break;
+          }
+
+          return {
+            status: 'success',
+            branch: conditionMet ? 'true' : 'false',
+            inputData,
+            outputData: { tempF, weatherCode, isRaining, isSnowing, isStormy, condition, conditionMet },
+          };
+        } catch (err: any) {
+          this.logger.error(`Weather check failed: ${err.message}`);
+          return { status: 'success', branch: 'false', inputData, outputData: { error: err.message } };
+        }
+      }
+
       default:
         return { status: 'failed', branch: 'false', inputData, outputData: {}, errorMessage: `Unknown condition: ${nodeType}` };
     }
@@ -730,6 +793,84 @@ export class WorkflowEngineService {
           nextStepAt.setHours(9, 0, 0, 0); // Resume at 9 AM
         }
         break;
+      }
+
+      case 'approval_gate': {
+        const timeoutHours = config.timeoutHours ?? 24;
+        nextStepAt = new Date(Date.now() + timeoutHours * 60 * 60 * 1000);
+
+        // Find all admins/pastors to notify
+        const admins = await this.dataSource.query(
+          `SELECT tm.user_id, u.full_name, u.email, u.phone
+           FROM public.tenant_memberships tm
+           JOIN public.users u ON u.id = tm.user_id
+           WHERE tm.tenant_id = $1 AND tm.role IN ('admin', 'pastor')`,
+          [ctx.tenantId],
+        );
+
+        const approvalMessage = config.message ?? 'A workflow requires your approval to continue.';
+        const notifyVia = config.notifyVia ?? 'all';
+        const approvalPayload = {
+          executionId: ctx.executionId,
+          workflowId: ctx.workflowId,
+          message: approvalMessage,
+          timeoutAction: config.timeoutAction ?? 'cancel',
+          expiresAt: nextStepAt.toISOString(),
+        };
+
+        for (const admin of admins) {
+          // Always send in-app notification
+          if (notifyVia === 'notification' || notifyVia === 'all') {
+            await this.dataSource.query(
+              `INSERT INTO public.notifications (recipient_id, tenant_id, type, payload)
+               VALUES ($1, $2, 'workflow_approval', $3::jsonb)`,
+              [admin.user_id, ctx.tenantId, JSON.stringify({ title: 'Approval Required', body: approvalMessage, ...approvalPayload })],
+            );
+          }
+
+          // Send email if configured and email service available
+          if ((notifyVia === 'email' || notifyVia === 'all') && admin.email) {
+            await this.dataSource.query(
+              `INSERT INTO public.sent_messages (tenant_id, channel, recipient, subject, body, status)
+               VALUES ($1, 'email', $2, 'Workflow Approval Required', $3, 'queued')`,
+              [ctx.tenantId, admin.email, `${approvalMessage}\n\nThis request expires in ${timeoutHours} hours.`],
+            );
+          }
+
+          // Send SMS if configured and phone available
+          if ((notifyVia === 'sms' || notifyVia === 'all') && admin.phone) {
+            await this.dataSource.query(
+              `INSERT INTO public.sent_messages (tenant_id, channel, recipient, body, status)
+               VALUES ($1, 'sms', $2, $3, 'queued')`,
+              [ctx.tenantId, admin.phone, `SHEPARD APPROVAL: ${approvalMessage} — Expires in ${timeoutHours}h`],
+            );
+          }
+        }
+
+        // Store approval metadata on the execution for the approve endpoint
+        await this.dataSource.query(
+          `UPDATE public.workflow_executions
+           SET status = 'paused', current_node_id = $1, next_step_at = $2,
+               trigger_data = jsonb_set(COALESCE(trigger_data, '{}'), '{_approval}', $3::jsonb)
+           WHERE id = $4`,
+          [
+            null,
+            nextStepAt.toISOString(),
+            JSON.stringify({ pending: true, message: approvalMessage, timeoutAction: config.timeoutAction ?? 'cancel' }),
+            ctx.executionId,
+          ],
+        );
+
+        return {
+          status: 'success',
+          paused: true,
+          inputData: { nodeType, config },
+          outputData: {
+            notifiedAdmins: admins.length,
+            expiresAt: nextStepAt.toISOString(),
+            timeoutAction: config.timeoutAction ?? 'cancel',
+          },
+        };
       }
 
       default:
@@ -838,6 +979,99 @@ export class WorkflowEngineService {
     }
   }
 
+  /* ───── Approval Gate Handler ───── */
+
+  async handleApproval(tenantId: string, executionId: string, approved: boolean) {
+    // Verify the execution is paused and belongs to this tenant
+    const [exec] = await this.dataSource.query(
+      `SELECT we.*, w.tenant_id
+       FROM public.workflow_executions we
+       JOIN public.workflows w ON w.id = we.workflow_id
+       WHERE we.id = $1 AND w.tenant_id = $2 AND we.status = 'paused'`,
+      [executionId, tenantId],
+    );
+
+    if (!exec) {
+      return { error: 'Execution not found or not awaiting approval' };
+    }
+
+    const approval = exec.trigger_data?._approval;
+    if (!approval?.pending) {
+      return { error: 'This execution is not awaiting approval' };
+    }
+
+    if (approved) {
+      // Clear approval flag and resume
+      await this.dataSource.query(
+        `UPDATE public.workflow_executions
+         SET status = 'running', next_step_at = NULL,
+             trigger_data = jsonb_set(trigger_data, '{_approval}', '{"pending":false,"approved":true}'::jsonb)
+         WHERE id = $1`,
+        [executionId],
+      );
+
+      // Log the approval
+      const [lastLog] = await this.dataSource.query(
+        `SELECT node_id FROM public.workflow_execution_logs
+         WHERE execution_id = $1 ORDER BY executed_at DESC LIMIT 1`,
+        [executionId],
+      );
+
+      await this.dataSource.query(
+        `INSERT INTO public.workflow_execution_logs (execution_id, node_id, status, input_data, output_data)
+         VALUES ($1, $2, 'success', '{"action":"approval_response"}'::jsonb, '{"approved":true}'::jsonb)`,
+        [executionId, lastLog?.node_id],
+      );
+
+      // Resume from where we left off
+      const nodes: WorkflowNodeRow[] = await this.dataSource.query(
+        `SELECT * FROM public.workflow_nodes WHERE workflow_id = $1`, [exec.workflow_id],
+      );
+      const connections: WorkflowConnectionRow[] = await this.dataSource.query(
+        `SELECT * FROM public.workflow_connections WHERE workflow_id = $1`, [exec.workflow_id],
+      );
+
+      const ctx: ExecutionContext = {
+        executionId: exec.id,
+        workflowId: exec.workflow_id,
+        tenantId,
+        targetUserId: exec.target_user_id,
+        triggerData: { ...exec.trigger_data, _approval: { pending: false, approved: true } },
+      };
+
+      if (lastLog) {
+        const outgoing = connections.filter(c => c.from_node_id === lastLog.node_id);
+        const nodeMap = new Map(nodes.map(n => [n.id, n]));
+        for (const conn of outgoing) {
+          const nextNode = nodeMap.get(conn.to_node_id);
+          if (nextNode) {
+            await this.walkGraph(nextNode, nodes, connections, ctx);
+          }
+        }
+      }
+
+      // Check if workflow is done
+      await this.dataSource.query(
+        `UPDATE public.workflow_executions SET status = 'completed', completed_at = now()
+         WHERE id = $1 AND status = 'running'`,
+        [executionId],
+      );
+
+      return { status: 'approved', message: 'Workflow resumed' };
+    } else {
+      // Denied — cancel the execution
+      await this.dataSource.query(
+        `UPDATE public.workflow_executions
+         SET status = 'cancelled', completed_at = now(),
+             trigger_data = jsonb_set(trigger_data, '{_approval}', '{"pending":false,"approved":false}'::jsonb)
+         WHERE id = $1`,
+        [executionId],
+      );
+
+      return { status: 'denied', message: 'Workflow cancelled' };
+    }
+  }
+
   /* ───── Resume Paused Executions ───── */
 
   async resumePausedExecutions() {
@@ -851,6 +1085,29 @@ export class WorkflowEngineService {
     for (const exec of paused) {
       this.logger.log(`Resuming paused execution ${exec.id}`);
       try {
+        // Check if this is an approval gate that timed out
+        const approval = exec.trigger_data?._approval;
+        if (approval?.pending) {
+          const timeoutAction = approval.timeoutAction ?? 'cancel';
+          if (timeoutAction === 'cancel') {
+            this.logger.log(`Approval gate timed out for execution ${exec.id} — cancelling`);
+            await this.dataSource.query(
+              `UPDATE public.workflow_executions SET status = 'cancelled', completed_at = now(),
+                trigger_data = jsonb_set(trigger_data, '{_approval}', '{"pending":false,"approved":false,"timedOut":true}'::jsonb)
+               WHERE id = $1`,
+              [exec.id],
+            );
+            continue;
+          }
+          // timeoutAction === 'continue' — clear approval and resume normally
+          await this.dataSource.query(
+            `UPDATE public.workflow_executions
+             SET trigger_data = jsonb_set(trigger_data, '{_approval}', '{"pending":false,"approved":true,"timedOut":true}'::jsonb)
+             WHERE id = $1`,
+            [exec.id],
+          );
+        }
+
         // Set back to running
         await this.dataSource.query(
           `UPDATE public.workflow_executions SET status = 'running', next_step_at = NULL WHERE id = $1`,
