@@ -882,8 +882,8 @@ BEGIN
     baptized, CASE WHEN baptized THEN CURRENT_DATE - (random()*365)::int ELSE NULL END,
     CURRENT_DATE - (random()*3650)::int,
     track,
-    CASE (random()*4)::int WHEN 0 THEN '{Music/Singing}' WHEN 1 THEN '{Teaching,Counseling}' WHEN 2 THEN '{IT/Technology,Video/Photography}' ELSE '{Cooking/Baking,Event Planning}' END,
-    CASE (random()*4)::int WHEN 0 THEN '{Worship/Music}' WHEN 1 THEN '{Youth Ministry,Small Groups}' WHEN 2 THEN '{Outreach/Missions,Prayer Ministry}' ELSE '{Hospitality/Greeting,Media/Tech}' END
+    CASE (random()*4)::int WHEN 0 THEN ARRAY['Music/Singing'] WHEN 1 THEN ARRAY['Teaching','Counseling'] WHEN 2 THEN ARRAY['IT/Technology','Video/Photography'] ELSE ARRAY['Cooking/Baking','Event Planning'] END,
+    CASE (random()*4)::int WHEN 0 THEN ARRAY['Worship/Music'] WHEN 1 THEN ARRAY['Youth Ministry','Small Groups'] WHEN 2 THEN ARRAY['Outreach/Missions','Prayer Ministry'] ELSE ARRAY['Hospitality/Greeting','Media/Tech'] END
   FROM (VALUES
     (u01,true,true,'leadership'),(u02,true,true,'leadership'),(u03,true,true,'maturity'),(u04,true,true,'maturity'),
     (u05,true,true,'growth'),(u06,true,true,'growth'),(u07,true,true,'growth'),(u08,true,false,'growth'),
