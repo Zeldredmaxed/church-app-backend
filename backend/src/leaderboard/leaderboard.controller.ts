@@ -32,6 +32,23 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 export class LeaderboardController {
   constructor(private readonly leaderboardService: LeaderboardService) {}
 
+  @Get('status')
+  @ApiOperation({ summary: 'Check if leaderboards are enabled for this church (admin toggle)' })
+  @ApiResponse({ status: 200, description: '{ enabled: boolean }' })
+  getStatus(@CurrentUser() user: SupabaseJwtPayload) {
+    return this.leaderboardService.getLeaderboardStatus(user.app_metadata?.current_tenant_id!);
+  }
+
+  @Put('status')
+  @ApiOperation({ summary: 'Enable or disable leaderboards for this church (admin only)' })
+  @ApiResponse({ status: 200, description: '{ enabled: boolean }' })
+  setStatus(
+    @CurrentUser() user: SupabaseJwtPayload,
+    @Body() body: { enabled: boolean },
+  ) {
+    return this.leaderboardService.setLeaderboardStatus(user.app_metadata?.current_tenant_id!, body.enabled);
+  }
+
   @Get()
   @ApiOperation({ summary: 'Get leaderboard entries for a category' })
   @ApiResponse({ status: 200, description: 'Leaderboard with entries, myRank, myValue' })

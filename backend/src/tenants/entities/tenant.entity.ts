@@ -33,6 +33,10 @@ export class Tenant {
   @Column({ type: 'text', name: 'stripe_account_status', default: 'pending' })
   stripeAccountStatus: string;
 
+  /** When false, all members excluded from church + global leaderboards. */
+  @Column({ type: 'boolean', name: 'leaderboard_enabled', default: true })
+  leaderboardEnabled: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }

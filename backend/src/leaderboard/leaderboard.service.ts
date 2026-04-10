@@ -40,6 +40,26 @@ export class LeaderboardService {
   constructor(private readonly dataSource: DataSource) {}
 
   // ---------------------------------------------------------------------------
+  // Admin Leaderboard Toggle
+  // ---------------------------------------------------------------------------
+
+  async getLeaderboardStatus(tenantId: string): Promise<{ enabled: boolean }> {
+    const [row] = await this.dataSource.query(
+      `SELECT leaderboard_enabled FROM public.tenants WHERE id = $1`,
+      [tenantId],
+    );
+    return { enabled: row?.leaderboard_enabled ?? true };
+  }
+
+  async setLeaderboardStatus(tenantId: string, enabled: boolean): Promise<{ enabled: boolean }> {
+    await this.dataSource.query(
+      `UPDATE public.tenants SET leaderboard_enabled = $2 WHERE id = $1`,
+      [tenantId, enabled],
+    );
+    return { enabled };
+  }
+
+  // ---------------------------------------------------------------------------
   // Haversine distance (meters)
   // ---------------------------------------------------------------------------
   private haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -114,7 +134,7 @@ export class LeaderboardService {
           FROM public.daily_app_opens dao
           JOIN public.users u ON u.id = dao.user_id
           LEFT JOIN public.leaderboard_settings ls ON ls.user_id = u.id
-          ${scope === 'global' ? 'JOIN public.tenants t ON t.id = dao.tenant_id' : ''}
+          ${scope === 'global' ? 'JOIN public.tenants t ON t.id = dao.tenant_id AND t.leaderboard_enabled = true' : ''}
           WHERE (ls.visible IS NULL OR ls.visible = true)
             ${scope === 'church' ? `AND dao.tenant_id = ${p1}` : ''}
             ${periodClause}
@@ -132,7 +152,7 @@ export class LeaderboardService {
           FROM public.transactions tr
           JOIN public.users u ON u.id = tr.user_id
           LEFT JOIN public.leaderboard_settings ls ON ls.user_id = u.id
-          ${scope === 'global' ? 'JOIN public.tenants t ON t.id = tr.tenant_id' : ''}
+          ${scope === 'global' ? 'JOIN public.tenants t ON t.id = tr.tenant_id AND t.leaderboard_enabled = true' : ''}
           WHERE tr.status = 'succeeded' AND (ls.visible IS NULL OR ls.visible = true)
             ${scope === 'church' ? `AND tr.tenant_id = ${p1}` : ''}
             ${periodClause}
@@ -150,7 +170,7 @@ export class LeaderboardService {
           FROM public.check_ins ci
           JOIN public.users u ON u.id = ci.user_id
           LEFT JOIN public.leaderboard_settings ls ON ls.user_id = u.id
-          ${scope === 'global' ? 'JOIN public.tenants t ON t.id = ci.tenant_id' : ''}
+          ${scope === 'global' ? 'JOIN public.tenants t ON t.id = ci.tenant_id AND t.leaderboard_enabled = true' : ''}
           WHERE ci.user_id IS NOT NULL AND ci.is_visitor = false
             AND (ls.visible IS NULL OR ls.visible = true)
             ${scope === 'church' ? `AND ci.tenant_id = ${p1}` : ''}
@@ -169,7 +189,7 @@ export class LeaderboardService {
           FROM public.posts p
           JOIN public.users u ON u.id = p.author_id
           LEFT JOIN public.leaderboard_settings ls ON ls.user_id = u.id
-          ${scope === 'global' ? 'JOIN public.tenants t ON t.id = p.tenant_id' : ''}
+          ${scope === 'global' ? 'JOIN public.tenants t ON t.id = p.tenant_id AND t.leaderboard_enabled = true' : ''}
           WHERE (ls.visible IS NULL OR ls.visible = true)
             ${scope === 'church' ? `AND p.tenant_id = ${p1}` : ''}
             ${periodClause}
@@ -206,6 +226,12 @@ export class LeaderboardService {
     period: Period,
     limit: number,
   ): Promise<LeaderboardResult> {
+    // Check if this church has leaderboards enabled
+    const { enabled } = await this.getLeaderboardStatus(tenantId);
+    if (!enabled) {
+      return { category, scope, period, entries: [], myRank: null, myValue: null };
+    }
+
     const { sql: mainSql, params } = this.buildMainQuery(category, scope, period, tenantId);
 
     // Fetch entries with LIMIT
