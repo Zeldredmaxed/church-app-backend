@@ -628,7 +628,7 @@ BEGIN
 
   -- Comments on posts (using subquery to find post IDs)
   INSERT INTO public.comments (post_id, tenant_id, author_id, content, created_at)
-  SELECT p.id, tid, author, comment, p.created_at + interval '1 hour' * rn
+  SELECT p.id, tid, author, comment, p.created_at + interval '1 hour' * c.match_num
   FROM (SELECT id, created_at, ROW_NUMBER() OVER (ORDER BY created_at) AS post_num FROM public.posts WHERE tenant_id = tid ORDER BY created_at LIMIT 40) p
   CROSS JOIN LATERAL (VALUES
     (1, u05, 'Amen! 🙏'),
@@ -646,7 +646,7 @@ BEGIN
 
   -- Additional comments for variety (second round)
   INSERT INTO public.comments (post_id, tenant_id, author_id, content, created_at)
-  SELECT p.id, tid, author, comment, p.created_at + interval '3 hours' * rn
+  SELECT p.id, tid, author, comment, p.created_at + interval '3 hours' * c.match_num
   FROM (SELECT id, created_at, ROW_NUMBER() OVER (ORDER BY created_at) AS post_num FROM public.posts WHERE tenant_id = tid ORDER BY created_at LIMIT 40) p
   CROSS JOIN LATERAL (VALUES
     (1, u06, 'This blessed my heart today.'),
