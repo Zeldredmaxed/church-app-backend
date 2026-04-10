@@ -70,7 +70,94 @@ BEGIN
   IF tid IS NULL THEN RAISE EXCEPTION 'Tenant "New Birth Test" not found'; END IF;
 
   -- ════════════════════════════════════════════════════════════
-  -- 1. USERS (75 fake members)
+  -- 1a. AUTH.USERS (Supabase requires this before public.users)
+  -- These are stub auth entries — they won't have real passwords
+  -- so they can't log in, but they satisfy the FK constraint.
+  -- ════════════════════════════════════════════════════════════
+  INSERT INTO auth.users (id, instance_id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at, confirmation_token, recovery_token, email_change_token_new, email_change)
+  SELECT uid, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+         em, crypt('demo-seed-not-a-real-password', gen_salt('bf')), now(), ca, ca, '', '', '', ''
+  FROM (VALUES
+    (u01, 'marcus.johnson@demo.shepard.app', now() - interval '180 days'),
+    (u02, 'sarah.williams@demo.shepard.app', now() - interval '175 days'),
+    (u03, 'david.thompson@demo.shepard.app', now() - interval '170 days'),
+    (u04, 'jessica.brown@demo.shepard.app', now() - interval '165 days'),
+    (u05, 'michael.davis@demo.shepard.app', now() - interval '160 days'),
+    (u06, 'angela.martinez@demo.shepard.app', now() - interval '155 days'),
+    (u07, 'james.wilson@demo.shepard.app', now() - interval '150 days'),
+    (u08, 'patricia.taylor@demo.shepard.app', now() - interval '145 days'),
+    (u09, 'robert.anderson@demo.shepard.app', now() - interval '140 days'),
+    (u10, 'lisa.thomas@demo.shepard.app', now() - interval '135 days'),
+    (u11, 'william.jackson@demo.shepard.app', now() - interval '130 days'),
+    (u12, 'maria.garcia@demo.shepard.app', now() - interval '125 days'),
+    (u13, 'christopher.white@demo.shepard.app', now() - interval '120 days'),
+    (u14, 'jennifer.harris@demo.shepard.app', now() - interval '115 days'),
+    (u15, 'daniel.clark@demo.shepard.app', now() - interval '110 days'),
+    (u16, 'ashley.lewis@demo.shepard.app', now() - interval '105 days'),
+    (u17, 'matthew.robinson@demo.shepard.app', now() - interval '100 days'),
+    (u18, 'nicole.walker@demo.shepard.app', now() - interval '95 days'),
+    (u19, 'joseph.young@demo.shepard.app', now() - interval '90 days'),
+    (u20, 'stephanie.allen@demo.shepard.app', now() - interval '85 days'),
+    (u21, 'anthony.king@demo.shepard.app', now() - interval '80 days'),
+    (u22, 'elizabeth.wright@demo.shepard.app', now() - interval '78 days'),
+    (u23, 'andrew.scott@demo.shepard.app', now() - interval '75 days'),
+    (u24, 'rachel.green@demo.shepard.app', now() - interval '72 days'),
+    (u25, 'joshua.hill@demo.shepard.app', now() - interval '70 days'),
+    (u26, 'amanda.adams@demo.shepard.app', now() - interval '68 days'),
+    (u27, 'kevin.baker@demo.shepard.app', now() - interval '65 days'),
+    (u28, 'tiffany.nelson@demo.shepard.app', now() - interval '62 days'),
+    (u29, 'brian.carter@demo.shepard.app', now() - interval '60 days'),
+    (u30, 'crystal.mitchell@demo.shepard.app', now() - interval '58 days'),
+    (u31, 'jason.perez@demo.shepard.app', now() - interval '55 days'),
+    (u32, 'michelle.roberts@demo.shepard.app', now() - interval '52 days'),
+    (u33, 'ryan.turner@demo.shepard.app', now() - interval '50 days'),
+    (u34, 'kimberly.phillips@demo.shepard.app', now() - interval '48 days'),
+    (u35, 'brandon.campbell@demo.shepard.app', now() - interval '45 days'),
+    (u36, 'laura.parker@demo.shepard.app', now() - interval '42 days'),
+    (u37, 'eric.evans@demo.shepard.app', now() - interval '40 days'),
+    (u38, 'heather.edwards@demo.shepard.app', now() - interval '38 days'),
+    (u39, 'timothy.collins@demo.shepard.app', now() - interval '35 days'),
+    (u40, 'megan.stewart@demo.shepard.app', now() - interval '32 days'),
+    (u41, 'steven.sanchez@demo.shepard.app', now() - interval '30 days'),
+    (u42, 'amber.morris@demo.shepard.app', now() - interval '28 days'),
+    (u43, 'gregory.rogers@demo.shepard.app', now() - interval '26 days'),
+    (u44, 'vanessa.reed@demo.shepard.app', now() - interval '24 days'),
+    (u45, 'patrick.cook@demo.shepard.app', now() - interval '22 days'),
+    (u46, 'diana.morgan@demo.shepard.app', now() - interval '20 days'),
+    (u47, 'charles.bell@demo.shepard.app', now() - interval '18 days'),
+    (u48, 'gloria.murphy@demo.shepard.app', now() - interval '16 days'),
+    (u49, 'derek.bailey@demo.shepard.app', now() - interval '15 days'),
+    (u50, 'natalie.rivera@demo.shepard.app', now() - interval '14 days'),
+    (u51, 'travis.cooper@demo.shepard.app', now() - interval '13 days'),
+    (u52, 'brittany.richardson@demo.shepard.app', now() - interval '12 days'),
+    (u53, 'samuel.cox@demo.shepard.app', now() - interval '11 days'),
+    (u54, 'victoria.howard@demo.shepard.app', now() - interval '10 days'),
+    (u55, 'marcus.ward@demo.shepard.app', now() - interval '9 days'),
+    (u56, 'jasmine.torres@demo.shepard.app', now() - interval '8 days'),
+    (u57, 'carl.peterson@demo.shepard.app', now() - interval '7 days'),
+    (u58, 'danielle.gray@demo.shepard.app', now() - interval '7 days'),
+    (u59, 'eugene.ramirez@demo.shepard.app', now() - interval '6 days'),
+    (u60, 'monique.james@demo.shepard.app', now() - interval '6 days'),
+    (u61, 'terrence.watson@demo.shepard.app', now() - interval '5 days'),
+    (u62, 'faith.brooks@demo.shepard.app', now() - interval '5 days'),
+    (u63, 'darius.kelly@demo.shepard.app', now() - interval '4 days'),
+    (u64, 'joy.sanders@demo.shepard.app', now() - interval '4 days'),
+    (u65, 'leon.price@demo.shepard.app', now() - interval '3 days'),
+    (u66, 'hope.bennett@demo.shepard.app', now() - interval '3 days'),
+    (u67, 'isaiah.wood@demo.shepard.app', now() - interval '2 days'),
+    (u68, 'grace.barnes@demo.shepard.app', now() - interval '2 days'),
+    (u69, 'elijah.ross@demo.shepard.app', now() - interval '2 days'),
+    (u70, 'mercy.henderson@demo.shepard.app', now() - interval '1 day'),
+    (u71, 'caleb.coleman@demo.shepard.app', now() - interval '1 day'),
+    (u72, 'ruth.jenkins@demo.shepard.app', now() - interval '1 day'),
+    (u73, 'nathan.perry@demo.shepard.app', now() - interval '12 hours'),
+    (u74, 'esther.powell@demo.shepard.app', now() - interval '6 hours'),
+    (u75, 'micah.long@demo.shepard.app', now() - interval '1 hour')
+  ) AS t(uid, em, ca)
+  ON CONFLICT (id) DO NOTHING;
+
+  -- ════════════════════════════════════════════════════════════
+  -- 1b. PUBLIC.USERS (75 fake members)
   -- ════════════════════════════════════════════════════════════
   INSERT INTO public.users (id, email, full_name, phone, created_at) VALUES
     (u01, 'marcus.johnson@demo.shepard.app', 'Marcus Johnson', '+12145550101', now() - interval '180 days'),
