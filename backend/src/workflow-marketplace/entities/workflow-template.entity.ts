@@ -35,6 +35,9 @@ export class WorkflowTemplate {
   @Column({ type: 'jsonb', default: '[]' })
   connections: any[];
 
+  @Column({ type: 'text', name: 'structure_fingerprint', nullable: true })
+  structureFingerprint: string | null;
+
   @Column({ type: 'int', name: 'price_cents', default: 0 })
   priceCents: number;
 

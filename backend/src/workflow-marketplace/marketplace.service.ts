@@ -1,5 +1,6 @@
-import { Injectable, Logger, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { createHash } from 'crypto';
 import { OFFICIAL_TEMPLATES } from './official-templates';
 
 @Injectable()
@@ -88,6 +89,74 @@ export class MarketplaceService {
     return this.mapTemplate(row);
   }
 
+  /* ───── Structural Fingerprint ───── */
+
+  /**
+   * Generates a structural fingerprint for a workflow.
+   *
+   * The fingerprint captures the STRUCTURE — not names, positions, or config values.
+   * Two workflows with identical node types in the same connection order produce
+   * the same fingerprint, even if they have different names or config.
+   *
+   * Algorithm:
+   *   1. Sort nodes topologically (by connection graph)
+   *   2. Build a canonical string: triggerType → nodeType1:branch → nodeType2:branch → ...
+   *   3. SHA-256 hash the canonical string
+   */
+  private generateFingerprint(
+    triggerType: string,
+    nodes: Array<{ id: string; nodeType: string }>,
+    connections: Array<{ fromNodeId: string; toNodeId: string; branch?: string }>,
+  ): string {
+    // Build adjacency list
+    const adj = new Map<string, Array<{ to: string; branch: string }>>();
+    const inDegree = new Map<string, number>();
+
+    for (const node of nodes) {
+      adj.set(node.id, []);
+      inDegree.set(node.id, 0);
+    }
+
+    for (const conn of connections) {
+      adj.get(conn.fromNodeId)?.push({ to: conn.toNodeId, branch: conn.branch ?? 'default' });
+      inDegree.set(conn.toNodeId, (inDegree.get(conn.toNodeId) ?? 0) + 1);
+    }
+
+    // Topological sort (Kahn's algorithm) — deterministic ordering
+    const queue: string[] = [];
+    for (const [nodeId, deg] of inDegree) {
+      if (deg === 0) queue.push(nodeId);
+    }
+    // Sort queue for determinism when multiple roots
+    queue.sort();
+
+    const nodeMap = new Map(nodes.map(n => [n.id, n.nodeType]));
+    const parts: string[] = [triggerType];
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const nodeType = nodeMap.get(current) ?? 'unknown';
+      const edges = adj.get(current) ?? [];
+
+      // Sort edges for determinism
+      edges.sort((a, b) => a.branch.localeCompare(b.branch) || a.to.localeCompare(b.to));
+
+      for (const edge of edges) {
+        const targetType = nodeMap.get(edge.to) ?? 'unknown';
+        parts.push(`${nodeType}:${edge.branch}:${targetType}`);
+        const newDeg = (inDegree.get(edge.to) ?? 1) - 1;
+        inDegree.set(edge.to, newDeg);
+        if (newDeg === 0) {
+          queue.push(edge.to);
+          queue.sort();
+        }
+      }
+    }
+
+    const canonical = parts.join('→');
+    return createHash('sha256').update(canonical).digest('hex');
+  }
+
   /* ───── Publish Template ───── */
 
   async publishTemplate(
@@ -134,11 +203,33 @@ export class MarketplaceService {
       branch: c.branch,
     }));
 
+    // Generate structural fingerprint for duplicate detection
+    const fingerprint = this.generateFingerprint(
+      workflow.trigger_type,
+      serializedNodes,
+      serializedConnections,
+    );
+
+    // Check for existing published template with same structure
+    const [existing] = await this.dataSource.query(
+      `SELECT id, name, publisher_tenant_id FROM public.workflow_templates
+       WHERE structure_fingerprint = $1 AND is_published = true`,
+      [fingerprint],
+    );
+
+    if (existing) {
+      throw new ConflictException(
+        `A workflow with this exact structure already exists in the store: "${existing.name}". ` +
+        `Please modify your workflow to make it unique before publishing.`,
+      );
+    }
+
     const [template] = await this.dataSource.query(
       `INSERT INTO public.workflow_templates
        (publisher_tenant_id, publisher_user_id, name, description, category, tags,
-        trigger_type, trigger_config, nodes, connections, price_cents, is_official)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, false)
+        trigger_type, trigger_config, nodes, connections, price_cents, is_official,
+        structure_fingerprint)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, false, $12)
        RETURNING *`,
       [
         tenantId,
@@ -152,6 +243,7 @@ export class MarketplaceService {
         JSON.stringify(serializedNodes),
         JSON.stringify(serializedConnections),
         dto.priceCents ?? 0,
+        fingerprint,
       ],
     );
 
