@@ -1,4 +1,4 @@
-import { IsEmail, IsString, IsOptional, IsUUID, MinLength, MaxLength } from 'class-validator';
+import { IsEmail, IsString, IsOptional, IsUUID, MinLength, MaxLength, IsObject } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class SignupDto {
@@ -21,4 +21,9 @@ export class SignupDto {
   @IsOptional()
   @IsUUID()
   tenantId?: string;
+
+  @ApiPropertyOptional({ description: 'Onboarding form responses (submitted during church signup)' })
+  @IsOptional()
+  @IsObject()
+  onboardingResponses?: Record<string, any>;
 }

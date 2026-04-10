@@ -122,6 +122,70 @@ export class AuthService {
            VALUES ($1, $2, $2) ON CONFLICT DO NOTHING`,
           [guestTag.id, userId],
         );
+
+        // Process onboarding form responses if provided
+        if (dto.onboardingResponses && Object.keys(dto.onboardingResponses).length > 0) {
+          const [form] = await manager.query(
+            `SELECT id FROM public.onboarding_forms WHERE tenant_id = $1 AND is_active = true`,
+            [dto.tenantId],
+          );
+          if (form) {
+            // Save responses
+            await manager.query(
+              `INSERT INTO public.onboarding_responses (tenant_id, user_id, form_id, responses)
+               VALUES ($1, $2, $3, $4::jsonb)
+               ON CONFLICT (user_id, tenant_id) DO UPDATE SET responses = $4::jsonb, submitted_at = now()`,
+              [dto.tenantId, userId, form.id, JSON.stringify(dto.onboardingResponses)],
+            );
+
+            // Auto-populate journey data from mapped fields
+            const resp = dto.onboardingResponses;
+            const journeyUpdates: Record<string, any> = {};
+            if (resp.is_baptized !== undefined) journeyUpdates.is_baptized = resp.is_baptized;
+            if (resp.baptism_date) journeyUpdates.baptism_date = resp.baptism_date;
+            if (resp.salvation_date) journeyUpdates.salvation_date = resp.salvation_date;
+            if (resp.is_saved === true && !resp.salvation_date) {
+              journeyUpdates.salvation_date = new Date().toISOString().split('T')[0];
+            }
+            if (resp.interests) journeyUpdates.interests = resp.interests;
+            if (resp.skills) journeyUpdates.skills = resp.skills;
+            if (resp.faith_journey) {
+              const trackMap: Record<string, string> = {
+                'Just exploring': 'exploring',
+                'New believer': 'foundations',
+                'Growing in faith': 'growth',
+                'Mature believer': 'maturity',
+                'Ready to lead/serve': 'leadership',
+              };
+              journeyUpdates.discipleship_track = trackMap[resp.faith_journey] ?? 'exploring';
+            }
+
+            if (Object.keys(journeyUpdates).length > 0) {
+              await manager.query(
+                `INSERT INTO public.member_journeys (tenant_id, user_id, is_baptized, baptism_date, salvation_date, interests, skills, discipleship_track)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                 ON CONFLICT (tenant_id, user_id) DO UPDATE SET
+                   is_baptized = COALESCE($3, member_journeys.is_baptized),
+                   baptism_date = COALESCE($4, member_journeys.baptism_date),
+                   salvation_date = COALESCE($5, member_journeys.salvation_date),
+                   interests = COALESCE($6, member_journeys.interests),
+                   skills = COALESCE($7, member_journeys.skills),
+                   discipleship_track = COALESCE($8, member_journeys.discipleship_track),
+                   updated_at = now()`,
+                [
+                  dto.tenantId,
+                  userId,
+                  journeyUpdates.is_baptized ?? null,
+                  journeyUpdates.baptism_date ?? null,
+                  journeyUpdates.salvation_date ?? null,
+                  journeyUpdates.interests ? `{${journeyUpdates.interests.join(',')}}` : null,
+                  journeyUpdates.skills ? `{${journeyUpdates.skills.join(',')}}` : null,
+                  journeyUpdates.discipleship_track ?? null,
+                ],
+              );
+            }
+          }
+        }
       });
 
       // Auto-login so the frontend gets tokens immediately

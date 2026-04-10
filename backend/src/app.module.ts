@@ -113,6 +113,9 @@ import { LeaderboardModule } from './leaderboard/leaderboard.module';
 import { LeaderboardSettings } from './leaderboard/entities/leaderboard-settings.entity';
 import { CheckinConfig } from './leaderboard/entities/checkin-config.entity';
 import { DailyAppOpen } from './leaderboard/entities/daily-app-open.entity';
+import { OnboardingModule } from './onboarding/onboarding.module';
+import { OnboardingForm } from './onboarding/entities/onboarding-form.entity';
+import { OnboardingResponse } from './onboarding/entities/onboarding-response.entity';
 
 @Module({
   imports: [
@@ -146,6 +149,7 @@ import { DailyAppOpen } from './leaderboard/entities/daily-app-open.entity';
           Badge, MemberBadge,
           WorkflowTemplate, TemplateInstall, TemplateRating,
           LeaderboardSettings, CheckinConfig, DailyAppOpen,
+          OnboardingForm, OnboardingResponse,
         ],
 
         // CRITICAL: synchronize must ALWAYS be false.
@@ -266,6 +270,7 @@ import { DailyAppOpen } from './leaderboard/entities/daily-app-open.entity';
     BadgesModule,
     MarketplaceModule,
     LeaderboardModule,
+    OnboardingModule,
 
     // GraphQL — Apollo Driver (code-first approach)
     // The FeedModule provides the FeedResolver which registers the globalFeed query.
