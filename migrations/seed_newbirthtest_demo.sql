@@ -441,7 +441,7 @@ BEGIN
   -- ════════════════════════════════════════════════════════════
   -- 6. SERVICE SCHEDULES + CHECK-INS (200+ over 12 weeks)
   -- ════════════════════════════════════════════════════════════
-  INSERT INTO public.service_schedules (id, tenant_id, name, day_of_week, start_time) VALUES
+  INSERT INTO public.services (id, tenant_id, name, day_of_week, start_time) VALUES
     (sv1, tid, 'Sunday Morning Worship', 0, '09:00'),
     (sv2, tid, 'Sunday Evening Service', 0, '18:00'),
     (sv3, tid, 'Wednesday Bible Study', 3, '19:00')
