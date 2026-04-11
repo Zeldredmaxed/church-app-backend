@@ -1,4 +1,6 @@
-import { Injectable, NotFoundException, InternalServerErrorException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, InternalServerErrorException, ConflictException, Logger } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { DataSource } from 'typeorm';
 import { rlsStorage } from '../common/storage/rls.storage';
 import { Badge } from './entities/badge.entity';
@@ -148,7 +150,12 @@ const BADGE_ICON_CATALOG = [
 
 @Injectable()
 export class BadgesService {
-  constructor(private readonly dataSource: DataSource) {}
+  private readonly logger = new Logger(BadgesService.name);
+
+  constructor(
+    private readonly dataSource: DataSource,
+    @InjectQueue('notifications') private readonly notificationsQueue: Queue,
+  ) {}
 
   private getRlsContext() {
     const ctx = rlsStorage.getStore();
@@ -522,6 +529,18 @@ export class BadgesService {
           [badge.id, userId, tenantId, `Auto-awarded: ${rule.type}`],
         );
         newlyAwarded.push({ badgeId: badge.id, name: badge.name });
+
+        // Fire super-rare broadcast if this is a diamond/platinum badge with < 5 earners
+        const tier = badge.auto_award_rule?.tier ?? badge.tier;
+        if (['diamond', 'platinum'].includes(tier) || badge.rarity_tier === 'mythic' || badge.rarity_tier === 'legendary') {
+          const [{ count: awardCount }] = await queryRunner.query(
+            `SELECT COUNT(*)::int AS count FROM public.member_badges WHERE badge_id = $1`,
+            [badge.id],
+          );
+          if (Number(awardCount) <= 5) {
+            this.fireSuperRareBroadcast(tenantId, userId, badge.name, Number(awardCount)).catch(() => {});
+          }
+        }
       }
     }
 
@@ -828,6 +847,42 @@ export class BadgesService {
         rarityPercent: Math.round((earnedCount / totalUsers) * 10000) / 100,
       };
     });
+  }
+
+  /**
+   * Broadcasts a system notification to all users when someone earns a super-rare badge.
+   * Triggered when a diamond/platinum/mythic/legendary badge has < 5 total earners.
+   */
+  private async fireSuperRareBroadcast(tenantId: string, userId: string, badgeName: string, awardCount: number) {
+    // Get the earner's name
+    const [user] = await this.dataSource.query(
+      `SELECT full_name FROM public.users WHERE id = $1`, [userId],
+    );
+    const userName = user?.full_name ?? 'A member';
+
+    // Get all user IDs in the same tenant (excluding the earner)
+    const recipients = await this.dataSource.query(
+      `SELECT user_id FROM public.tenant_memberships WHERE tenant_id = $1 AND user_id != $2`,
+      [tenantId, userId],
+    );
+    const recipientIds = recipients.map((r: any) => r.user_id);
+
+    if (recipientIds.length === 0) return;
+
+    // Queue bulk notification
+    await this.notificationsQueue.add('notification', {
+      type: 'system_broadcast',
+      tenantId,
+      recipientIds,
+      actorUserId: userId,
+      broadcastTitle: 'Legendary Achievement!',
+      broadcastBody: `${userName} just earned the "${badgeName}" badge — only ${awardCount} ${awardCount === 1 ? 'person has' : 'people have'} this!`,
+      previewText: `${userName} earned "${badgeName}"`,
+      screen: 'UserProfile',
+      params: { userId },
+    });
+
+    this.logger.log(`Super-rare badge broadcast: "${badgeName}" earned by ${userId} (${awardCount} total earners)`);
   }
 
   async getBadgeLeaderboard(limit: number) {
