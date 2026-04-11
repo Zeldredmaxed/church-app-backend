@@ -20,15 +20,7 @@ export class DashboardService {
   }
 
   private async _getKpis(tenantId: string) {
-    const [
-      [{ total_members }],
-      [{ new_members_this_month }],
-      [{ total_giving_this_month }],
-      [{ active_groups }],
-      [{ total_prayers }],
-      [{ active_volunteers }],
-      [{ pending_prayers }],
-    ] = await Promise.all([
+    const [r1, r2, r3, r4, r5, r6, r7] = await Promise.all([
       this.dataSource.query(
         `SELECT COUNT(*)::int AS total_members FROM public.tenant_memberships WHERE tenant_id = $1`,
         [tenantId],
@@ -68,13 +60,13 @@ export class DashboardService {
     ]);
 
     return {
-      totalMembers: total_members,
-      newMembersThisMonth: new_members_this_month,
-      totalGivingThisMonth: total_giving_this_month,
-      activeGroups: active_groups,
-      totalPrayers: total_prayers,
-      activeVolunteers: active_volunteers,
-      pendingPrayers: pending_prayers,
+      totalMembers: r1[0]?.total_members ?? 0,
+      newMembersThisMonth: r2[0]?.new_members_this_month ?? 0,
+      totalGivingThisMonth: r3[0]?.total_giving_this_month ?? 0,
+      activeGroups: r4[0]?.active_groups ?? 0,
+      totalPrayers: r5[0]?.total_prayers ?? 0,
+      activeVolunteers: r6[0]?.active_volunteers ?? 0,
+      pendingPrayers: r7[0]?.pending_prayers ?? 0,
     };
   }
 

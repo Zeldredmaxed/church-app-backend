@@ -49,27 +49,38 @@ export class FundraisersService {
   ) {
     const { queryRunner } = this.getRlsContext();
     const offset = (page - 1) * limit;
-    const params: any[] = [userId, limit, offset];
+
+    // Build filter conditions with separate param arrays for main query vs count query
+    const filterParams: any[] = [];
     const conditions: string[] = [];
+    // For the main query, $1=userId, $2=limit, $3=offset, filters start at $4
+    // For the count query, filters start at $1
+    const mainConditions: string[] = [];
+    const countConditions: string[] = [];
 
     if (status) {
-      params.push(status);
-      conditions.push(`f.status = $${params.length}`);
+      filterParams.push(status);
+      mainConditions.push(`f.status = $${3 + filterParams.length}`);
+      countConditions.push(`f.status = $${filterParams.length}`);
     } else {
-      conditions.push(`f.status = 'active'`);
+      mainConditions.push(`f.status = 'active'`);
+      countConditions.push(`f.status = 'active'`);
     }
 
     if (category) {
-      params.push(category);
-      conditions.push(`f.category = $${params.length}`);
+      filterParams.push(category);
+      mainConditions.push(`f.category = $${3 + filterParams.length}`);
+      countConditions.push(`f.category = $${filterParams.length}`);
     }
 
     if (search && search.trim()) {
-      params.push(`%${search.trim()}%`);
-      conditions.push(`f.title ILIKE $${params.length}`);
+      filterParams.push(`%${search.trim()}%`);
+      mainConditions.push(`f.title ILIKE $${3 + filterParams.length}`);
+      countConditions.push(`f.title ILIKE $${filterParams.length}`);
     }
 
-    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+    const mainWhere = mainConditions.length ? 'WHERE ' + mainConditions.join(' AND ') : '';
+    const countWhere = countConditions.length ? 'WHERE ' + countConditions.join(' AND ') : '';
 
     const rows = await queryRunner.query(
       `SELECT f.*,
@@ -77,16 +88,17 @@ export class FundraisersService {
               EXISTS(SELECT 1 FROM public.fundraiser_bookmarks WHERE fundraiser_id = f.id AND user_id = $1) AS is_bookmarked
        FROM public.fundraisers f
        JOIN public.tenants t ON t.id = f.tenant_id
-       ${where}
+       ${mainWhere}
        ORDER BY f.created_at DESC
        LIMIT $2 OFFSET $3`,
-      params,
+      [userId, limit, offset, ...filterParams],
     );
 
-    const [{ total }] = await queryRunner.query(
-      `SELECT COUNT(*)::int AS total FROM public.fundraisers f ${where}`,
-      params.slice(3), // skip userId, limit, offset — only filter params
+    const countResult = await queryRunner.query(
+      `SELECT COUNT(*)::int AS total FROM public.fundraisers f ${countWhere}`,
+      filterParams,
     );
+    const total = countResult[0]?.total ?? 0;
 
     return {
       data: rows.map((r: any) => this.mapFundraiserListItem(r)),
@@ -233,9 +245,12 @@ export class FundraisersService {
       `Fundraiser donation initiated: ${dto.amount}c from ${userId} to fundraiser ${fundraiserId} (PI: ${paymentIntent.id})`,
     );
 
+    if (!paymentIntent.client_secret) {
+      throw new BadRequestException('Payment could not be initiated. Please try again.');
+    }
     return {
       donationId: saved.id,
-      clientSecret: paymentIntent.client_secret!,
+      clientSecret: paymentIntent.client_secret,
       status: 'requires_confirmation',
     };
   }

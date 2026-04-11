@@ -111,8 +111,11 @@ export class GivingService {
     );
 
     // Step 6: Return client_secret for frontend confirmation
+    if (!paymentIntent.client_secret) {
+      throw new BadRequestException('Payment could not be initiated. Please try again.');
+    }
     return {
-      clientSecret: paymentIntent.client_secret!,
+      clientSecret: paymentIntent.client_secret,
       transactionId: saved.id,
     };
   }
@@ -300,46 +303,49 @@ export class GivingService {
   async createBatch(tenantId: string, userId: string, dto: CreateBatchDto) {
     const totalAmount = dto.items.reduce((sum, item) => sum + item.amount, 0);
 
-    // Create batch header
-    const [batch] = await this.dataSource.query(
-      `INSERT INTO public.giving_batches (tenant_id, created_by, name, total_amount, item_count, status, committed_at)
-       VALUES ($1, $2, $3, $4, $5, 'committed', now())
-       RETURNING *`,
-      [tenantId, userId, dto.name ?? `Batch ${new Date().toLocaleDateString()}`, totalAmount, dto.items.length],
-    );
-
-    // Insert each donation as a transaction
-    for (const item of dto.items) {
-      const donationDate = item.date ? new Date(item.date) : new Date();
-      await this.dataSource.query(
-        `INSERT INTO public.transactions
-          (tenant_id, user_id, amount, currency, stripe_payment_intent_id, status, payment_method, check_number, batch_id, notes, fund_id, created_at)
-         VALUES ($1, $2, $3, 'usd', $4, 'succeeded', $5, $6, $7, $8, $9, $10)`,
-        [
-          tenantId,
-          item.donorId ?? null,
-          item.amount,
-          `offline_${item.method}_${batch.id}_${Math.random().toString(36).substring(7)}`,
-          item.method,
-          item.checkNumber ?? null,
-          batch.id,
-          item.notes ?? null,
-          item.fundId ?? null,
-          donationDate.toISOString(),
-        ],
+    // Wrap in a transaction — if any item fails, the entire batch rolls back
+    return this.dataSource.transaction(async manager => {
+      // Create batch header
+      const [batch] = await manager.query(
+        `INSERT INTO public.giving_batches (tenant_id, created_by, name, total_amount, item_count, status, committed_at)
+         VALUES ($1, $2, $3, $4, $5, 'committed', now())
+         RETURNING *`,
+        [tenantId, userId, dto.name ?? `Batch ${new Date().toLocaleDateString()}`, totalAmount, dto.items.length],
       );
-    }
 
-    this.logger.log(`Batch created: ${batch.id} — ${dto.items.length} items, $${totalAmount}`);
+      // Insert each donation as a transaction
+      for (const item of dto.items) {
+        const donationDate = item.date ? new Date(item.date) : new Date();
+        await manager.query(
+          `INSERT INTO public.transactions
+            (tenant_id, user_id, amount, currency, stripe_payment_intent_id, status, payment_method, check_number, batch_id, notes, fund_id, created_at)
+           VALUES ($1, $2, $3, 'usd', $4, 'succeeded', $5, $6, $7, $8, $9, $10)`,
+          [
+            tenantId,
+            item.donorId ?? null,
+            item.amount,
+            `offline_${item.method}_${batch.id}_${Math.random().toString(36).substring(7)}`,
+            item.method,
+            item.checkNumber ?? null,
+            batch.id,
+            item.notes ?? null,
+            item.fundId ?? null,
+            donationDate.toISOString(),
+          ],
+        );
+      }
 
-    return {
-      batchId: batch.id,
-      name: batch.name,
-      totalAmount,
-      itemCount: dto.items.length,
-      status: 'committed',
-      createdAt: batch.created_at,
-    };
+      this.logger.log(`Batch created: ${batch.id} — ${dto.items.length} items, $${totalAmount}`);
+
+      return {
+        batchId: batch.id,
+        name: batch.name,
+        totalAmount,
+        itemCount: dto.items.length,
+        status: 'committed',
+        createdAt: batch.created_at,
+      };
+    });
   }
 
   /**

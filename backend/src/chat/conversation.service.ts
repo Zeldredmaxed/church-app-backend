@@ -191,7 +191,7 @@ export class ConversationService {
     this.dataSource.query(
       `UPDATE public.channel_members SET last_read_at = now() WHERE channel_id = $1 AND user_id = $2`,
       [conversationId, userId],
-    ).catch(() => {});
+    ).catch(err => this.logger.warn(`Failed to update last_read_at: ${err.message}`));
 
     return rows.map((r: any) => ({
       id: r.id,
