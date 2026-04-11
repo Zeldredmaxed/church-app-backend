@@ -40,8 +40,12 @@ export class Comment {
   @Column({ type: 'uuid', nullable: true, name: 'parent_id' })
   parentId: string | null;
 
-  @Column({ type: 'text' })
-  content: string;
+  @Column({ type: 'text', nullable: true })
+  content: string | null;
+
+  /** Optional image attachment URL. NULL when no image is attached. */
+  @Column({ type: 'text', nullable: true, name: 'media_url' })
+  mediaUrl: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

@@ -278,7 +278,6 @@ export class TenantsService {
   async getFeatures(tenantId: string) {
     const tenant = await this.dataSource.manager.findOne(Tenant, {
       where: { id: tenantId },
-      select: ['id', 'name', 'tier', 'slug'],
     });
 
     if (!tenant) {
@@ -288,6 +287,32 @@ export class TenantsService {
     const features = getTierFeatures(tenant.tier);
     const displayName = TIER_DISPLAY_NAMES[tenant.tier as TierName] ?? tenant.tier;
 
+    // If this tenant is part of a multi-site org, include campus info
+    let campusInfo: any = null;
+    if (tenant.parentTenantId || features.multiSite) {
+      const parentId = tenant.parentTenantId ?? tenant.id;
+      const campuses = await this.dataSource.query(
+        `SELECT id, name, campus_name, parent_tenant_id IS NULL AS is_parent
+         FROM public.tenants
+         WHERE id = $1 OR parent_tenant_id = $1
+         ORDER BY parent_tenant_id NULLS FIRST, campus_name ASC`,
+        [parentId],
+      );
+      campusInfo = {
+        isMultiSite: campuses.length > 1 || features.multiSite,
+        currentCampusId: tenant.id,
+        currentCampusName: tenant.campusName,
+        parentOrganizationId: parentId,
+        feedIsolation: tenant.feedIsolation,
+        campuses: campuses.map((c: any) => ({
+          id: c.id,
+          name: c.name,
+          campusName: c.campus_name,
+          isParent: c.is_parent,
+        })),
+      };
+    }
+
     return {
       tenant: {
         id: tenant.id,
@@ -295,8 +320,11 @@ export class TenantsService {
         slug: tenant.slug,
         tier: tenant.tier,
         tierDisplayName: displayName,
+        campusName: tenant.campusName,
+        parentTenantId: tenant.parentTenantId,
       },
       features,
+      ...(campusInfo ? { campus: campusInfo } : {}),
     };
   }
 

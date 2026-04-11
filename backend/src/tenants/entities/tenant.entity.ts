@@ -37,6 +37,38 @@ export class Tenant {
   @Column({ type: 'boolean', name: 'leaderboard_enabled', default: true })
   leaderboardEnabled: boolean;
 
+  // ── Multi-site / Campus fields (migration 039) ──
+
+  /** If set, this tenant is a campus under the parent organization. NULL = standalone or parent org. */
+  @Column({ type: 'uuid', nullable: true, name: 'parent_tenant_id' })
+  parentTenantId: string | null;
+
+  /** Display name for this campus location (e.g. "10th Street Campus"). */
+  @Column({ type: 'text', nullable: true, name: 'campus_name' })
+  campusName: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  address: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  city: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  state: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  zip: string | null;
+
+  @Column({ type: 'double precision', nullable: true })
+  latitude: number | null;
+
+  @Column({ type: 'double precision', nullable: true })
+  longitude: number | null;
+
+  /** When true, social feed is isolated per campus. When false (default), shared across all campuses. */
+  @Column({ type: 'boolean', name: 'feed_isolation', default: false })
+  feedIsolation: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }

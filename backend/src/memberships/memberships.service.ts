@@ -49,19 +49,23 @@ export class MembershipsService {
       tenant_tier: string;
       tenant_slug: string | null;
       tenant_created_at: string;
+      campus_name: string | null;
+      parent_tenant_id: string | null;
     }> = await this.dataSource.query(
       `SELECT
          tm.user_id,
          tm.tenant_id,
          tm.role,
-         t.name       AS tenant_name,
-         t.tier       AS tenant_tier,
-         t.slug       AS tenant_slug,
-         t.created_at AS tenant_created_at
+         t.name             AS tenant_name,
+         t.tier             AS tenant_tier,
+         t.slug             AS tenant_slug,
+         t.created_at       AS tenant_created_at,
+         t.campus_name      AS campus_name,
+         t.parent_tenant_id AS parent_tenant_id
        FROM public.tenant_memberships tm
        JOIN public.tenants t ON t.id = tm.tenant_id
        WHERE tm.user_id = $1
-       ORDER BY t.name ASC`,
+       ORDER BY t.parent_tenant_id NULLS FIRST, t.campus_name ASC, t.name ASC`,
       [userId],
     );
 
@@ -76,6 +80,8 @@ export class MembershipsService {
         tier: row.tenant_tier,
         slug: row.tenant_slug,
         createdAt: row.tenant_created_at,
+        campusName: row.campus_name,
+        parentTenantId: row.parent_tenant_id,
       },
     }));
   }

@@ -63,11 +63,19 @@ export class CommentsService {
       throw new NotFoundException('Post not found');
     }
 
+    // At least one of content or mediaUrl must be provided
+    const hasContent = dto.content && dto.content.trim().length > 0;
+    const hasMedia = dto.mediaUrl && dto.mediaUrl.trim().length > 0;
+    if (!hasContent && !hasMedia) {
+      throw new BadRequestException('A comment must have either text content or an image attachment.');
+    }
+
     const comment = queryRunner.manager.create(Comment, {
       postId,
       tenantId: currentTenantId,
       authorId,
-      content: dto.content,
+      content: hasContent ? dto.content!.trim() : null,
+      mediaUrl: hasMedia ? dto.mediaUrl! : null,
       parentId: dto.parentId ?? null,
     });
 
@@ -83,7 +91,7 @@ export class CommentsService {
       actorUserId: authorId,
       postId,
       commentId: saved.id,
-      previewText: dto.content.slice(0, 100),
+      previewText: hasContent ? dto.content!.slice(0, 100) : '📷 Image comment',
     });
 
     // Re-fetch with author relation so the response includes fullName/avatarUrl
