@@ -352,7 +352,12 @@ export class AuthService {
    * Logout endpoint. Since Supabase JWTs are stateless, the client simply
    * discards the token. This endpoint exists for API completeness.
    */
-  async logout() {
+  async logout(userId: string) {
+    // Mark user as offline
+    await this.dataSource.query(
+      `UPDATE public.users SET is_online = false WHERE id = $1`,
+      [userId],
+    );
     return { message: 'Logged out successfully. Discard your tokens.' };
   }
 

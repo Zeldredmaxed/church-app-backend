@@ -43,6 +43,14 @@ export class User {
   @Column({ type: 'text', nullable: true, unique: true, name: 'stripe_customer_id' })
   stripeCustomerId: string | null;
 
+  /** Whether the user is currently active in the app. Updated by presence middleware. */
+  @Column({ type: 'boolean', name: 'is_online', default: false })
+  isOnline: boolean;
+
+  /** Last API activity timestamp. Updated on every authenticated request. */
+  @Column({ type: 'timestamptz', name: 'last_seen_at', nullable: true })
+  lastSeenAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }

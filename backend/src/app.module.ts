@@ -6,7 +6,7 @@ import { GraphQLModule } from '@nestjs/graphql';
 import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { RedisThrottlerStorage } from './common/storage/redis-throttler.storage';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { join } from 'path';
 import { AuthModule } from './auth/auth.module';
 import { TenantsModule } from './tenants/tenants.module';
@@ -26,6 +26,7 @@ import { StripeModule } from './stripe/stripe.module';
 import { GivingModule } from './giving/giving.module';
 import { HealthModule } from './health/health.module';
 import { CustomThrottlerGuard } from './common/guards/custom-throttler.guard';
+import { PresenceInterceptor } from './common/interceptors/presence.interceptor';
 import { SupabaseAdminModule } from './common/services/supabase-admin.service';
 import { Transaction } from './giving/entities/transaction.entity';
 import { Follow } from './follows/entities/follow.entity';
@@ -304,6 +305,10 @@ import { FundraiserBookmark } from './fundraisers/entities/fundraiser-bookmark.e
     {
       provide: APP_GUARD,
       useClass: CustomThrottlerGuard,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: PresenceInterceptor,
     },
   ],
 })

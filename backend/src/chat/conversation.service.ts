@@ -48,18 +48,17 @@ export class ConversationService {
          u.id AS participant_id,
          u.full_name AS participant_name,
          u.avatar_url AS participant_avatar,
+         u.is_online AS participant_is_online,
+         u.last_seen_at AS participant_last_seen_at,
          -- Last message preview
          lm.content AS last_message_content,
          lm.media_type AS last_message_media_type,
          lm.created_at AS last_message_at,
          lm.user_id AS last_message_sender_id,
-         -- Unread count: messages after user's last read (approximation: all messages not from me)
+         -- Unread count: messages from other user after my last_read_at
          (SELECT COUNT(*)::int FROM public.chat_messages
           WHERE channel_id = ch.id AND user_id != $1
-            AND created_at > COALESCE(
-              (SELECT MAX(created_at) FROM public.chat_messages WHERE channel_id = ch.id AND user_id = $1),
-              '1970-01-01'
-            )
+            AND created_at > COALESCE(cm.last_read_at, '1970-01-01')
          ) AS unread_count
        FROM public.chat_channels ch
        JOIN public.channel_members cm ON cm.channel_id = ch.id AND cm.user_id = $1
@@ -83,6 +82,8 @@ export class ConversationService {
         id: r.participant_id,
         fullName: r.participant_name,
         avatarUrl: r.participant_avatar,
+        isOnline: r.participant_is_online ?? false,
+        lastSeenAt: r.participant_last_seen_at,
       },
       lastMessage: r.last_message_content != null ? {
         content: r.last_message_content,
@@ -141,9 +142,9 @@ export class ConversationService {
       this.logger.log(`DM conversation created: ${saved.id} between ${userId} and ${participantId}`);
     }
 
-    // Fetch participant info
+    // Fetch participant info with presence
     const [participant] = await this.dataSource.query(
-      `SELECT id, full_name, avatar_url FROM public.users WHERE id = $1`,
+      `SELECT id, full_name, avatar_url, is_online, last_seen_at FROM public.users WHERE id = $1`,
       [participantId],
     );
 
@@ -155,6 +156,8 @@ export class ConversationService {
         id: participant.id,
         fullName: participant.full_name,
         avatarUrl: participant.avatar_url,
+        isOnline: participant.is_online ?? false,
+        lastSeenAt: participant.last_seen_at,
       },
       updatedAt: existing[0]?.updated_at ?? new Date().toISOString(),
     };
@@ -183,6 +186,12 @@ export class ConversationService {
        ORDER BY created_at ASC`,
       [conversationId],
     );
+
+    // Mark conversation as read (update last_read_at — resets unread count)
+    this.dataSource.query(
+      `UPDATE public.channel_members SET last_read_at = now() WHERE channel_id = $1 AND user_id = $2`,
+      [conversationId, userId],
+    ).catch(() => {});
 
     return rows.map((r: any) => ({
       id: r.id,

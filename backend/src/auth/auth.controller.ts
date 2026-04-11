@@ -95,8 +95,8 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Logout (client should discard tokens)' })
   @ApiResponse({ status: 200, description: 'Logged out successfully' })
-  logout() {
-    return this.authService.logout();
+  logout(@CurrentUser() user: SupabaseJwtPayload) {
+    return this.authService.logout(user.sub);
   }
 
   @Get('session')
