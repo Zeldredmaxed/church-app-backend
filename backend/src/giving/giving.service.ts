@@ -80,12 +80,18 @@ export class GivingService {
     const platformFeeCents = Math.round(amountCents * platformFeeRate);
 
     // Step 4: Create Stripe PaymentIntent
-    const paymentIntent = await this.stripeService.createPaymentIntent(
-      amountCents,
-      dto.currency,
-      tenant.stripeAccountId,
-      platformFeeCents,
-    );
+    let paymentIntent;
+    try {
+      paymentIntent = await this.stripeService.createPaymentIntent(
+        amountCents,
+        dto.currency,
+        tenant.stripeAccountId,
+        platformFeeCents,
+      );
+    } catch (err: any) {
+      this.logger.error(`Stripe PaymentIntent failed: ${err.message}`);
+      throw new BadRequestException('Payment processing temporarily unavailable. Please try again.');
+    }
 
     // Step 5: Save pending transaction (RLS INSERT policy enforces user_id = JWT sub)
     const transaction = queryRunner.manager.create(Transaction, {

@@ -203,12 +203,18 @@ export class FundraisersService {
     const platformFeeCents = Math.round(dto.amount * platformFeeRate);
 
     // Create Stripe PaymentIntent
-    const paymentIntent = await this.stripeService.createPaymentIntent(
-      dto.amount,
-      fundraiser.currency.toLowerCase(),
-      tenant.stripeAccountId,
-      platformFeeCents,
-    );
+    let paymentIntent;
+    try {
+      paymentIntent = await this.stripeService.createPaymentIntent(
+        dto.amount,
+        fundraiser.currency.toLowerCase(),
+        tenant.stripeAccountId,
+        platformFeeCents,
+      );
+    } catch (err: any) {
+      this.logger.error(`Stripe PaymentIntent failed for fundraiser ${fundraiserId}: ${err.message}`);
+      throw new BadRequestException('Payment processing temporarily unavailable. Please try again.');
+    }
 
     // Save pending donation
     const donation = queryRunner.manager.create(FundraiserDonation, {

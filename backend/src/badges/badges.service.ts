@@ -3,6 +3,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { DataSource } from 'typeorm';
 import { rlsStorage } from '../common/storage/rls.storage';
+import { CacheService } from '../common/services/cache.service';
 import { Badge } from './entities/badge.entity';
 import { CreateBadgeDto } from './dto/create-badge.dto';
 import { UpdateBadgeDto } from './dto/update-badge.dto';
@@ -154,6 +155,7 @@ export class BadgesService {
 
   constructor(
     private readonly dataSource: DataSource,
+    private readonly cache: CacheService,
     @InjectQueue('notifications') private readonly notificationsQueue: Queue,
   ) {}
 
@@ -844,20 +846,40 @@ export class BadgesService {
    * Includes whether the requesting user has earned each badge.
    */
   async getGlobalBadges(userId?: string) {
-    const rows = await this.dataSource.query(
-      `SELECT b.id, b.name, b.description, b.icon, b.color, b.tier, b.category,
-              b.rarity_tier, b.auto_award_rule, b.display_order,
-              (SELECT COUNT(*)::int FROM public.member_badges WHERE badge_id = b.id) AS earned_count,
-              ${userId ? `EXISTS(SELECT 1 FROM public.member_badges WHERE badge_id = b.id AND user_id = $1) AS is_earned,` : 'false AS is_earned,'}
-              (SELECT COUNT(*)::int FROM public.users) AS total_users
-       FROM public.badges b
-       WHERE b.is_system = true AND b.is_active = true
-       ORDER BY b.display_order, b.created_at`,
-      userId ? [userId] : [],
-    );
+    // Cache the rarity counts for 60 seconds (expensive: 246 badges × COUNT)
+    const badgeCounts = await this.cache.wrap<any[]>('badges:global:counts', 60, async () => {
+      return this.dataSource.query(
+        `SELECT b.id, b.name, b.description, b.icon, b.color, b.tier, b.category,
+                b.rarity_tier, b.auto_award_rule, b.display_order,
+                COALESCE(mc.earned_count, 0) AS earned_count
+         FROM public.badges b
+         LEFT JOIN (
+           SELECT badge_id, COUNT(*)::int AS earned_count
+           FROM public.member_badges
+           GROUP BY badge_id
+         ) mc ON mc.badge_id = b.id
+         WHERE b.is_system = true AND b.is_active = true
+         ORDER BY b.display_order, b.created_at`,
+      );
+    });
 
-    return rows.map((r: any) => {
-      const totalUsers = Math.max(Number(r.total_users), 1);
+    // Total users (cached separately, 5 min TTL)
+    const totalUsers = await this.cache.wrap<number>('badges:total_users', 300, async () => {
+      const [{ count }] = await this.dataSource.query(`SELECT COUNT(*)::int AS count FROM public.users`);
+      return Math.max(Number(count), 1);
+    });
+
+    // User's earned badges (not cached — per-user)
+    let earnedSet = new Set<string>();
+    if (userId) {
+      const earned = await this.dataSource.query(
+        `SELECT badge_id FROM public.member_badges WHERE user_id = $1`,
+        [userId],
+      );
+      earnedSet = new Set(earned.map((r: any) => r.badge_id));
+    }
+
+    return badgeCounts.map((r: any) => {
       const earnedCount = Number(r.earned_count);
       return {
         id: r.id,
@@ -869,7 +891,7 @@ export class BadgesService {
         category: r.category,
         rarityTier: r.rarity_tier,
         autoAwardRule: r.auto_award_rule,
-        isEarned: r.is_earned,
+        isEarned: earnedSet.has(r.id),
         isSystem: true,
         totalEarned: earnedCount,
         totalUsers,

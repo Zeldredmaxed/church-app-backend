@@ -6,6 +6,7 @@ import { CreateBadgeDto } from './dto/create-badge.dto';
 import { UpdateBadgeDto } from './dto/update-badge.dto';
 import { AwardBadgeDto } from './dto/award-badge.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -79,26 +80,34 @@ export class BadgesController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Create a badge' })
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @ApiOperation({ summary: 'Create a badge (admin/pastor only)' })
   createBadge(@Body() dto: CreateBadgeDto, @CurrentUser() user: SupabaseJwtPayload) {
     return this.badgesService.createBadge(dto, user.sub);
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update a badge' })
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @ApiOperation({ summary: 'Update a badge (admin/pastor only)' })
   updateBadge(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateBadgeDto) {
     return this.badgesService.updateBadge(id, dto);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Delete a badge (cascades awards)' })
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @ApiOperation({ summary: 'Delete a badge (admin/pastor only, cascades awards)' })
   deleteBadge(@Param('id', ParseUUIDPipe) id: string) {
     return this.badgesService.deleteBadge(id);
   }
 
   @Post(':id/award')
-  @ApiOperation({ summary: 'Award badge to one or more members' })
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @ApiOperation({ summary: 'Award badge to one or more members (admin/pastor only)' })
   awardBadge(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AwardBadgeDto,
@@ -109,7 +118,9 @@ export class BadgesController {
 
   @Delete(':id/revoke/:userId')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Revoke a badge from a member' })
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @ApiOperation({ summary: 'Revoke a badge from a member (admin/pastor only)' })
   revokeBadge(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('userId', ParseUUIDPipe) userId: string,

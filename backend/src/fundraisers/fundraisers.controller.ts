@@ -18,6 +18,7 @@ import { CreateFundraiserDto } from './dto/create-fundraiser.dto';
 import { UpdateFundraiserDto } from './dto/update-fundraiser.dto';
 import { CreateDonationDto } from './dto/create-donation.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -103,9 +104,11 @@ export class FundraisersController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Create a fundraiser (admin only, premium+ tier)' })
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @ApiOperation({ summary: 'Create a fundraiser (admin/pastor only, premium+ tier)' })
   @ApiResponse({ status: 201, description: 'Fundraiser created' })
-  @ApiResponse({ status: 403, description: 'Requires Premium or Enterprise plan' })
+  @ApiResponse({ status: 403, description: 'Requires Premium or Enterprise plan, or admin role' })
   createFundraiser(
     @Body() dto: CreateFundraiserDto,
     @CurrentUser() user: SupabaseJwtPayload,
@@ -114,7 +117,9 @@ export class FundraisersController {
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update a fundraiser (admin only)' })
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @ApiOperation({ summary: 'Update a fundraiser (admin/pastor only)' })
   @ApiResponse({ status: 200, description: 'Updated fundraiser' })
   @ApiResponse({ status: 404, description: 'Fundraiser not found' })
   updateFundraiser(
