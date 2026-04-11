@@ -186,7 +186,10 @@ export class StripeConnectController {
 
     const setupIntent = await this.stripeService.createSetupIntent(customerId);
 
-    return { clientSecret: setupIntent.client_secret! };
+    if (!setupIntent.client_secret) {
+      throw new BadRequestException('Unable to set up payment method. Please try again.');
+    }
+    return { clientSecret: setupIntent.client_secret };
   }
 
   private async requireAdmin(

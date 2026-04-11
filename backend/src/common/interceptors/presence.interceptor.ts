@@ -38,7 +38,7 @@ export class PresenceInterceptor implements NestInterceptor {
         this.dataSource.query(
           `UPDATE public.users SET is_online = true, last_seen_at = now() WHERE id = $1`,
           [user.sub],
-        ).catch(() => {});
+        ).catch(err => this.logger.warn(`Presence update failed: ${err.message}`));
       }
     }
 

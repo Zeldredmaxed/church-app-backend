@@ -285,8 +285,8 @@ export class OnboardingService {
         journeyUpdates.is_baptized ?? null,
         journeyUpdates.baptism_date ?? null,
         journeyUpdates.salvation_date ?? null,
-        journeyUpdates.interests ? `{${journeyUpdates.interests.join(',')}}` : null,
-        journeyUpdates.skills ? `{${journeyUpdates.skills.join(',')}}` : null,
+        journeyUpdates.interests ? journeyUpdates.interests : null,
+        journeyUpdates.skills ? journeyUpdates.skills : null,
         journeyUpdates.discipleship_track ?? null,
       ],
     );

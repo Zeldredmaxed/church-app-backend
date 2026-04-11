@@ -241,7 +241,7 @@ export class AuthService {
     }
 
     // Record login for streak tracking (fire-and-forget)
-    this.recordLogin(data.user!.id).catch(() => {});
+    this.recordLogin(data.user!.id).catch(err => this.logger.warn(`Login streak recording failed: ${err.message}`));
 
     return {
       accessToken: data.session!.access_token,

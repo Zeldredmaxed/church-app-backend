@@ -131,7 +131,7 @@ export class RlsContextInterceptor implements NestInterceptor {
       };
 
       setup().catch(err => {
-        queryRunner?.release().catch(() => {});
+        queryRunner?.release().catch(e => this.logger.warn(`QueryRunner release failed: ${e.message}`));
         subscriber.error(err);
       });
     });

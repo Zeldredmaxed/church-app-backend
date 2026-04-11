@@ -235,7 +235,7 @@ export class TenantsService {
     } catch (err) {
       // Cleanup: delete the Supabase Auth user if DB transaction failed
       this.logger.error(`Registration failed for ${dto.email}, cleaning up auth user`);
-      await this.supabase.auth.admin.deleteUser(userId).catch(() => {});
+      await this.supabase.auth.admin.deleteUser(userId).catch(e => this.logger.error(`Failed to clean up auth user ${userId}: ${e.message}`));
       throw err;
     }
   }
@@ -341,7 +341,7 @@ export class TenantsService {
       throw new NotFoundException('Tenant not found');
     }
 
-    const [[{ member_count }], [{ post_count }], [{ event_count }]] = await Promise.all([
+    const [r1, r2, r3] = await Promise.all([
       this.dataSource.query(
         `SELECT COUNT(*)::int AS member_count FROM public.tenant_memberships WHERE tenant_id = $1`,
         [tenantId],
@@ -367,9 +367,9 @@ export class TenantsService {
       websiteUrl: (tenant as any).website_url ?? null,
       phone: (tenant as any).phone ?? null,
       coverImageUrl: (tenant as any).cover_image_url ?? null,
-      memberCount: Number(member_count),
-      postCount: Number(post_count),
-      eventCount: Number(event_count),
+      memberCount: Number(r1[0]?.member_count ?? 0),
+      postCount: Number(r2[0]?.post_count ?? 0),
+      eventCount: Number(r3[0]?.event_count ?? 0),
     };
   }
 

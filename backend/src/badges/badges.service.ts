@@ -569,7 +569,7 @@ export class BadgesService {
             [badge.id],
           );
           if (Number(awardCount) <= 5) {
-            this.fireSuperRareBroadcast(tenantId, userId, badge.name, Number(awardCount)).catch(() => {});
+            this.fireSuperRareBroadcast(tenantId, userId, badge.name, Number(awardCount)).catch(err => this.logger.warn(`Super-rare broadcast failed: ${err.message}`));
           }
         }
       }

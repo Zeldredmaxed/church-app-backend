@@ -184,12 +184,13 @@ export class DashboardService {
 
   private async _getEngagement(tenantId: string) {
     // Fetch total members once (not 6x per week)
-    const [[{ total_members: cachedTotal }]] = await Promise.all([
+    const [totalResult] = await Promise.all([
       this.dataSource.query(
         `SELECT COUNT(*)::int AS total_members FROM public.tenant_memberships WHERE tenant_id = $1`,
         [tenantId],
       ),
     ]);
+    const cachedTotal = totalResult[0]?.total_members ?? 0;
 
     const rows: Array<{ week_start: string; active_members: string }> =
       await this.dataSource.query(
