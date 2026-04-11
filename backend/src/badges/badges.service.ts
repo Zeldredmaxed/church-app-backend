@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, InternalServerErrorException, ConflictException } from '@nestjs/common';
+import { DataSource } from 'typeorm';
 import { rlsStorage } from '../common/storage/rls.storage';
 import { Badge } from './entities/badge.entity';
 import { CreateBadgeDto } from './dto/create-badge.dto';
@@ -147,6 +148,8 @@ const BADGE_ICON_CATALOG = [
 
 @Injectable()
 export class BadgesService {
+  constructor(private readonly dataSource: DataSource) {}
+
   private getRlsContext() {
     const ctx = rlsStorage.getStore();
     if (!ctx) throw new InternalServerErrorException('RLS context unavailable');
@@ -413,6 +416,102 @@ export class BadgesService {
           qualified = (row?.cnt ?? 0) >= (rule.min ?? 1);
           break;
         }
+
+        case 'comment_count': {
+          const [row] = await queryRunner.query(
+            `SELECT COUNT(*)::int AS cnt FROM public.comments WHERE author_id = $1 AND tenant_id = $2`,
+            [userId, tenantId],
+          );
+          qualified = (row?.cnt ?? 0) >= (rule.min ?? 1);
+          break;
+        }
+
+        case 'message_count': {
+          const [row] = await queryRunner.query(
+            `SELECT COUNT(*)::int AS cnt FROM public.chat_messages WHERE user_id = $1`,
+            [userId],
+          );
+          qualified = (row?.cnt ?? 0) >= (rule.min ?? 1);
+          break;
+        }
+
+        case 'total_interactions': {
+          const [row] = await queryRunner.query(
+            `SELECT (
+              (SELECT COUNT(*) FROM public.posts WHERE author_id = $1 AND tenant_id = $2) +
+              (SELECT COUNT(*) FROM public.comments WHERE author_id = $1 AND tenant_id = $2) +
+              (SELECT COUNT(*) FROM public.chat_messages WHERE user_id = $1) +
+              (SELECT COUNT(*) FROM public.post_likes WHERE user_id = $1)
+            )::int AS cnt`,
+            [userId, tenantId],
+          );
+          qualified = (row?.cnt ?? 0) >= (rule.min ?? 1);
+          break;
+        }
+
+        case 'follower_count': {
+          const [row] = await queryRunner.query(
+            `SELECT COUNT(*)::int AS cnt FROM public.follows WHERE following_id = $1`,
+            [userId],
+          );
+          qualified = (row?.cnt ?? 0) >= (rule.min ?? 1);
+          break;
+        }
+
+        case 'following_count': {
+          const [row] = await queryRunner.query(
+            `SELECT COUNT(*)::int AS cnt FROM public.follows WHERE follower_id = $1`,
+            [userId],
+          );
+          qualified = (row?.cnt ?? 0) >= (rule.min ?? 1);
+          break;
+        }
+
+        case 'fundraiser_donation_count': {
+          const [row] = await queryRunner.query(
+            `SELECT COUNT(*)::int AS cnt FROM public.fundraiser_donations
+             WHERE donor_id = $1 AND payment_status = 'succeeded'`,
+            [userId],
+          );
+          qualified = (row?.cnt ?? 0) >= (rule.min ?? 1);
+          break;
+        }
+
+        case 'fundraiser_donation_total': {
+          const [row] = await queryRunner.query(
+            `SELECT COALESCE(SUM(amount), 0)::float AS total FROM public.fundraiser_donations
+             WHERE donor_id = $1 AND payment_status = 'succeeded'`,
+            [userId],
+          );
+          qualified = (row?.total ?? 0) >= (rule.threshold ?? 0);
+          break;
+        }
+
+        case 'login_streak': {
+          const rows = await queryRunner.query(
+            `SELECT DISTINCT DATE(last_seen_at) AS d FROM public.users WHERE id = $1 AND last_seen_at IS NOT NULL
+             UNION
+             SELECT DISTINCT DATE(created_at) AS d FROM public.daily_app_opens WHERE user_id = $1
+             ORDER BY d DESC`,
+            [userId],
+          );
+          let streak = 0;
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          for (let i = 0; i < rows.length; i++) {
+            const expected = new Date(today);
+            expected.setDate(expected.getDate() - i);
+            const actual = new Date(rows[i]?.d);
+            actual.setHours(0, 0, 0, 0);
+            if (actual.getTime() === expected.getTime()) {
+              streak++;
+            } else {
+              break;
+            }
+          }
+          qualified = streak >= (rule.min ?? 1);
+          break;
+        }
       }
 
       if (qualified) {
@@ -453,15 +552,13 @@ export class BadgesService {
       [tenantId, userId],
     );
 
-    // Pre-fetch all the member's stats in parallel
+    // Pre-fetch all the member's stats in parallel (18 queries batched)
     const [
-      [givingRow],
-      [attendanceRow],
-      [journeyRow],
-      [groupRow],
-      [volunteerRow],
-      [postRow],
-      [prayerRow],
+      [givingRow], [attendanceRow], [journeyRow], [groupRow],
+      [volunteerRow], [postRow], [prayerRow],
+      [commentRow], [messageRow], [interactionRow],
+      [followerRow], [followingRow],
+      [fundraiserCountRow], [fundraiserTotalRow],
     ] = await Promise.all([
       queryRunner.query(
         `SELECT COALESCE(SUM(amount), 0)::float AS total, MAX(amount)::float AS max_single
@@ -495,6 +592,39 @@ export class BadgesService {
         `SELECT COUNT(*)::int AS cnt FROM public.prayers WHERE author_id = $1 AND tenant_id = $2`,
         [userId, tenantId],
       ),
+      queryRunner.query(
+        `SELECT COUNT(*)::int AS cnt FROM public.comments WHERE author_id = $1 AND tenant_id = $2`,
+        [userId, tenantId],
+      ),
+      queryRunner.query(
+        `SELECT COUNT(*)::int AS cnt FROM public.chat_messages WHERE user_id = $1`,
+        [userId],
+      ),
+      queryRunner.query(
+        `SELECT (
+          (SELECT COUNT(*) FROM public.posts WHERE author_id = $1 AND tenant_id = $2) +
+          (SELECT COUNT(*) FROM public.comments WHERE author_id = $1 AND tenant_id = $2) +
+          (SELECT COUNT(*) FROM public.chat_messages WHERE user_id = $1) +
+          (SELECT COUNT(*) FROM public.post_likes WHERE user_id = $1)
+        )::int AS cnt`,
+        [userId, tenantId],
+      ),
+      queryRunner.query(
+        `SELECT COUNT(*)::int AS cnt FROM public.follows WHERE following_id = $1`,
+        [userId],
+      ),
+      queryRunner.query(
+        `SELECT COUNT(*)::int AS cnt FROM public.follows WHERE follower_id = $1`,
+        [userId],
+      ),
+      queryRunner.query(
+        `SELECT COUNT(*)::int AS cnt FROM public.fundraiser_donations WHERE donor_id = $1 AND payment_status = 'succeeded'`,
+        [userId],
+      ),
+      queryRunner.query(
+        `SELECT COALESCE(SUM(amount), 0)::float AS total FROM public.fundraiser_donations WHERE donor_id = $1 AND payment_status = 'succeeded'`,
+        [userId],
+      ),
     ]);
 
     const stats = {
@@ -507,6 +637,13 @@ export class BadgesService {
       volunteerHours: volunteerRow?.total ?? 0,
       postCount: postRow?.cnt ?? 0,
       prayerCount: prayerRow?.cnt ?? 0,
+      commentCount: commentRow?.cnt ?? 0,
+      messageCount: messageRow?.cnt ?? 0,
+      totalInteractions: interactionRow?.cnt ?? 0,
+      followerCount: followerRow?.cnt ?? 0,
+      followingCount: followingRow?.cnt ?? 0,
+      fundraiserDonationCount: fundraiserCountRow?.cnt ?? 0,
+      fundraiserDonationTotal: fundraiserTotalRow?.total ?? 0,
     };
 
     // Calculate progress for each badge
@@ -569,6 +706,46 @@ export class BadgesService {
           target = rule.min ?? 1;
           unit = 'prayers';
           break;
+        case 'comment_count':
+          current = stats.commentCount;
+          target = rule.min ?? 1;
+          unit = 'comments';
+          break;
+        case 'message_count':
+          current = stats.messageCount;
+          target = rule.min ?? 1;
+          unit = 'messages';
+          break;
+        case 'total_interactions':
+          current = stats.totalInteractions;
+          target = rule.min ?? 1;
+          unit = 'interactions';
+          break;
+        case 'follower_count':
+          current = stats.followerCount;
+          target = rule.min ?? 1;
+          unit = 'followers';
+          break;
+        case 'following_count':
+          current = stats.followingCount;
+          target = rule.min ?? 1;
+          unit = 'following';
+          break;
+        case 'fundraiser_donation_count':
+          current = stats.fundraiserDonationCount;
+          target = rule.min ?? 1;
+          unit = 'donations';
+          break;
+        case 'fundraiser_donation_total':
+          current = stats.fundraiserDonationTotal;
+          target = rule.threshold ?? 0;
+          unit = 'dollars';
+          break;
+        case 'login_streak':
+          current = 0; // Streak requires real-time calculation, show as unknown
+          target = rule.min ?? 1;
+          unit = 'consecutive days';
+          break;
         default:
           current = 0;
           target = 1;
@@ -611,6 +788,46 @@ export class BadgesService {
       totalBadgesAvailable: progress.length,
       badges: progress,
     };
+  }
+
+  /**
+   * Returns all platform-wide system badges with rarity percentages.
+   * Used by the "Shepard Badges" tab in admin and the badge collection screen in mobile.
+   * Includes whether the requesting user has earned each badge.
+   */
+  async getGlobalBadges(userId?: string) {
+    const rows = await this.dataSource.query(
+      `SELECT b.id, b.name, b.description, b.icon, b.color, b.tier, b.category,
+              b.rarity_tier, b.auto_award_rule, b.display_order,
+              (SELECT COUNT(*)::int FROM public.member_badges WHERE badge_id = b.id) AS earned_count,
+              ${userId ? `EXISTS(SELECT 1 FROM public.member_badges WHERE badge_id = b.id AND user_id = $1) AS is_earned,` : 'false AS is_earned,'}
+              (SELECT COUNT(*)::int FROM public.users) AS total_users
+       FROM public.badges b
+       WHERE b.is_system = true AND b.is_active = true
+       ORDER BY b.display_order, b.created_at`,
+      userId ? [userId] : [],
+    );
+
+    return rows.map((r: any) => {
+      const totalUsers = Math.max(Number(r.total_users), 1);
+      const earnedCount = Number(r.earned_count);
+      return {
+        id: r.id,
+        name: r.name,
+        description: r.description,
+        icon: r.icon,
+        color: r.color,
+        tier: r.tier,
+        category: r.category,
+        rarityTier: r.rarity_tier,
+        autoAwardRule: r.auto_award_rule,
+        isEarned: r.is_earned,
+        isSystem: true,
+        totalEarned: earnedCount,
+        totalUsers,
+        rarityPercent: Math.round((earnedCount / totalUsers) * 10000) / 100,
+      };
+    });
   }
 
   async getBadgeLeaderboard(limit: number) {

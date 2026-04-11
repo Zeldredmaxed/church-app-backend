@@ -32,6 +32,14 @@ export class Badge {
   @Column({ type: 'boolean', name: 'is_active', default: true })
   isActive: boolean;
 
+  /** True = platform-wide Shepard badge (read-only for churches). False = church-custom. */
+  @Column({ type: 'boolean', name: 'is_system', default: false })
+  isSystem: boolean;
+
+  /** Rarity tier: common, uncommon, rare, epic, legendary, mythic */
+  @Column({ type: 'text', name: 'rarity_tier', default: 'common' })
+  rarityTier: string;
+
   @Column({ type: 'int', name: 'display_order', default: 0 })
   displayOrder: number;
 

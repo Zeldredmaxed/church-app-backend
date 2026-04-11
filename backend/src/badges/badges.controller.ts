@@ -27,6 +27,12 @@ export class BadgesController {
     return this.badgesService.getIconCatalog();
   }
 
+  @Get('global')
+  @ApiOperation({ summary: 'Get all 250 platform-wide Shepard badges with rarity percentages' })
+  getGlobalBadges(@CurrentUser() user: SupabaseJwtPayload) {
+    return this.badgesService.getGlobalBadges(user.sub);
+  }
+
   @Get('leaderboard')
   @ApiOperation({ summary: 'Get badge leaderboard — top members by badge count' })
   getLeaderboard(@Query('limit') limit?: string) {
