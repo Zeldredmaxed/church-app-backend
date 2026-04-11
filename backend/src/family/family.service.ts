@@ -8,11 +8,88 @@ import {
   resolveLabel,
 } from './family-types';
 
+/** Grouped relationship types for the mobile picker */
+const RELATIONSHIP_TYPES = [
+  { value: 'spouse', label: 'Spouse', category: 'Immediate Family' },
+  { value: 'parent', label: 'Parent', category: 'Immediate Family' },
+  { value: 'child', label: 'Child', category: 'Immediate Family' },
+  { value: 'sibling', label: 'Sibling', category: 'Immediate Family' },
+  { value: 'grandparent', label: 'Grandparent', category: 'Grandparents & Grandchildren' },
+  { value: 'grandchild', label: 'Grandchild', category: 'Grandparents & Grandchildren' },
+  { value: 'uncle_aunt', label: 'Uncle/Aunt', category: 'Extended Family' },
+  { value: 'nephew_niece', label: 'Nephew/Niece', category: 'Extended Family' },
+  { value: 'cousin', label: 'Cousin', category: 'Extended Family' },
+  { value: 'parent_in_law', label: 'Parent-in-Law', category: 'In-Laws' },
+  { value: 'child_in_law', label: 'Child-in-Law', category: 'In-Laws' },
+  { value: 'sibling_in_law', label: 'Sibling-in-Law', category: 'In-Laws' },
+  { value: 'cousin_in_law', label: 'Cousin-in-Law', category: 'In-Laws' },
+];
+
+/** Color mapping for tree visualization */
+const RELATIONSHIP_COLORS: Record<string, string> = {
+  self: '#3B82F6',
+  spouse: '#EC4899',
+  parent: '#E8825E',
+  child: '#F472B6',
+  sibling: '#10B981',
+  grandparent: '#8B7355',
+  grandchild: '#A78BFA',
+  uncle_aunt: '#F59E0B',
+  nephew_niece: '#06B6D4',
+  cousin: '#8B5CF6',
+  parent_in_law: '#D97706',
+  child_in_law: '#DB2777',
+  sibling_in_law: '#059669',
+  cousin_in_law: '#7C3AED',
+};
+
 @Injectable()
 export class FamilyService {
   private readonly logger = new Logger(FamilyService.name);
 
   constructor(private readonly dataSource: DataSource) {}
+
+  // ────────────────────────────────────────────────────────
+  // GET /family/types
+  // ────────────────────────────────────────────────────────
+
+  getTypes() {
+    return RELATIONSHIP_TYPES;
+  }
+
+  // ────────────────────────────────────────────────────────
+  // PUT /family/visibility + GET /family/visibility/:userId
+  // ────────────────────────────────────────────────────────
+
+  async setVisibility(userId: string, isPublic: boolean) {
+    await this.dataSource.query(
+      `INSERT INTO public.family_visibility (user_id, is_public, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (user_id)
+       DO UPDATE SET is_public = $2, updated_at = now()`,
+      [userId, isPublic],
+    );
+    return { isPublic };
+  }
+
+  async getVisibility(userId: string) {
+    const [row] = await this.dataSource.query(
+      `SELECT is_public FROM public.family_visibility WHERE user_id = $1`,
+      [userId],
+    );
+    return { isPublic: row?.is_public ?? true };
+  }
+
+  // ────────────────────────────────────────────────────────
+  // POST /family/requests/:id/respond  (unified accept/reject)
+  // ────────────────────────────────────────────────────────
+
+  async respondToRequest(tenantId: string, userId: string, requestId: string, accept: boolean) {
+    if (accept) {
+      return this.acceptRequest(tenantId, userId, requestId);
+    }
+    return this.declineRequest(tenantId, userId, requestId);
+  }
 
   // ────────────────────────────────────────────────────────
   // POST /family/request
@@ -184,100 +261,148 @@ export class FamilyService {
 
   async getFlatFamily(tenantId: string, userId: string) {
     const rows = await this.dataSource.query(
-      `SELECT fc.*, u.full_name, u.avatar_url, u.email
+      `SELECT fc.*, u.full_name, u.avatar_url, u.email,
+              COALESCE(fv.is_public, true) AS is_public
        FROM public.family_connections fc
        JOIN public.users u ON u.id = fc.related_user_id
+       LEFT JOIN public.family_visibility fv ON fv.user_id = fc.related_user_id
        WHERE fc.tenant_id = $1 AND fc.user_id = $2 AND fc.status = 'accepted'
        ORDER BY fc.relationship, fc.relationship_label`,
       [tenantId, userId],
     );
 
-    return rows.map((r: any) => ({
-      userId: r.related_user_id,
-      fullName: r.full_name,
-      avatarUrl: r.avatar_url,
-      relationship: r.relationship,
-      relationshipLabel: r.relationship_label,
-      status: r.status,
-      isInferred: r.is_inferred,
-    }));
+    const categoryMap: Record<string, string> = {};
+    for (const t of RELATIONSHIP_TYPES) categoryMap[t.value] = t.category;
+
+    return rows.map((r: any) => {
+      const isPrivate = !r.is_public;
+      return {
+        id: r.id,
+        userId: r.related_user_id,
+        fullName: isPrivate ? null : r.full_name,
+        avatarUrl: isPrivate ? null : r.avatar_url,
+        type: r.relationship,
+        label: r.relationship_label,
+        category: categoryMap[r.relationship] ?? 'Other',
+        isPrivate,
+      };
+    });
   }
 
   // ────────────────────────────────────────────────────────
   // GET /family/:userId/tree  (structured)
   // ────────────────────────────────────────────────────────
 
-  async getFamilyTree(tenantId: string, userId: string) {
-    // Get the root user info + gender
+  async getFamilyTree(tenantId: string, userId: string, viewerId: string) {
+    // Get root user info
     const [rootRow] = await this.dataSource.query(
-      `SELECT id, full_name, avatar_url FROM public.users WHERE id = $1`,
+      `SELECT u.id, u.full_name, u.avatar_url,
+              COALESCE(fv.is_public, true) AS is_public
+       FROM public.users u
+       LEFT JOIN public.family_visibility fv ON fv.user_id = u.id
+       WHERE u.id = $1`,
       [userId],
     );
-    const rootGender = await this.getUserGender(userId);
 
-    // Get all accepted connections from this user
+    const isOwnTree = userId === viewerId;
+    const isPublic = rootRow?.is_public ?? true;
+
+    // If tree is private and not the owner, return limited info
+    if (!isPublic && !isOwnTree) {
+      return { root: null, isPublic: false, totalMembers: 0 };
+    }
+
+    // Get ALL accepted connections from this user with visibility info
     const rows = await this.dataSource.query(
-      `SELECT fc.*, u.full_name, u.avatar_url
+      `SELECT fc.related_user_id, fc.relationship, fc.relationship_label,
+              u.full_name, u.avatar_url,
+              COALESCE(fv.is_public, true) AS is_public
        FROM public.family_connections fc
        JOIN public.users u ON u.id = fc.related_user_id
+       LEFT JOIN public.family_visibility fv ON fv.user_id = fc.related_user_id
        WHERE fc.tenant_id = $1 AND fc.user_id = $2 AND fc.status = 'accepted'
        ORDER BY fc.relationship, fc.relationship_label`,
       [tenantId, userId],
     );
 
-    const mapMember = (r: any) => ({
-      userId: r.related_user_id,
-      fullName: r.full_name,
-      avatarUrl: r.avatar_url,
-      relationship: r.relationship,
-      relationshipLabel: r.relationship_label,
-      status: r.status,
-      isInferred: r.is_inferred,
-    });
+    const mapNode = (r: any, relationship: string) => {
+      const isPrivate = !r.is_public;
+      return {
+        id: r.related_user_id,
+        name: isPrivate ? null : r.full_name,
+        avatarUrl: isPrivate ? null : r.avatar_url,
+        isPrivate,
+        color: RELATIONSHIP_COLORS[relationship] ?? '#6B7280',
+        relationship,
+        label: r.relationship_label,
+        children: [] as any[],
+        parents: [] as any[],
+      };
+    };
 
-    // Group by relationship category
+    // Group by relationship
     const byRel: Record<string, any[]> = {};
     for (const r of rows) {
       if (!byRel[r.relationship]) byRel[r.relationship] = [];
-      byRel[r.relationship].push(mapMember(r));
+      byRel[r.relationship].push(r);
     }
 
+    // Build hierarchical tree
+    const spouseRow = (byRel['spouse'] ?? [])[0];
+    const children = (byRel['child'] ?? []).map((r: any) => mapNode(r, 'child'));
+    const parents = (byRel['parent'] ?? []).map((r: any) => {
+      const node = mapNode(r, 'parent');
+      // Fetch grandparents (parent's parents) — 1 level up
+      const grandparents = (byRel['grandparent'] ?? []).map((g: any) => mapNode(g, 'grandparent'));
+      node.parents = grandparents;
+      // Siblings are parent's other children
+      node.children = (byRel['sibling'] ?? []).map((s: any) => mapNode(s, 'sibling'));
+      return node;
+    });
+
+    const root = {
+      id: rootRow?.id ?? userId,
+      name: rootRow?.full_name ?? null,
+      avatarUrl: rootRow?.avatar_url ?? null,
+      isPrivate: false,
+      color: RELATIONSHIP_COLORS['self'],
+      relationship: 'self',
+      children,
+      parents,
+      spouse: spouseRow ? {
+        id: spouseRow.related_user_id,
+        name: spouseRow.is_public ? spouseRow.full_name : null,
+        avatarUrl: spouseRow.is_public ? spouseRow.avatar_url : null,
+        isPrivate: !spouseRow.is_public,
+        color: RELATIONSHIP_COLORS['spouse'],
+        relationship: 'spouse',
+        label: spouseRow.relationship_label,
+      } : null,
+    };
+
     return {
-      rootUser: {
-        userId: rootRow?.id || userId,
-        fullName: rootRow?.full_name || null,
-        avatarUrl: rootRow?.avatar_url || null,
-        gender: rootGender?.toLowerCase() || null,
-      },
-      spouse: (byRel['spouse'] || [])[0] || null,
-      children: byRel['child'] || [],
-      parents: [
-        ...(byRel['parent'] || []),
-        ...(byRel['parent_in_law'] || []),
-      ],
-      siblings: [
-        ...(byRel['sibling'] || []),
-        ...(byRel['sibling_in_law'] || []),
-      ],
-      grandparents: [
-        ...(byRel['grandparent'] || []),
-      ],
-      grandchildren: [
-        ...(byRel['grandchild'] || []),
-      ],
-      extended: [
-        ...(byRel['uncle_aunt'] || []),
-        ...(byRel['nephew_niece'] || []),
-        ...(byRel['cousin'] || []),
-        ...(byRel['cousin_in_law'] || []),
-        ...(byRel['child_in_law'] || []),
-      ],
+      root,
+      isPublic,
+      totalMembers: rows.length + 1,
     };
   }
 
   // ────────────────────────────────────────────────────────
   // DELETE /family/:userId/:familyMemberId
   // ────────────────────────────────────────────────────────
+
+  async removeConnectionById(tenantId: string, userId: string, relationshipId: string) {
+    const [conn] = await this.dataSource.query(
+      `SELECT user_id, related_user_id FROM public.family_connections WHERE id = $1 AND tenant_id = $2`,
+      [relationshipId, tenantId],
+    );
+    if (!conn) throw new NotFoundException('Connection not found');
+    // Ensure the caller is one of the two parties
+    if (conn.user_id !== userId && conn.related_user_id !== userId) {
+      throw new NotFoundException('Connection not found');
+    }
+    return this.removeConnection(tenantId, conn.user_id, conn.related_user_id);
+  }
 
   async removeConnection(tenantId: string, userId: string, familyMemberId: string) {
     // Find the forward row

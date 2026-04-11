@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Delete,
   Body,
   Param,
@@ -12,12 +13,23 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { IsBoolean, IsString, IsUUID } from 'class-validator';
 import { FamilyService } from './family.service';
 import { SendFamilyRequestDto } from './dto/send-family-request.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
+
+class RespondToRequestDto {
+  @IsBoolean()
+  accept: boolean;
+}
+
+class SetVisibilityDto {
+  @IsBoolean()
+  isPublic: boolean;
+}
 
 @ApiTags('Family')
 @ApiBearerAuth()
@@ -28,6 +40,12 @@ export class FamilyController {
   constructor(private readonly familyService: FamilyService) {}
 
   // ── Static routes MUST come before :userId param routes ──
+
+  @Get('types')
+  @ApiOperation({ summary: 'Get all relationship types grouped by category' })
+  getTypes() {
+    return this.familyService.getTypes();
+  }
 
   @Post('request')
   @ApiOperation({ summary: 'Send a family connection request' })
@@ -47,9 +65,21 @@ export class FamilyController {
     return this.familyService.getRequests(tenantId, user.sub);
   }
 
+  @Post('requests/:id/respond')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Accept or reject a family request' })
+  respondToRequest(
+    @Param('id', ParseUUIDPipe) requestId: string,
+    @Body() dto: RespondToRequestDto,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    const tenantId = user.app_metadata?.current_tenant_id!;
+    return this.familyService.respondToRequest(tenantId, user.sub, requestId, dto.accept);
+  }
+
   @Post('requests/:id/accept')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Accept a family connection request (triggers inference engine)' })
+  @ApiOperation({ summary: 'Accept a family connection request' })
   acceptRequest(
     @Param('id', ParseUUIDPipe) requestId: string,
     @CurrentUser() user: SupabaseJwtPayload,
@@ -69,20 +99,25 @@ export class FamilyController {
     return this.familyService.declineRequest(tenantId, user.sub, requestId);
   }
 
-  // ── Parameterized routes ──
-
-  @Get(':userId/tree')
-  @ApiOperation({ summary: 'Get structured family tree for a member' })
-  getFamilyTree(
+  @Put('visibility')
+  @ApiOperation({ summary: 'Toggle family tree visibility (public/private)' })
+  setVisibility(
+    @Body() dto: SetVisibilityDto,
     @CurrentUser() user: SupabaseJwtPayload,
-    @Param('userId', ParseUUIDPipe) userId: string,
   ) {
-    const tenantId = user.app_metadata?.current_tenant_id!;
-    return this.familyService.getFamilyTree(tenantId, userId);
+    return this.familyService.setVisibility(user.sub, dto.isPublic);
   }
 
-  @Get(':userId')
-  @ApiOperation({ summary: 'Get flat list of all family connections for a member' })
+  // ── Parameterized routes ──
+
+  @Get('visibility/:userId')
+  @ApiOperation({ summary: 'Check if a user\'s family tree is public' })
+  getVisibility(@Param('userId', ParseUUIDPipe) userId: string) {
+    return this.familyService.getVisibility(userId);
+  }
+
+  @Get('members/:userId')
+  @ApiOperation({ summary: 'Get flat list of family members (with privacy redaction)' })
   getFlatFamily(
     @CurrentUser() user: SupabaseJwtPayload,
     @Param('userId', ParseUUIDPipe) userId: string,
@@ -91,15 +126,25 @@ export class FamilyController {
     return this.familyService.getFlatFamily(tenantId, userId);
   }
 
-  @Delete(':userId/:familyMemberId')
+  @Get('tree/:userId')
+  @ApiOperation({ summary: 'Get hierarchical family tree (with privacy redaction)' })
+  getFamilyTree(
+    @CurrentUser() user: SupabaseJwtPayload,
+    @Param('userId', ParseUUIDPipe) userId: string,
+  ) {
+    const tenantId = user.app_metadata?.current_tenant_id!;
+    return this.familyService.getFamilyTree(tenantId, userId, user.sub);
+  }
+
+  @Delete(':relationshipId')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Remove a family connection (cascades inferred links)' })
   removeConnection(
-    @Param('userId', ParseUUIDPipe) userId: string,
-    @Param('familyMemberId', ParseUUIDPipe) familyMemberId: string,
+    @Param('relationshipId', ParseUUIDPipe) relationshipId: string,
     @CurrentUser() user: SupabaseJwtPayload,
   ) {
     const tenantId = user.app_metadata?.current_tenant_id!;
-    return this.familyService.removeConnection(tenantId, userId, familyMemberId);
+    // Look up the connection to get both user IDs
+    return this.familyService.removeConnectionById(tenantId, user.sub, relationshipId);
   }
 }
