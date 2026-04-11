@@ -11,9 +11,11 @@ import {
   HttpCode,
   HttpStatus,
   BadRequestException,
+  ForbiddenException,
   ParseIntPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { DataSource } from 'typeorm';
 import { GivingService } from './giving.service';
 import { DonateDto } from './dto/donate.dto';
 import { CreateFundDto } from './dto/create-fund.dto';
@@ -31,7 +33,10 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 @UseGuards(JwtAuthGuard)
 @UseInterceptors(RlsContextInterceptor)
 export class GivingController {
-  constructor(private readonly givingService: GivingService) {}
+  constructor(
+    private readonly givingService: GivingService,
+    private readonly dataSource: DataSource,
+  ) {}
 
   @Get('giving/kpis')
   @ApiOperation({ summary: 'Get giving KPI metrics for dashboard' })
@@ -140,13 +145,28 @@ export class GivingController {
   @Get('giving/statements/:userId')
   @ApiOperation({ summary: 'Generate giving statement for a donor (tax purposes)' })
   @ApiResponse({ status: 200, description: 'Structured statement data for PDF rendering' })
-  getGivingStatement(
+  async getGivingStatement(
     @Param('userId', ParseUUIDPipe) donorUserId: string,
     @Query('year') year: string,
     @CurrentUser() user: SupabaseJwtPayload,
   ) {
     const tenantId = user.app_metadata?.current_tenant_id;
     if (!tenantId) throw new BadRequestException('No tenant context');
+
+    // IDOR protection: members can only view their own statement.
+    // Admins/accountants can view any member's statement.
+    if (donorUserId !== user.sub) {
+      const [membership] = await this.dataSource.query(
+        `SELECT role, permissions FROM public.tenant_memberships WHERE user_id = $1 AND tenant_id = $2`,
+        [user.sub, tenantId],
+      );
+      const isAdmin = ['admin', 'pastor', 'accountant'].includes(membership?.role);
+      const hasFinancePermission = membership?.permissions?.manage_finance === true;
+      if (!isAdmin && !hasFinancePermission) {
+        throw new ForbiddenException('You can only view your own giving statement');
+      }
+    }
+
     const parsedYear = parseInt(year, 10) || new Date().getFullYear();
     return this.givingService.getGivingStatement(tenantId, donorUserId, parsedYear);
   }

@@ -554,8 +554,8 @@ export class WorkflowEngineService {
 
       case 'check_attendance': {
         if (!ctx.targetUserId) return { status: 'success', branch: 'false', inputData, outputData: {} };
-        const days = config.days ?? 30;
-        const minCount = config.minCount ?? 1;
+        const days = Math.max(1, Math.min(3650, parseInt(String(config.days ?? 30), 10) || 30));
+        const minCount = parseInt(String(config.minCount ?? 1), 10) || 1;
         const [row] = await this.dataSource.query(
           `SELECT COUNT(*)::int AS cnt FROM public.check_ins
            WHERE user_id = $1 AND checked_in_at >= now() - ($2 || ' days')::interval`,
@@ -567,8 +567,8 @@ export class WorkflowEngineService {
 
       case 'check_giving': {
         if (!ctx.targetUserId) return { status: 'success', branch: 'false', inputData, outputData: {} };
-        const days = config.days ?? 30;
-        const minAmount = config.minAmount ?? 0;
+        const days = Math.max(1, Math.min(3650, parseInt(String(config.days ?? 30), 10) || 30));
+        const minAmount = parseFloat(String(config.minAmount ?? 0)) || 0;
         const [row] = await this.dataSource.query(
           `SELECT COALESCE(SUM(amount), 0)::float AS total FROM public.transactions
            WHERE user_id = $1 AND tenant_id = $2 AND created_at >= now() - ($3 || ' days')::interval`,

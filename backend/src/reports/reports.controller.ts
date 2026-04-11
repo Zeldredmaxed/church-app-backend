@@ -66,8 +66,10 @@ export class ReportsController {
   exportData(
     @CurrentUser() user: SupabaseJwtPayload,
     @Query('type') type: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
   ) {
     const tenantId = user.app_metadata?.current_tenant_id!;
-    return this.reportsService.exportData(tenantId, type);
+    return this.reportsService.exportData(tenantId, type, startDate, endDate);
   }
 }

@@ -160,7 +160,12 @@ export class ReportsService {
     };
   }
 
-  async exportData(tenantId: string, type: string) {
+  async exportData(tenantId: string, type: string, startDate?: string, endDate?: string) {
+    // Default date range: last 1 year. Cap at 50,000 rows to prevent OOM.
+    const start = startDate ? new Date(startDate).toISOString() : new Date(Date.now() - 365 * 86400000).toISOString();
+    const end = endDate ? new Date(endDate).toISOString() : new Date().toISOString();
+    const ROW_LIMIT = 50000;
+
     switch (type) {
       case 'members': {
         const rows = await this.dataSource.query(
@@ -168,8 +173,9 @@ export class ReportsService {
            FROM public.tenant_memberships tm
            JOIN public.users u ON u.id = tm.user_id
            WHERE tm.tenant_id = $1
-           ORDER BY tm.created_at DESC`,
-          [tenantId],
+           ORDER BY tm.created_at DESC
+           LIMIT $2`,
+          [tenantId, ROW_LIMIT],
         );
         return {
           data: rows.map((r: any) => ({
@@ -190,9 +196,10 @@ export class ReportsService {
            FROM public.transactions t
            JOIN public.users u ON u.id = t.user_id
            LEFT JOIN public.giving_funds gf ON gf.id = t.fund_id
-           WHERE t.tenant_id = $1
-           ORDER BY t.created_at DESC`,
-          [tenantId],
+           WHERE t.tenant_id = $1 AND t.created_at >= $2 AND t.created_at <= $3
+           ORDER BY t.created_at DESC
+           LIMIT $4`,
+          [tenantId, start, end, ROW_LIMIT],
         );
         return {
           data: rows.map((r: any) => ({
@@ -216,9 +223,10 @@ export class ReportsService {
            FROM public.check_ins ci
            JOIN public.users u ON u.id = ci.user_id
            LEFT JOIN public.service_schedules ss ON ss.id = ci.service_id
-           WHERE ci.tenant_id = $1
-           ORDER BY ci.checked_in_at DESC`,
-          [tenantId],
+           WHERE ci.tenant_id = $1 AND ci.checked_in_at >= $2 AND ci.checked_in_at <= $3
+           ORDER BY ci.checked_in_at DESC
+           LIMIT $4`,
+          [tenantId, start, end, ROW_LIMIT],
         );
         return {
           data: rows.map((r: any) => ({

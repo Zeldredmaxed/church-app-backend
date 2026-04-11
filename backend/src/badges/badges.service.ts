@@ -334,16 +334,19 @@ export class BadgesService {
 
     const newlyAwarded: Array<{ badgeId: string; name: string }> = [];
 
+    // Batch-fetch all badges this user already has (eliminates N per-badge existence queries)
+    const existingAwards = await queryRunner.query(
+      `SELECT badge_id FROM public.member_badges WHERE user_id = $1 AND tenant_id = $2`,
+      [userId, tenantId],
+    );
+    const earnedSet = new Set(existingAwards.map((r: any) => r.badge_id));
+
     for (const badge of badges) {
       const rule = badge.auto_award_rule;
       if (!rule || !rule.type) continue;
 
-      // Check if already awarded
-      const [existing] = await queryRunner.query(
-        `SELECT 1 FROM public.member_badges WHERE badge_id = $1 AND user_id = $2`,
-        [badge.id, userId],
-      );
-      if (existing) continue;
+      // Skip if already awarded (checked from batch-loaded set, not per-badge query)
+      if (earnedSet.has(badge.id)) continue;
 
       let qualified = false;
 

@@ -22,6 +22,7 @@ import { UpdatePermissionsDto } from './dto/update-permissions.dto';
 import { GetMembersDto } from './dto/get-members.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { TierGuard } from '../common/guards/tier.guard';
+import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequiresTier } from '../common/decorators/requires-tier.decorator';
@@ -143,6 +144,8 @@ export class MembershipsController {
 
   @Post('tenants/:tenantId/members/import')
   @UseInterceptors(RlsContextInterceptor)
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Bulk import members from CSV data (admin only)' })
   @ApiResponse({ status: 200, description: '{ created, skipped, total, errors }' })
