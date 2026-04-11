@@ -165,10 +165,39 @@ export class BadgesService {
 
   /**
    * Returns the curated icon catalog for badge creation.
-   * These are Hugeicons icon names grouped by category.
+   * Each icon includes a CDN preview URL so the frontend renders <img> tags
+   * instead of loading 5,100 React components.
    */
-  getIconCatalog() {
-    return BADGE_ICON_CATALOG;
+  getIconCatalog(search?: string, category?: string, page = 1, limit = 30) {
+    let filtered = BADGE_ICON_CATALOG;
+
+    if (search && search.trim()) {
+      const q = search.toLowerCase();
+      filtered = filtered.filter(i =>
+        i.name.includes(q) || i.label.toLowerCase().includes(q),
+      );
+    }
+
+    if (category && category.trim()) {
+      filtered = filtered.filter(i => i.category === category);
+    }
+
+    const total = filtered.length;
+    const offset = (page - 1) * limit;
+    const paginated = filtered.slice(offset, offset + limit);
+
+    return {
+      icons: paginated.map(i => ({
+        name: i.name,
+        label: i.label,
+        category: i.category,
+        previewUrl: `https://ico.hugeicons.com/${i.name}-stroke-rounded@2x.webp?v=1.0.0`,
+      })),
+      categories: [...new Set(BADGE_ICON_CATALOG.map(i => i.category))],
+      total,
+      page,
+      limit,
+    };
   }
 
   async getBadges() {

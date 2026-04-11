@@ -22,9 +22,19 @@ export class BadgesController {
   ) {}
 
   @Get('icons')
-  @ApiOperation({ summary: 'Get curated icon catalog for badge creation (Hugeicons names)' })
-  getIconCatalog() {
-    return this.badgesService.getIconCatalog();
+  @ApiOperation({ summary: 'Get paginated icon catalog for badge creation (with CDN preview URLs)' })
+  getIconCatalog(
+    @Query('search') search?: string,
+    @Query('category') category?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.badgesService.getIconCatalog(
+      search,
+      category,
+      parseInt(page ?? '1', 10) || 1,
+      Math.min(parseInt(limit ?? '30', 10) || 30, 100),
+    );
   }
 
   @Get('global')
