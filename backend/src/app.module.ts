@@ -123,6 +123,10 @@ import { FamilyConnection } from './family/entities/family-relationship.entity';
 import { StorageModule } from './storage/storage.module';
 import { TenantStorageUsage } from './storage/entities/tenant-storage-usage.entity';
 import { StorageFile } from './storage/entities/storage-file.entity';
+import { FundraisersModule } from './fundraisers/fundraisers.module';
+import { Fundraiser } from './fundraisers/entities/fundraiser.entity';
+import { FundraiserDonation } from './fundraisers/entities/fundraiser-donation.entity';
+import { FundraiserBookmark } from './fundraisers/entities/fundraiser-bookmark.entity';
 
 @Module({
   imports: [
@@ -161,6 +165,9 @@ import { StorageFile } from './storage/entities/storage-file.entity';
           FamilyConnection,
           TenantStorageUsage,
           StorageFile,
+          Fundraiser,
+          FundraiserDonation,
+          FundraiserBookmark,
         ],
 
         // CRITICAL: synchronize must ALWAYS be false.
@@ -285,6 +292,7 @@ import { StorageFile } from './storage/entities/storage-file.entity';
     FeedbackModule,
     FamilyModule,
     StorageModule,
+    FundraisersModule,
 
     // GraphQL — Apollo Driver (code-first approach)
     // The FeedModule provides the FeedResolver which registers the globalFeed query.

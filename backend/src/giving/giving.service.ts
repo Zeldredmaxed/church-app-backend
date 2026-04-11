@@ -402,6 +402,29 @@ export class GivingService {
       byFund[d.fund_name] = (byFund[d.fund_name] ?? 0) + Number(d.amount);
     }
 
+    // Include fundraiser donations in the tax statement
+    const fundraiserDonations = await this.dataSource.query(
+      `SELECT fd.amount, fd.created_at, f.title AS fundraiser_title, f.category
+       FROM public.fundraiser_donations fd
+       JOIN public.fundraisers f ON f.id = fd.fundraiser_id
+       WHERE fd.tenant_id = $1 AND fd.donor_id = $2 AND fd.payment_status = 'succeeded'
+         AND EXTRACT(year FROM fd.created_at) = $3
+       ORDER BY fd.created_at ASC`,
+      [tenantId, donorUserId, year],
+    );
+
+    const fundraiserTotal = fundraiserDonations.reduce(
+      (sum: number, d: any) => sum + Number(d.amount), 0,
+    );
+
+    // Add fundraiser totals to byFund
+    for (const fd of fundraiserDonations) {
+      const label = `Fundraiser: ${fd.fundraiser_title}`;
+      byFund[label] = (byFund[label] ?? 0) + Number(fd.amount);
+    }
+
+    const grandTotal = totalAmount + fundraiserTotal;
+
     return {
       churchName: tenant?.name ?? 'Church',
       year,
@@ -416,8 +439,16 @@ export class GivingService {
         fundName: d.fund_name,
         method: d.payment_method,
       })),
-      totalAmount,
-      donationCount: donations.length,
+      fundraiserDonations: fundraiserDonations.map((d: any) => ({
+        date: d.created_at,
+        amount: Number(d.amount),
+        fundraiserTitle: d.fundraiser_title,
+        category: d.category,
+      })),
+      totalAmount: grandTotal,
+      givingTotal: totalAmount,
+      fundraiserTotal,
+      donationCount: donations.length + fundraiserDonations.length,
       byFund: Object.entries(byFund).map(([fund, total]) => ({ fund, total })),
       taxStatement: `No goods or services were provided in exchange for these contributions. ${tenant?.name ?? 'This church'} is a tax-exempt organization under Section 501(c)(3) of the Internal Revenue Code. Your contributions are tax-deductible to the extent allowed by law.`,
     };

@@ -14,6 +14,7 @@ import { Request } from 'express';
 import { DataSource } from 'typeorm';
 import { StripeService } from './stripe.service';
 import { Transaction } from '../giving/entities/transaction.entity';
+import { FundraiserDonation } from '../fundraisers/entities/fundraiser-donation.entity';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import Stripe from 'stripe';
 
@@ -65,10 +66,17 @@ export class StripeWebhookController {
       case 'payment_intent.succeeded': {
         const pi = event.data.object as Stripe.PaymentIntent;
         this.logger.log(`PaymentIntent succeeded: ${pi.id}`);
+        // Update giving transactions
         await this.dataSource.manager.update(
           Transaction,
           { stripePaymentIntentId: pi.id },
           { status: 'succeeded' },
+        );
+        // Update fundraiser donations (trigger auto-updates fundraiser totals)
+        await this.dataSource.manager.update(
+          FundraiserDonation,
+          { paymentIntentId: pi.id },
+          { paymentStatus: 'succeeded' },
         );
         break;
       }
@@ -80,6 +88,11 @@ export class StripeWebhookController {
           Transaction,
           { stripePaymentIntentId: pi.id },
           { status: 'failed' },
+        );
+        await this.dataSource.manager.update(
+          FundraiserDonation,
+          { paymentIntentId: pi.id },
+          { paymentStatus: 'failed' },
         );
         break;
       }
@@ -107,6 +120,12 @@ export class StripeWebhookController {
             Transaction,
             { stripePaymentIntentId: piId },
             { status: 'refunded' },
+          );
+          // Refund fundraiser donation (trigger auto-subtracts from fundraiser totals)
+          await this.dataSource.manager.update(
+            FundraiserDonation,
+            { paymentIntentId: piId },
+            { paymentStatus: 'refunded' },
           );
         }
         break;
