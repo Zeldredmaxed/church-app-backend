@@ -15,9 +15,9 @@ export class PresenceInterceptor implements NestInterceptor {
   private readonly recentlyUpdated = new Map<string, number>();
 
   constructor(private readonly dataSource: DataSource) {
-    // Purge stale entries every 5 minutes
+    // Purge stale entries every 10 minutes
     setInterval(() => {
-      const cutoff = Date.now() - 60_000;
+      const cutoff = Date.now() - 600_000;
       for (const [key, ts] of this.recentlyUpdated) {
         if (ts < cutoff) this.recentlyUpdated.delete(key);
       }
@@ -32,7 +32,7 @@ export class PresenceInterceptor implements NestInterceptor {
       const now = Date.now();
       const lastUpdate = this.recentlyUpdated.get(user.sub) ?? 0;
 
-      if (now - lastUpdate >= 30_000) {
+      if (now - lastUpdate >= 300_000) { // 5 minutes
         this.recentlyUpdated.set(user.sub, now);
         // Fire-and-forget — don't await
         this.dataSource.query(
