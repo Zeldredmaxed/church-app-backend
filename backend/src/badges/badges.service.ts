@@ -170,7 +170,7 @@ export class BadgesService {
    * Each icon includes a CDN preview URL so the frontend renders <img> tags
    * instead of loading 5,100 React components.
    */
-  getIconCatalog(search?: string, category?: string, page = 1, limit = 30) {
+  getIconCatalog(search?: string, category?: string, page = 1, limit = 200) {
     let filtered = BADGE_ICON_CATALOG;
 
     if (search && search.trim()) {
