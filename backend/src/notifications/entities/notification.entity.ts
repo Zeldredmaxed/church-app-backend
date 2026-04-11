@@ -28,11 +28,27 @@ export class Notification {
   @Column({ type: 'uuid', name: 'tenant_id' })
   tenantId: string;
 
-  /** Notification type: NEW_COMMENT, POST_MENTION, INVITATION_ACCEPTED, etc. */
+  /** The user who triggered the notification (nullable for system notifications). */
+  @Column({ type: 'uuid', nullable: true, name: 'sender_id' })
+  senderId: string | null;
+
+  /** Notification type: post_like, new_message, badge_earned, etc. */
   @Column({ type: 'text' })
   type: string;
 
-  /** Structured payload — varies by notification type. */
+  /** Push notification title. */
+  @Column({ type: 'text', nullable: true })
+  title: string | null;
+
+  /** Push notification body text. */
+  @Column({ type: 'text', nullable: true })
+  body: string | null;
+
+  /** Deep link data: { screen, params }. */
+  @Column({ type: 'jsonb', default: '{}' })
+  data: Record<string, unknown>;
+
+  /** Structured payload — varies by notification type (legacy, kept for backwards compat). */
   @Column({ type: 'jsonb', default: '{}' })
   payload: Record<string, unknown>;
 

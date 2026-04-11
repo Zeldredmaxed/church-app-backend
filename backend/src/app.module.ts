@@ -128,6 +128,8 @@ import { FundraisersModule } from './fundraisers/fundraisers.module';
 import { Fundraiser } from './fundraisers/entities/fundraiser.entity';
 import { FundraiserDonation } from './fundraisers/entities/fundraiser-donation.entity';
 import { FundraiserBookmark } from './fundraisers/entities/fundraiser-bookmark.entity';
+import { DeviceToken } from './notifications/entities/device-token.entity';
+import { NotificationPreference } from './notifications/entities/notification-preference.entity';
 
 @Module({
   imports: [
@@ -169,6 +171,8 @@ import { FundraiserBookmark } from './fundraisers/entities/fundraiser-bookmark.e
           Fundraiser,
           FundraiserDonation,
           FundraiserBookmark,
+          DeviceToken,
+          NotificationPreference,
         ],
 
         // CRITICAL: synchronize must ALWAYS be false.

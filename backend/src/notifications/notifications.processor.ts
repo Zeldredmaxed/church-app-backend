@@ -2,17 +2,8 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { Job } from 'bullmq';
-import { Notification } from './entities/notification.entity';
-import { OneSignalService } from './onesignal.service';
-import {
-  NotificationJobData,
-  NotificationType,
-  NewCommentJob,
-  PostMentionJob,
-  NewGlobalPostJob,
-  InvitationEmailJob,
-  NewMessageJob,
-} from './notifications.types';
+import { ExpoPushService } from './expo-push.service';
+import { NotificationJobData } from './notifications.types';
 
 /**
  * BullMQ processor for the 'notifications' queue.
@@ -20,13 +11,9 @@ import {
  * Runs outside the HTTP request lifecycle — uses a service-role DataSource
  * connection (bypasses RLS). This is correct because:
  *   1. Notification INSERTs are system-generated, not user-initiated.
- *   2. There is no RLS INSERT policy on notifications for the 'authenticated'
- *      role — only the service role can create rows.
- *   3. The job payload is trusted (dispatched by verified backend services).
+ *   2. The job payload is trusted (dispatched by verified backend services).
  *
- * Each handler:
- *   1. Creates an in-app notification row (if applicable)
- *   2. Sends a push notification via OneSignal
+ * Each handler creates an in-app notification row and sends push via Expo.
  */
 @Processor('notifications')
 export class NotificationsProcessor extends WorkerHost {
@@ -34,193 +21,271 @@ export class NotificationsProcessor extends WorkerHost {
 
   constructor(
     private readonly dataSource: DataSource,
-    private readonly oneSignal: OneSignalService,
+    private readonly expo: ExpoPushService,
   ) {
     super();
   }
 
   async process(job: Job<NotificationJobData>): Promise<void> {
     this.logger.log(`Processing job ${job.id}: ${job.data.type}`);
+    const data = job.data;
 
-    switch (job.data.type) {
-      case NotificationType.NEW_COMMENT:
-        await this.handleNewComment(job.data);
-        break;
-      case NotificationType.POST_MENTION:
-        await this.handlePostMention(job.data);
-        break;
-      case NotificationType.NEW_GLOBAL_POST:
-        await this.handleNewGlobalPost(job.data);
-        break;
-      case NotificationType.INVITATION_EMAIL:
-        await this.handleInvitationEmail(job.data);
-        break;
-      case NotificationType.NEW_MESSAGE:
-        await this.handleNewMessage(job.data);
-        break;
+    // Generic handler: every notification type flows through expo.send()
+    // which handles in-app row creation + push delivery + preference checks.
+    if ('recipientUserId' in data && data.recipientUserId) {
+      await this.handleSingleRecipient(data);
+    } else if ('recipientIds' in data && (data as any).recipientIds) {
+      await this.handleBulkRecipients(data as any);
+    } else if (data.type === 'INVITATION_EMAIL') {
+      // Email-only notification — no push
+      this.logger.log(
+        `[EMAIL STUB] Invitation email to ${(data as any).recipientEmail} ` +
+        `(role: ${(data as any).role})`,
+      );
+    } else {
+      this.logger.warn(`Unhandled notification job: ${data.type}`);
+    }
+  }
+
+  private async handleSingleRecipient(data: any): Promise<void> {
+    // Resolve sender name for the title
+    let senderName = 'Someone';
+    if (data.actorUserId) {
+      const [sender] = await this.dataSource.query(
+        `SELECT full_name FROM public.users WHERE id = $1`,
+        [data.actorUserId],
+      );
+      senderName = sender?.full_name ?? 'Someone';
+    }
+
+    const { title, body, deepLink } = this.buildNotificationContent(data, senderName);
+
+    await this.expo.send({
+      recipientId: data.recipientUserId,
+      senderId: data.actorUserId,
+      tenantId: data.tenantId,
+      type: data.type,
+      title,
+      body,
+      data: deepLink,
+    });
+  }
+
+  private async handleBulkRecipients(data: any): Promise<void> {
+    let senderName = '';
+    if (data.actorUserId) {
+      const [sender] = await this.dataSource.query(
+        `SELECT full_name FROM public.users WHERE id = $1`,
+        [data.actorUserId],
+      );
+      senderName = sender?.full_name ?? '';
+    }
+
+    const { title, body, deepLink } = this.buildNotificationContent(data, senderName);
+
+    await this.expo.sendBulk({
+      recipientIds: data.recipientIds,
+      senderId: data.actorUserId,
+      tenantId: data.tenantId,
+      type: data.type,
+      title,
+      body,
+      data: deepLink,
+    });
+  }
+
+  /**
+   * Build notification title, body, and deep link data based on type.
+   */
+  private buildNotificationContent(data: any, senderName: string): {
+    title: string;
+    body: string;
+    deepLink: Record<string, any>;
+  } {
+    const preview = data.previewText ?? '';
+
+    switch (data.type) {
+      // Social
+      case 'post_like':
+      case 'POST_LIKE':
+        return {
+          title: `${senderName} liked your post`,
+          body: preview.slice(0, 50),
+          deepLink: { screen: 'Comments', params: { postId: data.postId } },
+        };
+
+      case 'post_comment':
+      case 'NEW_COMMENT':
+        return {
+          title: `${senderName} commented on your post`,
+          body: preview.slice(0, 50),
+          deepLink: { screen: 'Comments', params: { postId: data.postId } },
+        };
+
+      case 'comment_reply':
+        return {
+          title: `${senderName} replied to your comment`,
+          body: preview.slice(0, 50),
+          deepLink: { screen: 'Comments', params: { postId: data.postId } },
+        };
+
+      case 'post_mention':
+      case 'POST_MENTION':
+        return {
+          title: `${senderName} mentioned you in a post`,
+          body: preview.slice(0, 50),
+          deepLink: { screen: 'Comments', params: { postId: data.postId } },
+        };
+
+      // Follow
+      case 'new_follower':
+        return {
+          title: `${senderName} started following you`,
+          body: 'Tap to view their profile',
+          deepLink: { screen: 'UserProfile', params: { userId: data.actorUserId } },
+        };
+
+      // Messages
+      case 'new_message':
+      case 'NEW_MESSAGE':
+        return {
+          title: senderName,
+          body: preview.slice(0, 80),
+          deepLink: { screen: 'Conversation', params: { userId: data.actorUserId } },
+        };
+
+      case 'group_message':
+        return {
+          title: data.channelName ?? 'Group Chat',
+          body: `${senderName}: ${preview.slice(0, 60)}`,
+          deepLink: { screen: 'GroupChat', params: { groupId: data.groupId ?? data.channelId } },
+        };
+
+      // Church content
+      case 'new_sermon':
+        return {
+          title: `New Sermon: "${data.sermonTitle ?? preview}"`,
+          body: `By ${data.speaker ?? senderName} — available now`,
+          deepLink: { screen: 'SermonPlayer', params: { sermonId: data.sermonId } },
+        };
+
+      case 'new_announcement':
+        return {
+          title: `${data.churchName ?? 'Church'} Announcement`,
+          body: preview.slice(0, 100),
+          deepLink: { screen: 'Announcements' },
+        };
+
+      case 'new_event':
+        return {
+          title: `New Event: "${data.eventTitle ?? preview}"`,
+          body: `${data.eventDate ?? ''} — RSVP now`,
+          deepLink: { screen: 'EventDetail', params: { eventId: data.eventId } },
+        };
+
+      case 'event_reminder':
+        return {
+          title: `Event Reminder: "${data.eventTitle ?? ''}"`,
+          body: `Starting in ${data.timeUntil ?? 'soon'}`,
+          deepLink: { screen: 'EventDetail', params: { eventId: data.eventId } },
+        };
+
+      // Prayer
+      case 'prayer_prayed':
+        return {
+          title: `${senderName} prayed for your request`,
+          body: preview.slice(0, 50),
+          deepLink: { screen: 'PrayerWall' },
+        };
+
+      case 'prayer_answered':
+        return {
+          title: 'Prayer Answered!',
+          body: preview.slice(0, 50),
+          deepLink: { screen: 'PrayerWall' },
+        };
+
+      // Giving & Fundraising
+      case 'donation_received':
+        return {
+          title: `${data.anonymous ? 'Someone' : senderName} donated ${data.formattedAmount ?? ''}`,
+          body: `to "${data.fundraiserTitle ?? ''}"`,
+          deepLink: { screen: 'FundraiserDetail', params: { fundraiserId: data.fundraiserId } },
+        };
+
+      case 'fundraiser_goal':
+        return {
+          title: 'Goal Reached!',
+          body: `"${data.fundraiserTitle}" hit its target`,
+          deepLink: { screen: 'FundraiserDetail', params: { fundraiserId: data.fundraiserId } },
+        };
+
+      case 'giving_receipt':
+        return {
+          title: 'Donation Receipt',
+          body: `Your ${data.formattedAmount ?? ''} gift has been processed`,
+          deepLink: { screen: 'GivingHistory' },
+        };
+
+      // Groups
+      case 'group_invite':
+        return {
+          title: `You've been invited to "${data.groupName ?? ''}"`,
+          body: `By ${senderName}`,
+          deepLink: { screen: 'GroupChat', params: { groupId: data.groupId } },
+        };
+
+      // Admin & System
+      case 'church_broadcast':
+      case 'system_broadcast':
+        return {
+          title: data.broadcastTitle ?? 'Announcement',
+          body: data.broadcastBody ?? preview,
+          deepLink: { screen: 'Announcements' },
+        };
+
+      case 'badge_earned':
+        return {
+          title: 'Badge Earned!',
+          body: `You earned the "${data.badgeName ?? ''}" badge`,
+          deepLink: { screen: 'Main', params: { screen: 'Profile' } },
+        };
+
+      case 'role_changed':
+        return {
+          title: 'Role Updated',
+          body: `You are now a ${data.newRole ?? 'member'} at ${data.churchName ?? 'your church'}`,
+          deepLink: { screen: 'ChurchProfile' },
+        };
+
+      case 'volunteer_reminder':
+        return {
+          title: 'Volunteer Reminder',
+          body: `"${data.role ?? ''}" at "${data.serviceName ?? ''}" tomorrow`,
+          deepLink: { screen: 'VolunteerSignup' },
+        };
+
+      case 'checkin_reminder':
+        return {
+          title: 'Time to Check In!',
+          body: 'Service starts soon — check in now',
+          deepLink: { screen: 'CheckIn' },
+        };
+
+      // Global post (legacy)
+      case 'NEW_GLOBAL_POST':
+        return {
+          title: 'New Post',
+          body: preview.slice(0, 80),
+          deepLink: { screen: 'Comments', params: { postId: data.postId } },
+        };
+
       default:
-        this.logger.warn(`Unknown notification type: ${(job.data as NotificationJobData).type}`);
+        return {
+          title: 'Notification',
+          body: preview || 'You have a new notification',
+          deepLink: { screen: 'Feed' },
+        };
     }
-  }
-
-  /**
-   * Creates an in-app notification for the post author when someone comments.
-   * Sends a push notification via OneSignal.
-   * Skips if the commenter IS the post author (no self-notification).
-   */
-  private async handleNewComment(data: NewCommentJob): Promise<void> {
-    if (data.recipientUserId === data.actorUserId) {
-      this.logger.log('Skipping self-notification for comment on own post');
-      return;
-    }
-
-    await this.dataSource.manager.save(
-      Notification,
-      this.dataSource.manager.create(Notification, {
-        recipientId: data.recipientUserId,
-        tenantId: data.tenantId,
-        type: data.type,
-        payload: {
-          postId: data.postId,
-          commentId: data.commentId,
-          actorUserId: data.actorUserId,
-          preview: data.previewText,
-        },
-      }),
-    );
-
-    this.logger.log(
-      `In-app notification created for user ${data.recipientUserId} (new comment on post ${data.postId})`,
-    );
-
-    await this.oneSignal.sendPush(
-      data.recipientUserId,
-      'New Comment',
-      data.previewText,
-      { type: 'NEW_COMMENT', postId: data.postId },
-    );
-  }
-
-  /**
-   * Creates an in-app notification for each mentioned user.
-   * Sends a push notification via OneSignal.
-   * Skips if the mentioned user is the post author (no self-notification).
-   */
-  private async handlePostMention(data: PostMentionJob): Promise<void> {
-    if (data.recipientUserId === data.actorUserId) {
-      this.logger.log('Skipping self-notification for self-mention');
-      return;
-    }
-
-    await this.dataSource.manager.save(
-      Notification,
-      this.dataSource.manager.create(Notification, {
-        recipientId: data.recipientUserId,
-        tenantId: data.tenantId,
-        type: data.type,
-        payload: {
-          postId: data.postId,
-          actorUserId: data.actorUserId,
-          preview: data.previewText,
-        },
-      }),
-    );
-
-    this.logger.log(
-      `In-app notification created for user ${data.recipientUserId} (mentioned in post ${data.postId})`,
-    );
-
-    await this.oneSignal.sendPush(
-      data.recipientUserId,
-      'You were mentioned',
-      data.previewText,
-      { type: 'POST_MENTION', postId: data.postId },
-    );
-  }
-
-  /**
-   * Creates an in-app notification for a follower when someone they follow
-   * creates a global post. Sends a push notification via OneSignal.
-   */
-  private async handleNewGlobalPost(data: NewGlobalPostJob): Promise<void> {
-    if (data.recipientUserId === data.actorUserId) {
-      return;
-    }
-
-    await this.dataSource.manager.save(
-      Notification,
-      this.dataSource.manager.create(Notification, {
-        recipientId: data.recipientUserId,
-        tenantId: data.tenantId,
-        type: data.type,
-        payload: {
-          postId: data.postId,
-          actorUserId: data.actorUserId,
-          preview: data.previewText,
-        },
-      }),
-    );
-
-    this.logger.log(
-      `In-app notification created for user ${data.recipientUserId} (new global post ${data.postId})`,
-    );
-
-    await this.oneSignal.sendPush(
-      data.recipientUserId,
-      'New Post',
-      data.previewText,
-      { type: 'NEW_GLOBAL_POST', postId: data.postId },
-    );
-  }
-
-  /**
-   * Sends an invitation email via the email service.
-   * Phase 1: logs the email details. Phase 2: integrates Resend SDK.
-   * No push notification — the recipient may not have the app installed yet.
-   */
-  private async handleInvitationEmail(data: InvitationEmailJob): Promise<void> {
-    // TODO: Replace with actual email sending via Resend SDK
-    this.logger.log(
-      `[EMAIL STUB] Invitation email would be sent to ${data.recipientEmail} ` +
-        `with token ${data.invitationToken.slice(0, 8)}... (role: ${data.role}, expires: ${data.expiresAt})`,
-    );
-  }
-
-  /**
-   * Creates an in-app notification and sends a push for new messages
-   * in private/direct channels. The ChatService only dispatches these
-   * for non-public channels to avoid notification spam.
-   */
-  private async handleNewMessage(data: NewMessageJob): Promise<void> {
-    if (data.recipientUserId === data.actorUserId) {
-      this.logger.log('Skipping self-notification for own message');
-      return;
-    }
-
-    await this.dataSource.manager.save(
-      Notification,
-      this.dataSource.manager.create(Notification, {
-        recipientId: data.recipientUserId,
-        tenantId: data.tenantId,
-        type: data.type,
-        payload: {
-          channelId: data.channelId,
-          channelName: data.channelName,
-          actorUserId: data.actorUserId,
-          preview: data.previewText,
-        },
-      }),
-    );
-
-    this.logger.log(
-      `In-app notification created for user ${data.recipientUserId} (new message in ${data.channelName})`,
-    );
-
-    await this.oneSignal.sendPush(
-      data.recipientUserId,
-      data.channelName,
-      data.previewText,
-      { type: 'NEW_MESSAGE', channelId: data.channelId },
-    );
   }
 }
