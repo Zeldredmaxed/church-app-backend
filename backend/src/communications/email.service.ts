@@ -73,12 +73,22 @@ export class EmailService {
     return { sent, failed };
   }
 
+  /** Escape HTML special characters to prevent XSS in emails. */
+  private escapeHtml(str: string): string {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   /** Wraps plain text body in a simple HTML email template. */
   private wrapHtml(body: string, churchName?: string): string {
     return `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        ${churchName ? `<h2 style="color: #1a1a1a; margin-bottom: 20px;">${churchName}</h2>` : ''}
-        <div style="color: #333; line-height: 1.6; white-space: pre-wrap;">${body}</div>
+        ${churchName ? `<h2 style="color: #1a1a1a; margin-bottom: 20px;">${this.escapeHtml(churchName)}</h2>` : ''}
+        <div style="color: #333; line-height: 1.6; white-space: pre-wrap;">${this.escapeHtml(body)}</div>
         <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;" />
         <p style="color: #999; font-size: 12px;">
           Sent via Shepard Church Platform

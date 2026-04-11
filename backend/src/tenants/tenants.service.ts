@@ -18,6 +18,7 @@ import { CreateTenantDto } from './dto/create-tenant.dto';
 import { RegisterChurchDto } from './dto/register-church.dto';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 import { getTierFeatures, TierFeatures, TIER_DISPLAY_NAMES, TierName } from '../common/config/tier-features.config';
+import { CacheService } from '../common/services/cache.service';
 
 @Injectable()
 export class TenantsService {
@@ -27,6 +28,7 @@ export class TenantsService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly supabaseAdmin: SupabaseAdminService,
+    private readonly cache: CacheService,
   ) {
     this.supabase = supabaseAdmin.client;
   }
@@ -333,6 +335,11 @@ export class TenantsService {
    * Includes member count, post count, and event count.
    */
   async getProfile(tenantId: string) {
+    return this.cache.wrap(`tenant:profile:${tenantId}`, 300, () => this._getProfile(tenantId));
+  }
+
+  // Service-role: public profile page, tenant_id enforced by lookup
+  private async _getProfile(tenantId: string) {
     const tenant = await this.dataSource.manager.findOne(Tenant, {
       where: { id: tenantId },
     });

@@ -12,6 +12,7 @@ import { DonateDto } from './dto/donate.dto';
 import { CreateFundDto } from './dto/create-fund.dto';
 import { CreateBatchDto } from './dto/create-batch.dto';
 import { getTierFeatures } from '../common/config/tier-features.config';
+import { CacheService } from '../common/services/cache.service';
 
 @Injectable()
 export class GivingService {
@@ -20,6 +21,7 @@ export class GivingService {
   constructor(
     private readonly stripeService: StripeService,
     private readonly dataSource: DataSource,
+    private readonly cache: CacheService,
   ) {}
 
   /**
@@ -165,6 +167,11 @@ export class GivingService {
    * Uses service-role DataSource.
    */
   async getGivingKpis(tenantId: string) {
+    return this.cache.wrap(`giving:kpis:${tenantId}`, 60, () => this._getGivingKpis(tenantId));
+  }
+
+  // Service-role: dashboard aggregate, tenant_id enforced by $1 parameter
+  private async _getGivingKpis(tenantId: string) {
     const rows = await this.dataSource.query(
       `SELECT
         COALESCE(SUM(CASE WHEN status = 'succeeded' THEN amount ELSE 0 END), 0)::float AS total_giving,

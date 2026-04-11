@@ -121,6 +121,10 @@ export class ReportsService {
   }
 
   async getGivingByFund(tenantId: string) {
+    return this.cache.wrap(`reports:givingbyfund:${tenantId}`, 60, () => this._getGivingByFund(tenantId));
+  }
+
+  private async _getGivingByFund(tenantId: string) {
     const rows = await this.dataSource.query(
       `SELECT COALESCE(gf.name, 'General') AS fund_name, SUM(t.amount)::float AS total
        FROM public.transactions t

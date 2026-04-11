@@ -1,9 +1,11 @@
 import { Controller, Get, Post, Delete, Body, Param, Query, ParseUUIDPipe, UseGuards, UseInterceptors, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { CheckinService } from './checkin.service';
 import { BulkCheckinDto } from './dto/bulk-checkin.dto';
 import { AddVisitorDto } from './dto/add-visitor.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -102,7 +104,8 @@ export class CheckinController {
   }
 
   @Get('checkin/child/:securityCode/verify')
-  @ApiOperation({ summary: 'Verify a child pickup security code' })
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
+  @ApiOperation({ summary: 'Verify a child pickup security code (rate-limited: 10/min)' })
   @ApiResponse({ status: 200, description: 'Verification result with child info + authorized pickups' })
   verifyPickupCode(
     @Param('securityCode') securityCode: string,
@@ -114,7 +117,9 @@ export class CheckinController {
   }
 
   @Get('members/:userId/medical-alerts')
-  @ApiOperation({ summary: 'Get medical/allergy alerts for a member' })
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @ApiOperation({ summary: 'Get medical/allergy alerts for a member (admin/pastor only)' })
   getMedicalAlerts(
     @Param('userId', ParseUUIDPipe) userId: string,
     @CurrentUser() user: SupabaseJwtPayload,
@@ -126,7 +131,9 @@ export class CheckinController {
 
   @Post('members/:userId/medical-alerts')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Add a medical/allergy alert for a member' })
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @ApiOperation({ summary: 'Add a medical/allergy alert for a member (admin/pastor only)' })
   addMedicalAlert(
     @Param('userId', ParseUUIDPipe) userId: string,
     @Body() body: { alertType: string; description: string; severity?: string },
@@ -139,7 +146,9 @@ export class CheckinController {
 
   @Delete('members/:userId/medical-alerts/:alertId')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Delete a medical/allergy alert' })
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @ApiOperation({ summary: 'Delete a medical/allergy alert (admin/pastor only)' })
   deleteMedicalAlert(
     @Param('userId', ParseUUIDPipe) userId: string,
     @Param('alertId', ParseUUIDPipe) alertId: string,

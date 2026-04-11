@@ -174,9 +174,9 @@ export class CheckinService {
     guardianId: string;
     serviceId?: string;
   }) {
-    // Generate a cryptographically secure 6-digit security code
-    const { randomInt } = require('crypto');
-    const securityCode = String(randomInt(100000, 1000000));
+    // Generate a cryptographically secure 8-character alphanumeric security code
+    const { randomBytes } = require('crypto');
+    const securityCode = randomBytes(6).toString('base64url').substring(0, 8).toUpperCase();
 
     const [row] = await this.dataSource.query(
       `INSERT INTO public.check_ins

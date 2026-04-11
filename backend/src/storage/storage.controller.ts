@@ -6,6 +6,7 @@ import {
   Query,
   ParseUUIDPipe,
   UseGuards,
+  UseInterceptors,
   HttpCode,
   HttpStatus,
   BadRequestException,
@@ -13,6 +14,7 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { StorageService } from './storage.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 
@@ -20,6 +22,7 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 @ApiBearerAuth()
 @Controller('storage')
 @UseGuards(JwtAuthGuard)
+@UseInterceptors(RlsContextInterceptor)
 export class StorageController {
   constructor(private readonly storageService: StorageService) {}
 
