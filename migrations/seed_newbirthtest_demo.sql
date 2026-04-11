@@ -841,14 +841,14 @@ BEGIN
   -- 16. BADGES (8) + AWARDS (30)
   -- ════════════════════════════════════════════════════════════
   INSERT INTO public.badges (id, tenant_id, name, description, icon, color, tier, category, auto_award_rule, display_order, created_by) VALUES
-    (b1, tid, 'First Steps',       'Attended your first service',           'footprints',     '#4CAF50', 'bronze', 'attendance',  '{"type":"attendance_count","count":1}',        1, u01),
-    (b2, tid, 'Faithful Attender', 'Attended 10 services',                  'calendar-check', '#2196F3', 'silver', 'attendance',  '{"type":"attendance_count","count":10}',       2, u01),
-    (b3, tid, 'Prayer Warrior',    'Submitted 5 prayer requests',           'hands-praying',  '#9C27B0', 'bronze', 'spiritual',   '{"type":"prayer_count","min":5}',              3, u01),
-    (b4, tid, 'Generous Giver',    'Donated a total of $500+',             'heart-handshake','#E91E63', 'silver', 'giving',      '{"type":"giving_lifetime","threshold":500}',   4, u01),
-    (b5, tid, 'Baptized',          'Publicly declared your faith',          'droplets',       '#00BCD4', 'gold',   'spiritual',   '{"type":"baptized"}',                          5, u01),
-    (b6, tid, 'Community Builder', 'Joined 3 or more groups',              'users',          '#FF9800', 'silver', 'engagement',  '{"type":"group_count","min":3}',               6, u01),
-    (b7, tid, 'Servant Heart',     'Logged 10+ volunteer hours',           'hand-heart',     '#795548', 'silver', 'service',     '{"type":"volunteer_hours","min":10}',          7, u01),
-    (b8, tid, 'Social Butterfly',  'Created 5 or more posts',             'message-circle', '#607D8B', 'bronze', 'engagement',  '{"type":"post_count","min":5}',                8, u01)
+    (b1, tid, 'First Steps',       'Attended your first service',           'running-shoes',       '#4CAF50', 'bronze', 'attendance',  '{"type":"attendance_count","count":1}',        1, u01),
+    (b2, tid, 'Faithful Attender', 'Attended 10 services',                  'calendar-check-01',   '#2196F3', 'silver', 'attendance',  '{"type":"attendance_count","count":10}',       2, u01),
+    (b3, tid, 'Prayer Warrior',    'Submitted 5 prayer requests',           'hand-prayer',         '#9C27B0', 'bronze', 'spiritual',   '{"type":"prayer_count","min":5}',              3, u01),
+    (b4, tid, 'Generous Giver',    'Donated a total of $500+',             'hand-heart-01',       '#E91E63', 'silver', 'giving',      '{"type":"giving_lifetime","threshold":500}',   4, u01),
+    (b5, tid, 'Baptized',          'Publicly declared your faith',          'droplet',             '#00BCD4', 'gold',   'spiritual',   '{"type":"baptized"}',                          5, u01),
+    (b6, tid, 'Community Builder', 'Joined 3 or more groups',              'user-group',          '#FF9800', 'silver', 'engagement',  '{"type":"group_count","min":3}',               6, u01),
+    (b7, tid, 'Servant Heart',     'Logged 10+ volunteer hours',           'helping-hand',        '#795548', 'silver', 'service',     '{"type":"volunteer_hours","min":10}',          7, u01),
+    (b8, tid, 'Social Butterfly',  'Created 5 or more posts',             'message-01',          '#607D8B', 'bronze', 'engagement',  '{"type":"post_count","min":5}',                8, u01)
   ON CONFLICT DO NOTHING;
 
   INSERT INTO public.member_badges (badge_id, user_id, tenant_id, awarded_reason) VALUES

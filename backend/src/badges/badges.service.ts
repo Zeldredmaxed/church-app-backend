@@ -5,12 +5,160 @@ import { CreateBadgeDto } from './dto/create-badge.dto';
 import { UpdateBadgeDto } from './dto/update-badge.dto';
 import { AwardBadgeDto } from './dto/award-badge.dto';
 
+/**
+ * Curated icon catalog for badge creation.
+ * These are Hugeicons icon names (kebab-case) from @hugeicons/core-free-icons.
+ * The mobile app converts to PascalCase + "Icon" suffix for the component import.
+ * e.g., "hand-prayer" → HandPrayerIcon
+ *
+ * Pastors see this catalog when creating a badge. The full 5,100+ Hugeicons library
+ * is available on the frontend, but this curated list surfaces the most relevant ones.
+ */
+const BADGE_ICON_CATALOG = [
+  // Faith & Spiritual
+  { name: 'hand-prayer', label: 'Praying Hands', category: 'Faith & Spiritual' },
+  { name: 'church', label: 'Church', category: 'Faith & Spiritual' },
+  { name: 'book-02', label: 'Bible / Book', category: 'Faith & Spiritual' },
+  { name: 'fire', label: 'Fire / Holy Spirit', category: 'Faith & Spiritual' },
+  { name: 'candle-02', label: 'Candle', category: 'Faith & Spiritual' },
+  { name: 'star', label: 'Star', category: 'Faith & Spiritual' },
+  { name: 'peace-sign', label: 'Peace', category: 'Faith & Spiritual' },
+  { name: 'angel', label: 'Angel', category: 'Faith & Spiritual' },
+  { name: 'moon-02', label: 'Moon', category: 'Faith & Spiritual' },
+  { name: 'sun-03', label: 'Sun / Light', category: 'Faith & Spiritual' },
+  { name: 'sparkles', label: 'Sparkles', category: 'Faith & Spiritual' },
+  { name: 'lighthouse', label: 'Lighthouse', category: 'Faith & Spiritual' },
+
+  // Water & Baptism
+  { name: 'droplet', label: 'Water Drop', category: 'Water & Baptism' },
+  { name: 'water-wave', label: 'Water Wave', category: 'Water & Baptism' },
+  { name: 'swimming', label: 'Baptism / Swimming', category: 'Water & Baptism' },
+  { name: 'ocean-wave', label: 'Ocean', category: 'Water & Baptism' },
+
+  // Worship & Music
+  { name: 'music-note-01', label: 'Music Note', category: 'Worship & Music' },
+  { name: 'mic-01', label: 'Microphone', category: 'Worship & Music' },
+  { name: 'headphones', label: 'Headphones', category: 'Worship & Music' },
+  { name: 'guitar', label: 'Guitar', category: 'Worship & Music' },
+  { name: 'piano', label: 'Piano', category: 'Worship & Music' },
+  { name: 'voice', label: 'Voice / Singing', category: 'Worship & Music' },
+  { name: 'hand-pointing-up', label: 'Hand Raised', category: 'Worship & Music' },
+
+  // Giving & Generosity
+  { name: 'coins-01', label: 'Coins', category: 'Giving & Generosity' },
+  { name: 'money-send-01', label: 'Give Money', category: 'Giving & Generosity' },
+  { name: 'gift', label: 'Gift Box', category: 'Giving & Generosity' },
+  { name: 'heart-check', label: 'Heart Check', category: 'Giving & Generosity' },
+  { name: 'hand-heart-01', label: 'Heart in Hand', category: 'Giving & Generosity' },
+  { name: 'treasure-chest', label: 'Treasure Chest', category: 'Giving & Generosity' },
+  { name: 'donation', label: 'Donation', category: 'Giving & Generosity' },
+
+  // Community & People
+  { name: 'user-group', label: 'Group of People', category: 'Community & People' },
+  { name: 'user-add-01', label: 'Add Person', category: 'Community & People' },
+  { name: 'handshake', label: 'Handshake', category: 'Community & People' },
+  { name: 'family', label: 'Family', category: 'Community & People' },
+  { name: 'baby-02', label: 'Baby / Child', category: 'Community & People' },
+  { name: 'globe-02', label: 'Globe / World', category: 'Community & People' },
+  { name: 'puzzle', label: 'Puzzle Piece', category: 'Community & People' },
+  { name: 'link-04', label: 'Link / Chain', category: 'Community & People' },
+  { name: 'bridge', label: 'Bridge', category: 'Community & People' },
+  { name: 'love-korean-finger', label: 'Love Sign', category: 'Community & People' },
+
+  // Attendance & Check-in
+  { name: 'running-shoes', label: 'Footprints / Shoes', category: 'Attendance & Check-in' },
+  { name: 'calendar-check-01', label: 'Calendar Check', category: 'Attendance & Check-in' },
+  { name: 'clock-01', label: 'Clock', category: 'Attendance & Check-in' },
+  { name: 'location-01', label: 'Location Pin', category: 'Attendance & Check-in' },
+  { name: 'door-01', label: 'Door', category: 'Attendance & Check-in' },
+  { name: 'key-01', label: 'Key', category: 'Attendance & Check-in' },
+  { name: 'sunrise', label: 'Sunrise', category: 'Attendance & Check-in' },
+  { name: 'notification-03', label: 'Bell', category: 'Attendance & Check-in' },
+
+  // Service & Volunteering
+  { name: 'helping-hand', label: 'Helping Hand', category: 'Service & Volunteering' },
+  { name: 'paint-brush-01', label: 'Paint Brush', category: 'Service & Volunteering' },
+  { name: 'wrench-01', label: 'Wrench / Tool', category: 'Service & Volunteering' },
+  { name: 'first-aid-kit', label: 'First Aid', category: 'Service & Volunteering' },
+  { name: 'cooking-pot', label: 'Cooking Pot', category: 'Service & Volunteering' },
+  { name: 'shopping-bag-01', label: 'Shopping Bag', category: 'Service & Volunteering' },
+  { name: 'truck', label: 'Truck / Delivery', category: 'Service & Volunteering' },
+  { name: 'shield-check', label: 'Shield Check', category: 'Service & Volunteering' },
+  { name: 'apron', label: 'Apron', category: 'Service & Volunteering' },
+
+  // Communication & Social
+  { name: 'message-01', label: 'Chat Bubble', category: 'Communication & Social' },
+  { name: 'message-multiple-01', label: 'Chat Bubbles', category: 'Communication & Social' },
+  { name: 'megaphone-01', label: 'Megaphone', category: 'Communication & Social' },
+  { name: 'mail-01', label: 'Email', category: 'Communication & Social' },
+  { name: 'phone-01', label: 'Phone', category: 'Communication & Social' },
+  { name: 'video-01', label: 'Video Camera', category: 'Communication & Social' },
+  { name: 'pen-tool-01', label: 'Pen / Writing', category: 'Communication & Social' },
+  { name: 'share-01', label: 'Share', category: 'Communication & Social' },
+
+  // Education & Growth
+  { name: 'graduation-scroll', label: 'Graduation', category: 'Education & Growth' },
+  { name: 'book-open-01', label: 'Open Book', category: 'Education & Growth' },
+  { name: 'idea-01', label: 'Lightbulb / Idea', category: 'Education & Growth' },
+  { name: 'plant-01', label: 'Seedling / Growth', category: 'Education & Growth' },
+  { name: 'tree-06', label: 'Tree', category: 'Education & Growth' },
+  { name: 'mountain', label: 'Mountain Peak', category: 'Education & Growth' },
+  { name: 'telescope-01', label: 'Telescope', category: 'Education & Growth' },
+  { name: 'brain-02', label: 'Brain / Mind', category: 'Education & Growth' },
+  { name: 'scroll', label: 'Scroll', category: 'Education & Growth' },
+
+  // Milestones & Achievement
+  { name: 'trophy', label: 'Trophy', category: 'Milestones & Achievement' },
+  { name: 'medal-01', label: 'Medal', category: 'Milestones & Achievement' },
+  { name: 'star-01', label: 'Star', category: 'Milestones & Achievement' },
+  { name: 'diamond-01', label: 'Diamond', category: 'Milestones & Achievement' },
+  { name: 'crown', label: 'Crown', category: 'Milestones & Achievement' },
+  { name: 'rocket-01', label: 'Rocket', category: 'Milestones & Achievement' },
+  { name: 'target-02', label: 'Target / Bullseye', category: 'Milestones & Achievement' },
+  { name: 'flag-01', label: 'Flag', category: 'Milestones & Achievement' },
+  { name: 'award-01', label: 'Award Ribbon', category: 'Milestones & Achievement' },
+  { name: 'certificate-01', label: 'Certificate', category: 'Milestones & Achievement' },
+
+  // Health & Wellness
+  { name: 'heartbeat', label: 'Heartbeat', category: 'Health & Wellness' },
+  { name: 'running', label: 'Running Person', category: 'Health & Wellness' },
+  { name: 'apple-01', label: 'Apple / Nutrition', category: 'Health & Wellness' },
+  { name: 'yoga-01', label: 'Yoga / Meditation', category: 'Health & Wellness' },
+
+  // Nature & Seasons
+  { name: 'flower', label: 'Flower', category: 'Nature & Seasons' },
+  { name: 'leaf-01', label: 'Leaf', category: 'Nature & Seasons' },
+  { name: 'snowflake', label: 'Snowflake / Winter', category: 'Nature & Seasons' },
+  { name: 'rainbow', label: 'Rainbow / Promise', category: 'Nature & Seasons' },
+  { name: 'cloud', label: 'Cloud', category: 'Nature & Seasons' },
+
+  // Symbols
+  { name: 'heart-01', label: 'Heart', category: 'Symbols' },
+  { name: 'compass-01', label: 'Compass', category: 'Symbols' },
+  { name: 'anchor', label: 'Anchor / Hope', category: 'Symbols' },
+  { name: 'infinity-01', label: 'Infinity', category: 'Symbols' },
+  { name: 'butterfly', label: 'Butterfly / Transformation', category: 'Symbols' },
+  { name: 'dove', label: 'Dove / Peace', category: 'Symbols' },
+  { name: 'feather', label: 'Feather', category: 'Symbols' },
+  { name: 'fingerprint', label: 'Fingerprint / Identity', category: 'Symbols' },
+  { name: 'eye', label: 'Eye / Vision', category: 'Symbols' },
+  { name: 'flash', label: 'Lightning Bolt', category: 'Symbols' },
+];
+
 @Injectable()
 export class BadgesService {
   private getRlsContext() {
     const ctx = rlsStorage.getStore();
     if (!ctx) throw new InternalServerErrorException('RLS context unavailable');
     return ctx;
+  }
+
+  /**
+   * Returns the curated icon catalog for badge creation.
+   * These are Hugeicons icon names grouped by category.
+   */
+  getIconCatalog() {
+    return BADGE_ICON_CATALOG;
   }
 
   async getBadges() {

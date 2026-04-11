@@ -21,6 +21,12 @@ export class BadgesController {
     private readonly dataSource: DataSource,
   ) {}
 
+  @Get('icons')
+  @ApiOperation({ summary: 'Get curated icon catalog for badge creation (Hugeicons names)' })
+  getIconCatalog() {
+    return this.badgesService.getIconCatalog();
+  }
+
   @Get('leaderboard')
   @ApiOperation({ summary: 'Get badge leaderboard — top members by badge count' })
   getLeaderboard(@Query('limit') limit?: string) {

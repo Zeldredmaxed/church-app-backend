@@ -13,7 +13,7 @@ export class CreateBadgeDto {
   @IsString()
   description?: string;
 
-  @ApiPropertyOptional({ example: 'award', description: 'Lucide icon name' })
+  @ApiPropertyOptional({ example: 'hand-prayer', description: 'Hugeicons icon name (kebab-case). See GET /badges/icons for available icons.' })
   @IsOptional()
   @IsString()
   icon?: string;
