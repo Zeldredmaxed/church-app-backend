@@ -94,6 +94,22 @@ export class CommentsService {
       previewText: hasContent ? dto.content!.slice(0, 100) : '📷 Image comment',
     });
 
+    // Dispatch mention notifications for each mentioned user
+    if (dto.mentionedUserIds?.length) {
+      const uniqueMentions = [...new Set(dto.mentionedUserIds)].filter(id => id !== authorId);
+      for (const mentionedUserId of uniqueMentions) {
+        await this.notificationsQueue.add('POST_MENTION', {
+          type: NotificationType.POST_MENTION,
+          tenantId: currentTenantId,
+          recipientUserId: mentionedUserId,
+          actorUserId: authorId,
+          postId,
+          previewText: hasContent ? dto.content!.slice(0, 100) : '📷 Image comment',
+        });
+      }
+      this.logger.log(`Enqueued ${uniqueMentions.length} mention notification(s) for comment ${saved.id}`);
+    }
+
     // Re-fetch with author relation so the response includes fullName/avatarUrl
     const commentWithAuthor = await queryRunner.manager.findOne(Comment, {
       where: { id: saved.id },

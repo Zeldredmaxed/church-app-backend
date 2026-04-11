@@ -24,6 +24,11 @@ export class CreateCommentDto {
   })
   mediaUrl?: string;
 
+  @ApiPropertyOptional({ description: 'User IDs to mention in this comment. Each receives a notification.' })
+  @IsOptional()
+  @IsUUID('4', { each: true })
+  mentionedUserIds?: string[];
+
   @ApiPropertyOptional({ description: 'Parent comment ID for threaded replies. Omit for top-level comments.' })
   @IsOptional()
   @IsUUID()

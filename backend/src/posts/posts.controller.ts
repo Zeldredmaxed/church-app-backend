@@ -70,8 +70,8 @@ export class PostsController {
   @ApiOperation({ summary: 'Get a single post by ID' })
   @ApiResponse({ status: 200, description: 'Post object' })
   @ApiResponse({ status: 404, description: 'Post not found or not in current tenant' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.postsService.findOne(id);
+  findOne(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: SupabaseJwtPayload) {
+    return this.postsService.findOne(id, user.sub);
   }
 
   @Patch(':id')
@@ -79,8 +79,8 @@ export class PostsController {
   @ApiOperation({ summary: 'Update post content (author only)' })
   @ApiResponse({ status: 200, description: 'Updated post' })
   @ApiResponse({ status: 404, description: 'Post not found or not the author' })
-  updatePost(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdatePostDto) {
-    return this.postsService.updatePost(id, dto);
+  updatePost(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdatePostDto, @CurrentUser() user: SupabaseJwtPayload) {
+    return this.postsService.updatePost(id, dto, user.sub);
   }
 
   @Delete(':id')
