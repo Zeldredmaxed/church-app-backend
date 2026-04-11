@@ -1,17 +1,25 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { CacheService } from '../common/services/cache.service';
 
 @Injectable()
 export class DashboardService {
   private readonly logger = new Logger(DashboardService.name);
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly cache: CacheService,
+  ) {}
 
   /**
    * Returns all 7 KPI cards for the admin dashboard in a single call.
    * Uses service-role connection (not RLS) since it aggregates across the tenant.
    */
   async getKpis(tenantId: string) {
+    return this.cache.wrap(`dashboard:kpis:${tenantId}`, 30, () => this._getKpis(tenantId));
+  }
+
+  private async _getKpis(tenantId: string) {
     const [
       [{ total_members }],
       [{ new_members_this_month }],
@@ -48,7 +56,8 @@ export class DashboardService {
       this.dataSource.query(
         `SELECT COUNT(DISTINCT vs.user_id)::int AS active_volunteers
          FROM public.volunteer_signups vs
-         WHERE vs.opportunity_id IN (SELECT id FROM public.volunteer_opportunities WHERE tenant_id = $1)`,
+         INNER JOIN public.volunteer_opportunities vo ON vo.id = vs.opportunity_id
+         WHERE vo.tenant_id = $1`,
         [tenantId],
       ),
       this.dataSource.query(
@@ -178,8 +187,19 @@ export class DashboardService {
    * Returns current + previous week comparison, delta, trend, and 6-week history.
    */
   async getEngagement(tenantId: string) {
-    // Get 6 weeks of engagement data using a CTE that unions all activity tables
-    const rows: Array<{ week_start: string; active_members: string; total_members: string }> =
+    return this.cache.wrap(`dashboard:engagement:${tenantId}`, 60, () => this._getEngagement(tenantId));
+  }
+
+  private async _getEngagement(tenantId: string) {
+    // Fetch total members once (not 6x per week)
+    const [[{ total_members: cachedTotal }]] = await Promise.all([
+      this.dataSource.query(
+        `SELECT COUNT(*)::int AS total_members FROM public.tenant_memberships WHERE tenant_id = $1`,
+        [tenantId],
+      ),
+    ]);
+
+    const rows: Array<{ week_start: string; active_members: string }> =
       await this.dataSource.query(
         `WITH weeks AS (
            SELECT generate_series(
@@ -190,55 +210,54 @@ export class DashboardService {
          ),
          activity AS (
            SELECT author_id AS user_id, created_at FROM public.posts WHERE tenant_id = $1
+             AND created_at >= date_trunc('week', now()) - interval '5 weeks'
            UNION ALL
            SELECT author_id, created_at FROM public.comments WHERE tenant_id = $1
+             AND created_at >= date_trunc('week', now()) - interval '5 weeks'
            UNION ALL
            SELECT user_id, created_at FROM public.post_likes WHERE tenant_id = $1
+             AND created_at >= date_trunc('week', now()) - interval '5 weeks'
            UNION ALL
            SELECT user_id, checked_in_at FROM public.check_ins WHERE tenant_id = $1
+             AND checked_in_at >= date_trunc('week', now()) - interval '5 weeks'
            UNION ALL
            SELECT user_id, created_at FROM public.transactions WHERE tenant_id = $1 AND status = 'succeeded'
+             AND created_at >= date_trunc('week', now()) - interval '5 weeks'
            UNION ALL
-           SELECT user_id, joined_at FROM public.group_members gm
-             WHERE gm.group_id IN (SELECT id FROM public.groups WHERE tenant_id = $1)
+           SELECT gm.user_id, gm.joined_at FROM public.group_members gm
+             INNER JOIN public.groups g ON g.id = gm.group_id
+             WHERE g.tenant_id = $1 AND gm.joined_at >= date_trunc('week', now()) - interval '5 weeks'
            UNION ALL
            SELECT author_id, created_at FROM public.prayers WHERE tenant_id = $1
+             AND created_at >= date_trunc('week', now()) - interval '5 weeks'
            UNION ALL
-           SELECT user_id, created_at FROM public.event_rsvps er
-             WHERE er.event_id IN (SELECT id FROM public.events WHERE tenant_id = $1)
+           SELECT er.user_id, er.created_at FROM public.event_rsvps er
+             INNER JOIN public.events e ON e.id = er.event_id
+             WHERE e.tenant_id = $1 AND er.created_at >= date_trunc('week', now()) - interval '5 weeks'
            UNION ALL
-           SELECT author_id, created_at FROM public.group_messages gm2
-             WHERE gm2.group_id IN (SELECT id FROM public.groups WHERE tenant_id = $1)
-         ),
-         weekly_active AS (
-           SELECT w.week_start,
-             COUNT(DISTINCT a.user_id)::int AS active_members
-           FROM weeks w
-           LEFT JOIN activity a
-             ON a.created_at >= w.week_start
-             AND a.created_at < w.week_start + interval '1 week'
-           GROUP BY w.week_start
-         ),
-         weekly_total AS (
-           SELECT w.week_start,
-             (SELECT COUNT(*)::int FROM public.tenant_memberships WHERE tenant_id = $1) AS total_members
-           FROM weeks w
+           SELECT gm2.author_id, gm2.created_at FROM public.group_messages gm2
+             INNER JOIN public.groups g2 ON g2.id = gm2.group_id
+             WHERE g2.tenant_id = $1 AND gm2.created_at >= date_trunc('week', now()) - interval '5 weeks'
          )
-         SELECT wa.week_start, wa.active_members, wt.total_members
-         FROM weekly_active wa
-         JOIN weekly_total wt ON wt.week_start = wa.week_start
-         ORDER BY wa.week_start ASC`,
+         SELECT w.week_start,
+           COUNT(DISTINCT a.user_id)::int AS active_members
+         FROM weeks w
+         LEFT JOIN activity a
+           ON a.created_at >= w.week_start
+           AND a.created_at < w.week_start + interval '1 week'
+         GROUP BY w.week_start
+         ORDER BY w.week_start ASC`,
         [tenantId],
       );
 
+    const totalMembers = Number(cachedTotal);
     const weeklyHistory = rows.map(r => {
       const active = Number(r.active_members);
-      const total = Number(r.total_members);
       return {
         weekStart: r.week_start,
         activeMembers: active,
-        totalMembers: total,
-        engagementPercent: total > 0 ? Math.round((active / total) * 1000) / 10 : 0,
+        totalMembers: totalMembers,
+        engagementPercent: totalMembers > 0 ? Math.round((active / totalMembers) * 1000) / 10 : 0,
       };
     });
 

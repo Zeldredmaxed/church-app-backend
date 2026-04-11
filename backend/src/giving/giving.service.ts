@@ -370,29 +370,34 @@ export class GivingService {
    * Returns structured data — the frontend renders/prints as PDF.
    */
   async getGivingStatement(tenantId: string, donorUserId: string, year: number) {
-    // Get church info
-    const [tenant] = await this.dataSource.query(
-      `SELECT name FROM public.tenants WHERE id = $1`, [tenantId],
-    );
+    // Run all 4 queries in parallel instead of sequentially
+    const [tenantResult, donorResult, donations, fundraiserDonations] = await Promise.all([
+      this.dataSource.query(`SELECT name FROM public.tenants WHERE id = $1`, [tenantId]),
+      this.dataSource.query(`SELECT full_name, email FROM public.users WHERE id = $1`, [donorUserId]),
+      this.dataSource.query(
+        `SELECT t.amount, t.currency, t.payment_method, t.created_at,
+                COALESCE(gf.name, 'General Fund') AS fund_name
+         FROM public.transactions t
+         LEFT JOIN public.giving_funds gf ON gf.id = t.fund_id
+         WHERE t.tenant_id = $1 AND t.user_id = $2 AND t.status = 'succeeded'
+           AND EXTRACT(year FROM t.created_at) = $3
+         ORDER BY t.created_at ASC`,
+        [tenantId, donorUserId, year],
+      ),
+      this.dataSource.query(
+        `SELECT fd.amount, fd.created_at, f.title AS fundraiser_title, f.category
+         FROM public.fundraiser_donations fd
+         JOIN public.fundraisers f ON f.id = fd.fundraiser_id
+         WHERE fd.tenant_id = $1 AND fd.donor_id = $2 AND fd.payment_status = 'succeeded'
+           AND EXTRACT(year FROM fd.created_at) = $3
+         ORDER BY fd.created_at ASC`,
+        [tenantId, donorUserId, year],
+      ),
+    ]);
 
-    // Get donor info
-    const [donor] = await this.dataSource.query(
-      `SELECT full_name, email FROM public.users WHERE id = $1`, [donorUserId],
-    );
-
+    const [tenant] = tenantResult;
+    const [donor] = donorResult;
     if (!donor) throw new BadRequestException('Donor not found');
-
-    // Get all succeeded donations for this donor in the given year
-    const donations = await this.dataSource.query(
-      `SELECT t.amount, t.currency, t.payment_method, t.created_at,
-              COALESCE(gf.name, 'General Fund') AS fund_name
-       FROM public.transactions t
-       LEFT JOIN public.giving_funds gf ON gf.id = t.fund_id
-       WHERE t.tenant_id = $1 AND t.user_id = $2 AND t.status = 'succeeded'
-         AND EXTRACT(year FROM t.created_at) = $3
-       ORDER BY t.created_at ASC`,
-      [tenantId, donorUserId, year],
-    );
 
     const totalAmount = donations.reduce((sum: number, d: any) => sum + Number(d.amount), 0);
 
@@ -401,17 +406,6 @@ export class GivingService {
     for (const d of donations) {
       byFund[d.fund_name] = (byFund[d.fund_name] ?? 0) + Number(d.amount);
     }
-
-    // Include fundraiser donations in the tax statement
-    const fundraiserDonations = await this.dataSource.query(
-      `SELECT fd.amount, fd.created_at, f.title AS fundraiser_title, f.category
-       FROM public.fundraiser_donations fd
-       JOIN public.fundraisers f ON f.id = fd.fundraiser_id
-       WHERE fd.tenant_id = $1 AND fd.donor_id = $2 AND fd.payment_status = 'succeeded'
-         AND EXTRACT(year FROM fd.created_at) = $3
-       ORDER BY fd.created_at ASC`,
-      [tenantId, donorUserId, year],
-    );
 
     const fundraiserTotal = fundraiserDonations.reduce(
       (sum: number, d: any) => sum + Number(d.amount), 0,

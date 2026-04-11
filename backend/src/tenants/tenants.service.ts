@@ -414,9 +414,15 @@ export class TenantsService {
       ),
       this.dataSource.query(
         `SELECT p.id, LEFT(p.content, 80) AS title,
-           (SELECT COUNT(*)::int FROM public.post_likes WHERE post_id = p.id) AS likes,
-           (SELECT COUNT(*)::int FROM public.comments WHERE post_id = p.id) AS comments
+           COALESCE(pl.like_count, 0) AS likes,
+           COALESCE(c.comment_count, 0) AS comments
          FROM public.posts p
+         LEFT JOIN (
+           SELECT post_id, COUNT(*)::int AS like_count FROM public.post_likes GROUP BY post_id
+         ) pl ON pl.post_id = p.id
+         LEFT JOIN (
+           SELECT post_id, COUNT(*)::int AS comment_count FROM public.comments GROUP BY post_id
+         ) c ON c.post_id = p.id
          WHERE p.tenant_id = $1 AND p.created_at >= now() - $2::interval
          ORDER BY likes DESC, comments DESC
          LIMIT 5`,

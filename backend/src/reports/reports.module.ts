@@ -1,10 +1,11 @@
 import { Module } from '@nestjs/common';
 import { ReportsController } from './reports.controller';
 import { ReportsService } from './reports.service';
+import { CacheService } from '../common/services/cache.service';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 
 @Module({
   controllers: [ReportsController],
-  providers: [ReportsService, RlsContextInterceptor],
+  providers: [ReportsService, CacheService, RlsContextInterceptor],
 })
 export class ReportsModule {}

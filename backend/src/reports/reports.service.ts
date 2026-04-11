@@ -1,13 +1,21 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { CacheService } from '../common/services/cache.service';
 
 @Injectable()
 export class ReportsService {
   private readonly logger = new Logger(ReportsService.name);
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly cache: CacheService,
+  ) {}
 
   async getGivingYoY(tenantId: string) {
+    return this.cache.wrap(`reports:yoy:${tenantId}`, 60, () => this._getGivingYoY(tenantId));
+  }
+
+  private async _getGivingYoY(tenantId: string) {
     const rows = await this.dataSource.query(
       `SELECT date_trunc('month', created_at)::date AS month,
          SUM(CASE WHEN EXTRACT(year FROM created_at) = EXTRACT(year FROM now()) THEN amount ELSE 0 END)::float AS current_year,
@@ -30,58 +38,70 @@ export class ReportsService {
   }
 
   async getFunnel(tenantId: string) {
-    const [visitors] = await this.dataSource.query(
-      `SELECT COUNT(*)::int AS count
-       FROM public.check_ins
-       WHERE tenant_id = $1 AND is_visitor = true
-         AND checked_in_at >= date_trunc('year', now())`,
-      [tenantId],
-    );
+    return this.cache.wrap(`reports:funnel:${tenantId}`, 60, () => this._getFunnel(tenantId));
+  }
 
-    const [regular] = await this.dataSource.query(
-      `SELECT COUNT(*)::int AS count FROM (
-         SELECT user_id
-         FROM public.check_ins
-         WHERE tenant_id = $1
-           AND checked_in_at >= now() - interval '90 days'
-         GROUP BY user_id
-         HAVING COUNT(*) >= 3
-       ) sub`,
-      [tenantId],
-    );
-
-    const [members] = await this.dataSource.query(
-      `SELECT COUNT(*)::int AS count
-       FROM public.tenant_memberships
-       WHERE tenant_id = $1`,
-      [tenantId],
-    );
-
-    const [leaders] = await this.dataSource.query(
-      `SELECT COUNT(*)::int AS count
-       FROM public.tenant_memberships
-       WHERE tenant_id = $1 AND role IN ('admin', 'pastor')`,
+  private async _getFunnel(tenantId: string) {
+    // Single query instead of 4 sequential queries
+    const [row] = await this.dataSource.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM public.check_ins
+          WHERE tenant_id = $1 AND is_visitor = true AND checked_in_at >= date_trunc('year', now())) AS visitors,
+         (SELECT COUNT(*)::int FROM (
+            SELECT user_id FROM public.check_ins
+            WHERE tenant_id = $1 AND checked_in_at >= now() - interval '90 days'
+            GROUP BY user_id HAVING COUNT(*) >= 3
+          ) sub) AS regular,
+         (SELECT COUNT(*)::int FROM public.tenant_memberships WHERE tenant_id = $1) AS members,
+         (SELECT COUNT(*)::int FROM public.tenant_memberships WHERE tenant_id = $1 AND role IN ('admin', 'pastor')) AS leaders`,
       [tenantId],
     );
 
     return {
-      visitors: visitors?.count ?? 0,
-      regular: regular?.count ?? 0,
-      members: members?.count ?? 0,
-      leaders: leaders?.count ?? 0,
+      visitors: row?.visitors ?? 0,
+      regular: row?.regular ?? 0,
+      members: row?.members ?? 0,
+      leaders: row?.leaders ?? 0,
     };
   }
 
   async getEngagement(tenantId: string) {
+    return this.cache.wrap(`reports:engagement:${tenantId}`, 60, () => this._getEngagement(tenantId));
+  }
+
+  private async _getEngagement(tenantId: string) {
+    // Pre-aggregate activity counts per user via JOINs instead of N+1 correlated subqueries.
+    // Old query ran 3 subqueries PER MEMBER (1000 members = 3000 queries).
+    // New query uses LEFT JOINs with pre-aggregated CTEs — always 4 queries total.
     const [row] = await this.dataSource.query(
-      `WITH scores AS (
-        SELECT u.id,
-          (SELECT COUNT(*)::int FROM public.posts WHERE author_id = u.id AND tenant_id = $1 AND created_at >= now() - interval '30 days') +
-          (SELECT COUNT(*)::int FROM public.comments WHERE author_id = u.id AND tenant_id = $1 AND created_at >= now() - interval '30 days') +
-          (SELECT COUNT(*)::int FROM public.check_ins WHERE user_id = u.id AND tenant_id = $1 AND checked_in_at >= now() - interval '30 days') AS score
-        FROM public.tenant_memberships tm
-        JOIN public.users u ON u.id = tm.user_id
-        WHERE tm.tenant_id = $1
+      `WITH member_ids AS (
+        SELECT user_id FROM public.tenant_memberships WHERE tenant_id = $1
+      ),
+      post_counts AS (
+        SELECT author_id AS user_id, COUNT(*)::int AS cnt
+        FROM public.posts
+        WHERE tenant_id = $1 AND created_at >= now() - interval '30 days'
+        GROUP BY author_id
+      ),
+      comment_counts AS (
+        SELECT author_id AS user_id, COUNT(*)::int AS cnt
+        FROM public.comments
+        WHERE tenant_id = $1 AND created_at >= now() - interval '30 days'
+        GROUP BY author_id
+      ),
+      checkin_counts AS (
+        SELECT user_id, COUNT(*)::int AS cnt
+        FROM public.check_ins
+        WHERE tenant_id = $1 AND checked_in_at >= now() - interval '30 days'
+        GROUP BY user_id
+      ),
+      scores AS (
+        SELECT m.user_id,
+          COALESCE(p.cnt, 0) + COALESCE(c.cnt, 0) + COALESCE(ci.cnt, 0) AS score
+        FROM member_ids m
+        LEFT JOIN post_counts p ON p.user_id = m.user_id
+        LEFT JOIN comment_counts c ON c.user_id = m.user_id
+        LEFT JOIN checkin_counts ci ON ci.user_id = m.user_id
       )
       SELECT
         COUNT(CASE WHEN score = 0 THEN 1 END)::int AS inactive,
@@ -120,6 +140,10 @@ export class ReportsService {
   }
 
   async getReportKpis(tenantId: string) {
+    return this.cache.wrap(`reports:kpis:${tenantId}`, 30, () => this._getReportKpis(tenantId));
+  }
+
+  private async _getReportKpis(tenantId: string) {
     const [row] = await this.dataSource.query(
       `SELECT
          COALESCE(SUM(CASE WHEN status = 'succeeded' AND created_at >= date_trunc('year', now()) THEN amount END), 0)::float AS ytd_giving,
