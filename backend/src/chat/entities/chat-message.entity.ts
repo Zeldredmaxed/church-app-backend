@@ -16,8 +16,16 @@ export class ChatMessage {
   @Column({ type: 'uuid', name: 'user_id' })
   userId: string;
 
-  @Column({ type: 'text' })
-  content: string;
+  @Column({ type: 'text', nullable: true })
+  content: string | null;
+
+  /** Optional media attachment URL (image, video, or voice note). */
+  @Column({ type: 'text', nullable: true, name: 'media_url' })
+  mediaUrl: string | null;
+
+  /** Media type: image, video, or audio (for voice notes). NULL when no media. */
+  @Column({ type: 'varchar', length: 10, nullable: true, name: 'media_type' })
+  mediaType: 'image' | 'video' | 'audio' | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

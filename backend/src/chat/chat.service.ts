@@ -139,10 +139,24 @@ export class ChatService {
       throw new NotFoundException('Channel not found');
     }
 
+    // At least one of content or mediaUrl must be provided
+    const hasContent = dto.content && dto.content.trim().length > 0;
+    const hasMedia = dto.mediaUrl && dto.mediaUrl.trim().length > 0;
+    if (!hasContent && !hasMedia) {
+      throw new BadRequestException('A message must have either text content or a media attachment.');
+    }
+
+    // If mediaUrl is provided, mediaType should be too
+    if (hasMedia && !dto.mediaType) {
+      throw new BadRequestException('mediaType is required when mediaUrl is provided.');
+    }
+
     const message = queryRunner.manager.create(ChatMessage, {
       channelId,
       userId,
-      content: dto.content,
+      content: hasContent ? dto.content!.trim() : null,
+      mediaUrl: hasMedia ? dto.mediaUrl! : null,
+      mediaType: hasMedia ? dto.mediaType! : null,
     });
     const saved = await queryRunner.manager.save(ChatMessage, message);
 
@@ -154,6 +168,10 @@ export class ChatService {
         where: { channelId },
       });
 
+      const previewText = hasContent
+        ? dto.content!.slice(0, 100)
+        : dto.mediaType === 'audio' ? '🎤 Voice note' : `📎 ${dto.mediaType ?? 'Media'}`;
+
       for (const member of members) {
         if (member.userId === userId) continue; // skip sender
         await this.notificationsQueue.add('notification', {
@@ -163,7 +181,7 @@ export class ChatService {
           actorUserId: userId,
           channelId,
           channelName: channel.name ?? 'Direct Message',
-          previewText: dto.content.slice(0, 100),
+          previewText,
         });
       }
     }
