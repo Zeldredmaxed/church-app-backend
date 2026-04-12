@@ -80,13 +80,14 @@ export class GroupsController {
   }
 
   @Get(':id/messages')
-  @ApiOperation({ summary: 'List group messages (cursor-paginated)' })
+  @ApiOperation({ summary: 'List group messages (members only)' })
   getMessages(
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: SupabaseJwtPayload,
     @Query('limit') limit?: string,
     @Query('cursor') cursor?: string,
   ) {
-    return this.groupsService.getMessages(id, Math.min(parseInt(limit ?? '20', 10) || 20, 100), cursor);
+    return this.groupsService.getMessages(id, user.sub, Math.min(parseInt(limit ?? '20', 10) || 20, 100), cursor);
   }
 
   @Post(':id/messages')

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, NotFoundException, InternalServerErrorException, ForbiddenException } from '@nestjs/common';
 import { rlsStorage } from '../common/storage/rls.storage';
 import { Group } from './entities/group.entity';
 import { GroupMember } from './entities/group-member.entity';
@@ -13,6 +13,17 @@ export class GroupsService {
     const ctx = rlsStorage.getStore();
     if (!ctx) throw new InternalServerErrorException('RLS context unavailable');
     return ctx;
+  }
+
+  private async assertMember(groupId: string, userId: string) {
+    const { queryRunner } = this.getRlsContext();
+    const rows = await queryRunner.query(
+      `SELECT 1 FROM public.group_members WHERE group_id = $1 AND user_id = $2 LIMIT 1`,
+      [groupId, userId],
+    );
+    if (!rows.length) {
+      throw new ForbiddenException('You must be a member of this group');
+    }
   }
 
   async getGroups(userId: string, limit: number, cursor?: string) {
@@ -88,14 +99,18 @@ export class GroupsService {
 
   async leaveGroup(groupId: string, userId: string) {
     const { queryRunner } = this.getRlsContext();
-    await queryRunner.query(
-      `DELETE FROM public.group_members WHERE group_id = $1 AND user_id = $2`,
+    const rows = await queryRunner.query(
+      `DELETE FROM public.group_members WHERE group_id = $1 AND user_id = $2 RETURNING user_id`,
       [groupId, userId],
     );
+    if (!rows.length) {
+      throw new ForbiddenException('You are not a member of this group');
+    }
     return { left: true };
   }
 
-  async getMessages(groupId: string, limit: number, cursor?: string) {
+  async getMessages(groupId: string, userId: string, limit: number, cursor?: string) {
+    await this.assertMember(groupId, userId);
     const { queryRunner } = this.getRlsContext();
     const params: any[] = [groupId, limit + 1];
     let sql = `
@@ -199,6 +214,7 @@ export class GroupsService {
   }
 
   async sendMessage(groupId: string, dto: SendGroupMessageDto, userId: string) {
+    await this.assertMember(groupId, userId);
     const { queryRunner } = this.getRlsContext();
     const message = queryRunner.manager.create(GroupMessage, {
       groupId,
