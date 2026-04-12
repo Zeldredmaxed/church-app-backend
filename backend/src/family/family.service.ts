@@ -297,7 +297,10 @@ export class FamilyService {
         userId: r.related_user_id,
         fullName: isPrivate ? null : r.full_name,
         avatarUrl: isPrivate ? null : r.avatar_url,
+        // `type` retained for backwards compat; `relationship` matches the rest
+        // of the Family API (request DTO, tree nodes, notifications).
         type: r.relationship,
+        relationship: r.relationship,
         label: r.relationship_label,
         category: categoryMap[r.relationship] ?? 'Other',
         isPrivate,
