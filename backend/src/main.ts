@@ -15,17 +15,48 @@ async function bootstrap() {
     rawBody: true,
   });
 
-  // Security headers — HSTS, X-Frame-Options, X-Content-Type-Options, etc.
-  app.use(helmet());
+  // Security headers. COOP/CORP relaxed to 'cross-origin' so browser clients
+  // served from a different origin (admin dashboard on Vercel, web builds of
+  // the mobile app) can actually read API response bodies.
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+      crossOriginOpenerPolicy: { policy: 'unsafe-none' },
+    }),
+  );
 
   // Global route prefix — all routes accessible at /api/*
   app.setGlobalPrefix('api');
 
-  // CORS — explicit allowlist only. Never reflect arbitrary origins with credentials.
-  const allowedOrigins = process.env.CORS_ORIGINS?.split(',').map(o => o.trim()).filter(Boolean);
+  // CORS — explicit allowlist with optional *.vercel.app wildcard for preview
+  // deploys. Configured via CORS_ORIGINS env (comma-separated). Examples:
+  //   https://admin.shepard.love
+  //   https://*.vercel.app
+  //   http://localhost:3000,http://localhost:3001
+  const allowedOrigins = (process.env.CORS_ORIGINS ?? '')
+    .split(',')
+    .map(o => o.trim())
+    .filter(Boolean);
+
   app.enableCors({
-    origin: allowedOrigins && allowedOrigins.length > 0 ? allowedOrigins : false,
-    credentials: !!(allowedOrigins && allowedOrigins.length > 0),
+    origin: (origin, cb) => {
+      // Non-browser clients (mobile apps, curl, server-to-server) have no Origin.
+      if (!origin) return cb(null, true);
+      const ok = allowedOrigins.some(a => {
+        if (a === origin) return true;
+        // Wildcard subdomain: https://*.vercel.app matches https://anything.vercel.app
+        if (a.startsWith('https://*.')) {
+          const suffix = a.slice('https://*'.length); // ".vercel.app"
+          return origin.startsWith('https://') && origin.endsWith(suffix);
+        }
+        return false;
+      });
+      cb(ok ? null : new Error(`CORS: origin ${origin} not allowed`), ok);
+    },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
+    allowedHeaders: ['Authorization', 'Content-Type', 'Accept', 'X-Requested-With', 'X-Tenant-Id'],
+    credentials: true,
+    maxAge: 86400,
   });
 
   // Input validation pipe.
