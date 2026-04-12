@@ -149,7 +149,7 @@ export class FamilyService {
     const fromName = requester?.full_name || 'Someone';
 
     await this.dataSource.query(
-      `INSERT INTO public.notifications (tenant_id, user_id, type, title, body, metadata)
+      `INSERT INTO public.notifications (tenant_id, recipient_id, type, title, body, data)
        VALUES ($1, $2, 'family_request', $3, $4, $5::jsonb)`,
       [
         tenantId, targetUserId,
@@ -242,7 +242,7 @@ export class FamilyService {
     const targetName = target?.full_name || 'Someone';
 
     await this.dataSource.query(
-      `INSERT INTO public.notifications (tenant_id, user_id, type, title, body, metadata)
+      `INSERT INTO public.notifications (tenant_id, recipient_id, type, title, body, data)
        VALUES ($1, $2, 'family_accepted', $3, $4, $5::jsonb)`,
       [
         tenantId, req.user_id,

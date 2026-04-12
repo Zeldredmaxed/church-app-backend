@@ -350,6 +350,7 @@ export class BadgesService {
 
       let qualified = false;
 
+      try {
       switch (rule.type) {
         case 'giving_lifetime': {
           const [row] = await queryRunner.query(
@@ -553,6 +554,11 @@ export class BadgesService {
           qualified = streak >= (rule.min ?? 1);
           break;
         }
+      }
+      } catch (err: any) {
+        // One bad rule should not 500 the whole /badges/check endpoint.
+        this.logger.warn(`Badge auto-award rule failed (badge=${badge.id} type=${rule.type}): ${err.message}`);
+        continue;
       }
 
       if (qualified) {
