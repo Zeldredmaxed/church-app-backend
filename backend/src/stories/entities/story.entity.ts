@@ -15,6 +15,9 @@ export class Story {
   @Column({ type: 'text', nullable: true, name: 'media_url' })
   mediaUrl: string | null;
 
+  @Column({ type: 'text', nullable: true, name: 'media_type' })
+  mediaType: 'image' | 'video' | null;
+
   @Column({ type: 'text', nullable: true })
   text: string | null;
 

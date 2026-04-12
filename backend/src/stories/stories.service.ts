@@ -23,6 +23,7 @@ export class StoriesService {
         avatarUrl: row.avatar_url,
       },
       mediaUrl: row.media_url,
+      mediaType: row.media_type ?? null,
       text: row.text,
       backgroundColor: row.background_color,
       viewCount: Number(row.view_count ?? 0),
@@ -35,7 +36,7 @@ export class StoriesService {
     const { queryRunner } = this.getRlsContext();
 
     const rows = await queryRunner.query(
-      `SELECT s.id, s.author_id, s.media_url, s.text, s.background_color,
+      `SELECT s.id, s.author_id, s.media_url, s.media_type, s.text, s.background_color,
               s.created_at, s.expires_at,
               u.full_name, u.avatar_url,
               (SELECT COUNT(*)::int FROM public.story_views WHERE story_id = s.id) AS view_count,
@@ -88,6 +89,7 @@ export class StoriesService {
       authorId: userId,
       tenantId: currentTenantId!,
       mediaUrl: dto.mediaUrl ?? null,
+      mediaType: dto.mediaType ?? null,
       text: dto.text ?? null,
       backgroundColor: dto.backgroundColor ?? null,
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
@@ -96,7 +98,7 @@ export class StoriesService {
 
     // Re-fetch with author info
     const rows = await queryRunner.query(
-      `SELECT s.id, s.author_id, s.media_url, s.text, s.background_color,
+      `SELECT s.id, s.author_id, s.media_url, s.media_type, s.text, s.background_color,
               s.created_at, s.expires_at,
               u.full_name, u.avatar_url,
               0 AS view_count
@@ -113,7 +115,7 @@ export class StoriesService {
     const { queryRunner } = this.getRlsContext();
 
     const rows = await queryRunner.query(
-      `SELECT s.id, s.author_id, s.media_url, s.text, s.background_color,
+      `SELECT s.id, s.author_id, s.media_url, s.media_type, s.text, s.background_color,
               s.created_at, s.expires_at,
               u.full_name, u.avatar_url,
               (SELECT COUNT(*)::int FROM public.story_views WHERE story_id = s.id) AS view_count
