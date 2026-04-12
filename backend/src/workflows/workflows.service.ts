@@ -96,20 +96,29 @@ export class WorkflowsService {
       createdBy: row.created_by,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      // Dual-emit: legacy (nodeType/nodeConfig/label/fromNodeId/toNodeId) plus
+      // current frontend spec (nodeTypeKey/config/title/from/to). Frontends can
+      // migrate to the new names at their own pace; remove the legacy fields
+      // once both admin dashboard and mobile confirm they're on the new names.
       nodes: nodes.map((n: any) => ({
         id: n.id,
         workflowId: n.workflow_id,
         nodeType: n.node_type,
+        nodeTypeKey: n.node_type,
         nodeConfig: n.node_config,
+        config: n.node_config,
         positionX: n.position_x,
         positionY: n.position_y,
         label: n.label,
+        title: n.label,
       })),
       connections: connections.map((c: any) => ({
         id: c.id,
         workflowId: c.workflow_id,
         fromNodeId: c.from_node_id,
         toNodeId: c.to_node_id,
+        from: c.from_node_id,
+        to: c.to_node_id,
         branch: c.branch,
       })),
     };

@@ -339,11 +339,16 @@ export class MarketplaceService {
 
       await queryRunner.commitTransaction();
 
+      // Return the fully hydrated workflow so the frontend builder can render
+      // immediately without a second GET. Dual-emits legacy + new field names.
+      const fullWorkflow = await this.loadWorkflowForResponse(tenantId, workflow.id);
+
       return {
         templateId,
         workflowId: workflow.id,
         name: template.name,
         installed: true,
+        workflow: fullWorkflow,
       };
     } catch (err) {
       await queryRunner.rollbackTransaction();
@@ -351,6 +356,54 @@ export class MarketplaceService {
     } finally {
       await queryRunner.release();
     }
+  }
+
+  private async loadWorkflowForResponse(tenantId: string, workflowId: string) {
+    const [wf] = await this.dataSource.query(
+      `SELECT * FROM public.workflows WHERE id = $1 AND tenant_id = $2`,
+      [workflowId, tenantId],
+    );
+    if (!wf) return null;
+    const nodes = await this.dataSource.query(
+      `SELECT * FROM public.workflow_nodes WHERE workflow_id = $1 ORDER BY position_y, position_x`,
+      [workflowId],
+    );
+    const connections = await this.dataSource.query(
+      `SELECT * FROM public.workflow_connections WHERE workflow_id = $1`,
+      [workflowId],
+    );
+    return {
+      id: wf.id,
+      tenantId: wf.tenant_id,
+      name: wf.name,
+      description: wf.description,
+      triggerType: wf.trigger_type,
+      triggerConfig: wf.trigger_config,
+      isActive: wf.is_active,
+      createdAt: wf.created_at,
+      updatedAt: wf.updated_at,
+      nodes: nodes.map((n: any) => ({
+        id: n.id,
+        workflowId: n.workflow_id,
+        nodeType: n.node_type,
+        nodeTypeKey: n.node_type,
+        nodeConfig: n.node_config,
+        config: n.node_config,
+        positionX: n.position_x,
+        positionY: n.position_y,
+        label: n.label,
+        title: n.label,
+      })),
+      connections: connections.map((c: any) => ({
+        id: c.id,
+        workflowId: c.workflow_id,
+        fromNodeId: c.from_node_id,
+        toNodeId: c.to_node_id,
+        from: c.from_node_id,
+        to: c.to_node_id,
+        branch: c.branch,
+      })),
+    };
   }
 
   /* ───── Rate Template ───── */
