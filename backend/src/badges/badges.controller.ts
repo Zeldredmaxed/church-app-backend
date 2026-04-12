@@ -39,7 +39,7 @@ export class BadgesController {
   }
 
   @Get('global')
-  @ApiOperation({ summary: 'Get all 250 platform-wide Shepard badges with rarity percentages' })
+  @ApiOperation({ summary: 'Get all 250 platform-wide Shepherd badges with rarity percentages' })
   getGlobalBadges(@CurrentUser() user: SupabaseJwtPayload) {
     return this.badgesService.getGlobalBadges(user.sub);
   }

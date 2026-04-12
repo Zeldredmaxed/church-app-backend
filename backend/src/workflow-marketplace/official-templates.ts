@@ -1,5 +1,5 @@
 /**
- * Official workflow templates for the Shepard Workflow Marketplace.
+ * Official workflow templates for the Shepherd Workflow Marketplace.
  * These are platform-provided templates that churches can install for free or at a price.
  * Each template is a complete workflow definition with nodes and connections.
  */

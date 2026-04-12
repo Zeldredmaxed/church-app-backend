@@ -10,7 +10,7 @@ import { Resend } from 'resend';
  *
  * Setup:
  *   1. Create a free account at resend.com
- *   2. Add and verify your domain (e.g., mail.shepard.com)
+ *   2. Add and verify your domain (e.g., mail.shepherd.com)
  *   3. Set RESEND_API_KEY and RESEND_FROM_EMAIL in env vars
  */
 @Injectable()
@@ -91,7 +91,7 @@ export class EmailService {
         <div style="color: #333; line-height: 1.6; white-space: pre-wrap;">${this.escapeHtml(body)}</div>
         <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;" />
         <p style="color: #999; font-size: 12px;">
-          Sent via Shepard Church Platform
+          Sent via Shepherd Church Platform
         </p>
       </div>
     `;

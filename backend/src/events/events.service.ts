@@ -182,7 +182,7 @@ export class EventsService {
     const lines = [
       'BEGIN:VCALENDAR',
       'VERSION:2.0',
-      `PRODID:-//Shepard//${churchName}//EN`,
+      `PRODID:-//Shepherd//${churchName}//EN`,
       `X-WR-CALNAME:${churchName} Events`,
       'CALSCALE:GREGORIAN',
       'METHOD:PUBLISH',

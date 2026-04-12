@@ -32,7 +32,7 @@ export class Badge {
   @Column({ type: 'boolean', name: 'is_active', default: true })
   isActive: boolean;
 
-  /** True = platform-wide Shepard badge (read-only for churches). False = church-custom. */
+  /** True = platform-wide Shepherd badge (read-only for churches). False = church-custom. */
   @Column({ type: 'boolean', name: 'is_system', default: false })
   isSystem: boolean;
 

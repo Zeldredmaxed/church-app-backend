@@ -845,7 +845,7 @@ export class BadgesService {
 
   /**
    * Returns all platform-wide system badges with rarity percentages.
-   * Used by the "Shepard Badges" tab in admin and the badge collection screen in mobile.
+   * Used by the "Shepherd Badges" tab in admin and the badge collection screen in mobile.
    * Includes whether the requesting user has earned each badge.
    */
   async getGlobalBadges(userId?: string) {

@@ -877,7 +877,7 @@ export class WorkflowEngineService {
             await this.dataSource.query(
               `INSERT INTO public.sent_messages (tenant_id, channel, recipient, body, status)
                VALUES ($1, 'sms', $2, $3, 'queued')`,
-              [ctx.tenantId, admin.phone, `SHEPARD APPROVAL: ${approvalMessage} — Expires in ${timeoutHours}h`],
+              [ctx.tenantId, admin.phone, `SHEPHERD APPROVAL: ${approvalMessage} — Expires in ${timeoutHours}h`],
             );
           }
         }
