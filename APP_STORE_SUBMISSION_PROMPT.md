@@ -17,14 +17,14 @@ Both Apple and Google reject ~15% of submissions. The most common rejection reas
 
 ### Privacy Policy
 - [ ] **Hosted URL** — Must be a publicly accessible URL (not behind auth)
-  - Suggested: `https://shepard.app/privacy` or a hosted page on your marketing site
+  - Suggested: `https://shepard.love/privacy` or a hosted page on your marketing site
   - Must disclose: what data is collected, how it's used, who it's shared with, how to delete data
   - Must cover: Supabase (auth), Stripe (payments), Expo (push notifications), S3 (media storage)
   - **Backend status:** No privacy policy endpoint exists. Need a static page or URL.
 
 ### Terms of Service
 - [ ] **Hosted URL** — Same as above, publicly accessible
-  - Suggested: `https://shepard.app/terms`
+  - Suggested: `https://shepard.love/terms`
   - **Backend status:** No terms endpoint exists. Need a static page or URL.
 
 ### Where These Must Appear
@@ -163,7 +163,7 @@ If church subscription billing (the $29/$79/$199 monthly plans) is handled **out
 Apple reviewers need to test your app. You MUST provide login credentials.
 
 ### What to Provide
-- [ ] **Demo email:** `reviewer@shepard.app` (or similar)
+- [ ] **Demo email:** `reviewer@shepard.love` (or similar)
 - [ ] **Demo password:** A working password
 - [ ] **Church/Tenant:** Pre-populated with sample data (the "New Birth Test" church works)
 - [ ] **Notes to reviewer:** Explain the app is a church management platform with social feed, giving, events, prayer, and messaging features

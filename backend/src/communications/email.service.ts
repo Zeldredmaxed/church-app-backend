@@ -21,7 +21,7 @@ export class EmailService {
 
   constructor(private readonly config: ConfigService) {
     const apiKey = this.config.get<string>('RESEND_API_KEY');
-    this.fromEmail = this.config.get<string>('RESEND_FROM_EMAIL', 'noreply@shepard.app');
+    this.fromEmail = this.config.get<string>('RESEND_FROM_EMAIL', 'noreply@shepard.love');
 
     if (apiKey && !apiKey.includes('placeholder')) {
       this.resend = new Resend(apiKey);

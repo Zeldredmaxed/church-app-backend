@@ -99,7 +99,7 @@ IRS requires annual contribution statements for tax deductions. Admins generate 
   "year": 2025,
   "donor": {
     "fullName": "Marcus Johnson",
-    "email": "marcus.johnson@demo.shepard.app"
+    "email": "marcus.johnson@demo.shepard.love"
   },
   "donations": [
     { "date": "2025-01-15T...", "amount": 500.00, "currency": "usd", "fundName": "General Fund", "method": "online" },
@@ -126,7 +126,7 @@ Build a printable/PDF statement page. The backend returns structured data — re
 │              Year: 2025                       │
 │                                               │
 │  Donor: Marcus Johnson                        │
-│  Email: marcus.johnson@demo.shepard.app       │
+│  Email: marcus.johnson@demo.shepard.love       │
 │                                               │
 │  Date         Amount    Fund         Method   │
 │  ──────────   ───────   ──────────   ──────── │
