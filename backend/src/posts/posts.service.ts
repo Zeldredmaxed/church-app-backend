@@ -175,11 +175,18 @@ export class PostsService {
     const limit = query.limit ?? 20;
     const offset = query.offset ?? 0;
 
-    // authorId filter is optional — when provided, scope to that author only
-    const authorFilter = query.authorId ? `AND p.author_id = $4` : '';
-    const params: unknown[] = query.authorId
-      ? [userId, limit, offset, query.authorId]
-      : [userId, limit, offset];
+    // Optional filters. Params slot in after the base [userId, limit, offset].
+    const params: unknown[] = [userId, limit, offset];
+    let authorFilter = '';
+    if (query.authorId) {
+      params.push(query.authorId);
+      authorFilter = `AND p.author_id = $${params.length}`;
+    }
+    let mediaTypeFilter = '';
+    if (query.mediaType) {
+      params.push(query.mediaType);
+      mediaTypeFilter = `AND p.media_type = $${params.length}`;
+    }
 
     const rows: Array<{
       id: string; tenant_id: string; author_id: string; content: string;
@@ -205,17 +212,26 @@ export class PostsService {
        LEFT JOIN public.users u ON u.id = p.author_id
        LEFT JOIN LATERAL (SELECT COUNT(*)::int AS like_count FROM public.post_likes WHERE post_id = p.id) lc ON true
        LEFT JOIN LATERAL (SELECT COUNT(*)::int AS comment_count FROM public.comments WHERE post_id = p.id) cc ON true
-       WHERE (p.visibility = 'public' OR p.author_id = $1) ${authorFilter}
+       WHERE (p.visibility = 'public' OR p.author_id = $1) ${authorFilter} ${mediaTypeFilter}
        ORDER BY p.created_at DESC
        LIMIT $2 OFFSET $3`,
       params,
     );
 
-    const countParams = query.authorId ? [userId, query.authorId] : [userId];
-    const countAuthorFilter = query.authorId ? `AND author_id = $2` : '';
+    const countParams: unknown[] = [userId];
+    let countAuthorFilter = '';
+    if (query.authorId) {
+      countParams.push(query.authorId);
+      countAuthorFilter = `AND author_id = $${countParams.length}`;
+    }
+    let countMediaTypeFilter = '';
+    if (query.mediaType) {
+      countParams.push(query.mediaType);
+      countMediaTypeFilter = `AND media_type = $${countParams.length}`;
+    }
     const [{ total }]: [{ total: string }] = await queryRunner.query(
       `SELECT COUNT(*)::int AS total FROM public.posts
-       WHERE (visibility = 'public' OR author_id = $1) ${countAuthorFilter}`,
+       WHERE (visibility = 'public' OR author_id = $1) ${countAuthorFilter} ${countMediaTypeFilter}`,
       countParams,
     );
 

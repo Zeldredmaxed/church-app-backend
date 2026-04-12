@@ -1,4 +1,4 @@
-import { IsOptional, IsInt, Min, Max, IsUUID } from 'class-validator';
+import { IsOptional, IsInt, Min, Max, IsUUID, IsIn } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -23,4 +23,9 @@ export class GetPostsDto {
   @IsOptional()
   @IsUUID('4')
   authorId?: string;
+
+  @ApiPropertyOptional({ enum: ['text', 'image', 'video'], description: 'Filter posts by media type (used by the Shorts tab to fetch only videos)' })
+  @IsOptional()
+  @IsIn(['text', 'image', 'video'])
+  mediaType?: 'text' | 'image' | 'video';
 }
