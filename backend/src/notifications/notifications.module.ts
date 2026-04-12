@@ -9,7 +9,15 @@ import { RlsContextInterceptor } from '../common/interceptors/rls-context.interc
 
 @Module({
   imports: [
-    BullModule.registerQueue({ name: 'notifications' }),
+    BullModule.registerQueue({
+      name: 'notifications',
+      defaultJobOptions: {
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 10000 },
+        removeOnComplete: 1000,
+        removeOnFail: { age: 604800 }, // keep failed 7 days
+      },
+    }),
   ],
   controllers: [NotificationsController],
   providers: [

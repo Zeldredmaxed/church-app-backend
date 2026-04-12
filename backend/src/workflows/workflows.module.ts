@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ScheduleModule } from '@nestjs/schedule';
 import { WorkflowsController, WorkflowWebhookController } from './workflows.controller';
 import { WorkflowsService } from './workflows.service';
 import { WorkflowEngineService } from './workflow-engine.service';
@@ -8,6 +9,7 @@ import { OneSignalService } from '../notifications/onesignal.service';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 
 @Module({
+  imports: [ScheduleModule.forRoot()],
   controllers: [WorkflowsController, WorkflowWebhookController],
   providers: [
     WorkflowsService,

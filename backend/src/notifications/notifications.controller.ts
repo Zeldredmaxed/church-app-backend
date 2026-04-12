@@ -16,6 +16,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { IsString, IsOptional, IsBoolean, IsUUID, IsIn } from 'class-validator';
 import { NotificationsService } from './notifications.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 
@@ -99,7 +100,7 @@ export class NotificationsController {
     @CurrentUser() user: SupabaseJwtPayload,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
-    @Query('unread_only') unreadOnly?: string,
+    @Query('unreadOnly') unreadOnly?: string,
   ) {
     return this.notificationsService.getNotifications(
       user.sub,
@@ -160,6 +161,8 @@ export class NotificationsController {
   // ── Admin Broadcast ──
 
   @Post('broadcast')
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Send a push broadcast to all church members or all users (admin only)' })
   broadcast(

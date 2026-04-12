@@ -192,9 +192,9 @@ import { NotificationPreference } from './notifications/entities/notification-pr
         // Keep extra connections low — Supabase free/pro plans have connection limits.
         // Use PgBouncer in Phase 2 (100k users) to multiplex connections.
         extra: {
-          max: 10,
+          max: 20,
           idleTimeoutMillis: 30000,
-          connectionTimeoutMillis: 10000,
+          connectionTimeoutMillis: 5000,
         },
       }),
     }),

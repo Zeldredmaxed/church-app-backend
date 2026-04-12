@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "yc-advisor": {
+      "source": "Agent-3-7/agent37-skills-collection",
+      "sourceType": "github",
+      "computedHash": "7ae5840e6ac5c1b1060f236323f5e97e94eb06b6fdf72fac8db331a0dfe3d25d"
+    }
+  }
+}

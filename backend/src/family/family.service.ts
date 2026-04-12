@@ -43,6 +43,13 @@ const RELATIONSHIP_COLORS: Record<string, string> = {
   cousin_in_law: '#7C3AED',
 };
 
+/**
+ * Family connection service.
+ *
+ * NOTE: This service uses this.dataSource (service role) instead of the RLS queryRunner.
+ * All queries include explicit WHERE tenant_id = $1 for isolation.
+ * Migration to queryRunner is planned for post-launch (see issue #7 in role-sweep audit).
+ */
 @Injectable()
 export class FamilyService {
   private readonly logger = new Logger(FamilyService.name);
@@ -101,6 +108,15 @@ export class FamilyService {
     }
     if (!ALL_RELATIONSHIPS.includes(relationship as Relationship)) {
       throw new BadRequestException('Invalid relationship');
+    }
+
+    // Verify target user is a member of the same tenant
+    const [targetMembership] = await this.dataSource.query(
+      `SELECT 1 FROM public.tenant_memberships WHERE tenant_id = $1 AND user_id = $2`,
+      [tenantId, targetUserId],
+    );
+    if (!targetMembership) {
+      throw new BadRequestException('That user is not a member of your church.');
     }
 
     // Check for existing connection or pending request between these two
@@ -450,41 +466,56 @@ export class FamilyService {
     tenantId: string, A: string, B: string,
     rel: Relationship, sourceId: string,
   ) {
+    // Pre-fetch all related user IDs for batch gender lookup
+    const relatedRows = await this.dataSource.query(
+      `SELECT DISTINCT fc.related_user_id
+       FROM public.family_connections fc
+       WHERE fc.tenant_id = $1
+         AND fc.user_id IN ($2, $3)
+         AND fc.status = 'accepted'`,
+      [tenantId, A, B],
+    );
+    const allIds = new Set<string>([A, B]);
+    for (const r of relatedRows) allIds.add(r.related_user_id);
+
+    const genderMap = await this.getUserGenderBatch([...allIds]);
+
     // ─── Rule 1: Spouse + Child = Both Parents' Child ───
     if (rel === 'spouse') {
       // A's existing children → also become B's children
-      await this.propagateChildrenToSpouse(tenantId, A, B, sourceId);
+      await this.propagateChildrenToSpouse(tenantId, A, B, sourceId, genderMap);
       // B's existing children → also become A's children
-      await this.propagateChildrenToSpouse(tenantId, B, A, sourceId);
+      await this.propagateChildrenToSpouse(tenantId, B, A, sourceId, genderMap);
     }
 
     // ─── Rule 2: Spouse + Parent = In-Law ───
     if (rel === 'spouse') {
-      await this.propagateRelationshipsToSpouse(tenantId, A, B, sourceId);
-      await this.propagateRelationshipsToSpouse(tenantId, B, A, sourceId);
+      await this.propagateRelationshipsToSpouse(tenantId, A, B, sourceId, genderMap);
+      await this.propagateRelationshipsToSpouse(tenantId, B, A, sourceId, genderMap);
     }
 
     // Rules 1–4 also apply when the NEW connection is a non-spouse type
     // and one party already has a spouse.
     if (rel !== 'spouse') {
       // A added B as <rel>. If A has a spouse S, propagate B→S.
-      await this.propagateSingleToSpouse(tenantId, A, B, rel, sourceId);
+      await this.propagateSingleToSpouse(tenantId, A, B, rel, sourceId, genderMap);
     }
 
     // ─── Rule 5: Parent + Existing Children = Siblings ───
     if (rel === 'parent') {
       // A set B as parent. B already has other children → they're A's siblings.
-      await this.inferSiblingsFromParent(tenantId, A, B, sourceId);
+      await this.inferSiblingsFromParent(tenantId, A, B, sourceId, genderMap);
     }
     if (rel === 'child') {
       // A set B as child. A already has other children → they're B's siblings.
-      await this.inferSiblingsFromExistingChildren(tenantId, A, B, sourceId);
+      await this.inferSiblingsFromExistingChildren(tenantId, A, B, sourceId, genderMap);
     }
   }
 
   /** Rule 1: When A↔B become spouses, A's children become B's children too */
   private async propagateChildrenToSpouse(
     tenantId: string, owner: string, spouse: string, sourceId: string,
+    genderMap: Map<string, string | null>,
   ) {
     const children = await this.dataSource.query(
       `SELECT related_user_id FROM public.family_connections
@@ -494,8 +525,8 @@ export class FamilyService {
 
     for (const c of children) {
       if (c.related_user_id === spouse) continue;
-      const childGender = await this.getUserGender(c.related_user_id);
-      const spouseGender = await this.getUserGender(spouse);
+      const childGender = genderMap.get(c.related_user_id) ?? null;
+      const spouseGender = genderMap.get(spouse) ?? null;
 
       // spouse → child
       await this.upsertInferred(
@@ -513,6 +544,7 @@ export class FamilyService {
   /** Rules 2–4: When A↔B become spouses, propagate A's parents/siblings/cousins as B's in-laws */
   private async propagateRelationshipsToSpouse(
     tenantId: string, owner: string, spouse: string, sourceId: string,
+    genderMap: Map<string, string | null>,
   ) {
     const rels = await this.dataSource.query(
       `SELECT related_user_id, relationship FROM public.family_connections
@@ -526,8 +558,8 @@ export class FamilyService {
       const propagated = SPOUSE_PROPAGATION[r.relationship as Relationship];
       if (!propagated) continue;
 
-      const relatedGender = await this.getUserGender(r.related_user_id);
-      const spouseGender = await this.getUserGender(spouse);
+      const relatedGender = genderMap.get(r.related_user_id) ?? null;
+      const spouseGender = genderMap.get(spouse) ?? null;
       const inverseOfPropagated = INVERSE[propagated];
 
       // spouse → related (in-law version)
@@ -547,6 +579,7 @@ export class FamilyService {
   private async propagateSingleToSpouse(
     tenantId: string, A: string, B: string,
     rel: Relationship, sourceId: string,
+    genderMap: Map<string, string | null>,
   ) {
     const [spouseRow] = await this.dataSource.query(
       `SELECT related_user_id FROM public.family_connections
@@ -561,8 +594,8 @@ export class FamilyService {
     const propagated = SPOUSE_PROPAGATION[rel];
     if (!propagated) return;
 
-    const bGender = await this.getUserGender(B);
-    const sGender = await this.getUserGender(S);
+    const bGender = genderMap.get(B) ?? null;
+    const sGender = genderMap.get(S) ?? null;
     const inversePropagated = INVERSE[propagated];
 
     // S → B
@@ -580,6 +613,7 @@ export class FamilyService {
   /** Rule 5: A sets B as parent. B's other children become A's siblings. */
   private async inferSiblingsFromParent(
     tenantId: string, A: string, parentB: string, sourceId: string,
+    genderMap: Map<string, string | null>,
   ) {
     // Find B's other children (excluding A)
     const siblings = await this.dataSource.query(
@@ -590,8 +624,8 @@ export class FamilyService {
     );
 
     for (const s of siblings) {
-      const sibGender = await this.getUserGender(s.related_user_id);
-      const aGender = await this.getUserGender(A);
+      const sibGender = genderMap.get(s.related_user_id) ?? null;
+      const aGender = genderMap.get(A) ?? null;
 
       // A → sibling
       await this.upsertInferred(
@@ -609,6 +643,7 @@ export class FamilyService {
   /** Rule 5 reverse: A sets B as child. A's other children become B's siblings. */
   private async inferSiblingsFromExistingChildren(
     tenantId: string, parentA: string, childB: string, sourceId: string,
+    genderMap: Map<string, string | null>,
   ) {
     const otherChildren = await this.dataSource.query(
       `SELECT related_user_id FROM public.family_connections
@@ -618,8 +653,8 @@ export class FamilyService {
     );
 
     for (const c of otherChildren) {
-      const cGender = await this.getUserGender(c.related_user_id);
-      const bGender = await this.getUserGender(childB);
+      const cGender = genderMap.get(c.related_user_id) ?? null;
+      const bGender = genderMap.get(childB) ?? null;
 
       await this.upsertInferred(
         tenantId, childB, c.related_user_id,
@@ -651,14 +686,16 @@ export class FamilyService {
   }
 
   private async cascadeDelete(sourceId: string, tenantId: string) {
-    const derived = await this.dataSource.query(
-      `SELECT id FROM public.family_connections WHERE inferred_via = $1 AND tenant_id = $2`,
+    await this.dataSource.query(
+      `WITH RECURSIVE derived AS (
+        SELECT id FROM public.family_connections WHERE inferred_via = $1 AND tenant_id = $2
+        UNION ALL
+        SELECT fc.id FROM public.family_connections fc
+        JOIN derived d ON fc.inferred_via = d.id AND fc.tenant_id = $2
+      )
+      DELETE FROM public.family_connections WHERE id IN (SELECT id FROM derived)`,
       [sourceId, tenantId],
     );
-    for (const d of derived) {
-      await this.cascadeDelete(d.id, tenantId);
-      await this.dataSource.query(`DELETE FROM public.family_connections WHERE id = $1`, [d.id]);
-    }
   }
 
   async getUserGender(userId: string): Promise<string | null> {
@@ -669,6 +706,19 @@ export class FamilyService {
     );
     if (resp?.gender) return resp.gender;
     return null;
+  }
+
+  private async getUserGenderBatch(userIds: string[]): Promise<Map<string, string | null>> {
+    if (userIds.length === 0) return new Map();
+    const unique = [...new Set(userIds)];
+    const rows = await this.dataSource.query(
+      `SELECT user_id, responses->>'gender' AS gender FROM public.onboarding_responses WHERE user_id = ANY($1)`,
+      [unique],
+    );
+    const map = new Map<string, string | null>();
+    for (const id of unique) map.set(id, null);
+    for (const r of rows) map.set(r.user_id, r.gender ?? null);
+    return map;
   }
 
   private mapRow(r: any) {

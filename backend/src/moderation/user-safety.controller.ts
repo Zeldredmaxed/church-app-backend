@@ -12,6 +12,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { IsString, IsUUID, IsIn, IsOptional, MaxLength } from 'class-validator';
 import { DataSource } from 'typeorm';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -44,6 +45,7 @@ export class UserSafetyController {
   // ── Report Content ──
 
   @Post('report')
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Report a post, comment, user, or message' })
   @ApiResponse({ status: 201, description: 'Report submitted' })
@@ -56,8 +58,7 @@ export class UserSafetyController {
 
     await this.dataSource.query(
       `INSERT INTO public.post_reports (tenant_id, reported_by, post_id, comment_id, user_id, content_type, reason, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
-       ON CONFLICT DO NOTHING`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')`,
       [
         tenantId,
         user.sub,

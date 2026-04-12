@@ -55,6 +55,7 @@ export class ConversationService {
          lm.media_type AS last_message_media_type,
          lm.created_at AS last_message_at,
          lm.user_id AS last_message_sender_id,
+         (SELECT full_name FROM public.users WHERE id = lm.user_id) AS last_message_sender_name,
          -- Unread count: messages from other user after my last_read_at
          (SELECT COUNT(*)::int FROM public.chat_messages
           WHERE channel_id = ch.id AND user_id != $1
@@ -89,6 +90,7 @@ export class ConversationService {
         content: r.last_message_content,
         mediaType: r.last_message_media_type,
         senderId: r.last_message_sender_id,
+        senderName: r.last_message_sender_name,
         createdAt: r.last_message_at,
       } : null,
       unreadCount: r.unread_count ?? 0,

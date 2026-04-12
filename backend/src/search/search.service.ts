@@ -58,10 +58,7 @@ export class SearchService {
     const { queryRunner } = context;
 
     // $1 = query, $2 = userId (for visibility filter + isLikedByMe/isSavedByMe)
-    // $3 = escaped query for ILIKE fallback (% and _ characters escaped)
-    // ILIKE fallback ensures short/common words still match even without a search_vector hit
-    const escapedQuery = query.replace(/[%_\\]/g, '\\$&');
-    const params: any[] = [query, userId, escapedQuery];
+    const params: any[] = [query, userId];
 
     let sql = `
       SELECT
@@ -80,11 +77,7 @@ export class SearchService {
         EXISTS(SELECT 1 FROM public.post_saves WHERE post_id = p.id AND user_id = $2)  AS is_saved_by_me
       FROM public.posts p
       LEFT JOIN public.users u ON u.id = p.author_id
-      WHERE (
-        p.search_vector @@ websearch_to_tsquery('english', $1)
-        OR p.content ILIKE '%' || $3 || '%'
-        OR u.full_name ILIKE '%' || $3 || '%'
-      )
+      WHERE p.search_vector @@ websearch_to_tsquery('english', $1)
       AND (p.visibility = 'public' OR p.author_id = $2)
       AND p.tenant_id IS NOT NULL
     `;

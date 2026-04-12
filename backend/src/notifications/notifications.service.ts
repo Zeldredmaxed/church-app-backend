@@ -197,16 +197,33 @@ export class NotificationsService {
     let recipientIds: string[];
 
     if (tenantId) {
-      // Church-specific broadcast
-      const rows = await this.dataSource.query(
-        `SELECT user_id FROM public.tenant_memberships WHERE tenant_id = $1`,
-        [tenantId],
-      );
-      recipientIds = rows.map((r: any) => r.user_id);
+      // Church-specific broadcast — cursor-based batching
+      let cursor = '';
+      recipientIds = [];
+      while (true) {
+        const batch = await this.dataSource.query(
+          `SELECT user_id FROM public.tenant_memberships WHERE tenant_id = $1 AND user_id > $2 ORDER BY user_id LIMIT 1000`,
+          [tenantId, cursor],
+        );
+        if (batch.length === 0) break;
+        recipientIds.push(...batch.map((r: any) => r.user_id));
+        cursor = batch[batch.length - 1].user_id;
+        if (batch.length < 1000) break;
+      }
     } else {
-      // Platform-wide broadcast (all users)
-      const rows = await this.dataSource.query(`SELECT id FROM public.users LIMIT 10000`);
-      recipientIds = rows.map((r: any) => r.id);
+      // Platform-wide broadcast (all users) — cursor-based batching
+      let cursor = '';
+      recipientIds = [];
+      while (true) {
+        const batch = await this.dataSource.query(
+          `SELECT id FROM public.users WHERE id > $1 ORDER BY id LIMIT 1000`,
+          [cursor],
+        );
+        if (batch.length === 0) break;
+        recipientIds.push(...batch.map((r: any) => r.id));
+        cursor = batch[batch.length - 1].id;
+        if (batch.length < 1000) break;
+      }
     }
 
     if (recipientIds.length === 0) {

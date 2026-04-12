@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { EmailService } from '../communications/email.service';
@@ -38,6 +39,7 @@ interface ExecutionContext {
   triggerData: Record<string, any>;
 }
 
+// Service-role: background workflow execution. tenant_id enforced via ctx.tenantId in WHERE clauses, not RLS.
 @Injectable()
 export class WorkflowEngineService {
   private readonly logger = new Logger(WorkflowEngineService.name);
@@ -289,7 +291,7 @@ export class WorkflowEngineService {
       }
 
       case 'create_task': {
-        const [workflow] = await this.dataSource.query(`SELECT created_by FROM public.workflows WHERE id = $1`, [ctx.workflowId]);
+        const [workflow] = await this.dataSource.query(`SELECT created_by FROM public.workflows WHERE id = $1 AND tenant_id = $2`, [ctx.workflowId, ctx.tenantId]);
         const [task] = await this.dataSource.query(
           `INSERT INTO public.tasks (tenant_id, title, priority, assigned_to, created_by, linked_type, linked_id)
            VALUES ($1, $2, $3, $4, $5, 'workflow', $6)
@@ -300,7 +302,7 @@ export class WorkflowEngineService {
       }
 
       case 'create_care_case': {
-        const [workflow] = await this.dataSource.query(`SELECT created_by FROM public.workflows WHERE id = $1`, [ctx.workflowId]);
+        const [workflow] = await this.dataSource.query(`SELECT created_by FROM public.workflows WHERE id = $1 AND tenant_id = $2`, [ctx.workflowId, ctx.tenantId]);
         const [cc] = await this.dataSource.query(
           `INSERT INTO public.care_cases (tenant_id, member_id, title, priority, created_by)
            VALUES ($1, $2, $3, $4, $5)
@@ -332,6 +334,12 @@ export class WorkflowEngineService {
 
       case 'add_to_group': {
         if (!ctx.targetUserId || !config.groupId) return { status: 'success', inputData, outputData: { skipped: true } };
+        // Verify group belongs to this tenant before inserting
+        const [group] = await this.dataSource.query(
+          `SELECT id FROM public.groups WHERE id = $1 AND tenant_id = $2`,
+          [config.groupId, ctx.tenantId],
+        );
+        if (!group) return { status: 'success', inputData, outputData: { skipped: true, reason: 'Group not in tenant' } };
         await this.dataSource.query(
           `INSERT INTO public.group_members (group_id, user_id, role)
            VALUES ($1, $2, 'member')
@@ -343,6 +351,12 @@ export class WorkflowEngineService {
 
       case 'remove_from_group': {
         if (!ctx.targetUserId || !config.groupId) return { status: 'success', inputData, outputData: { skipped: true } };
+        // Verify group belongs to this tenant before deleting
+        const [group] = await this.dataSource.query(
+          `SELECT id FROM public.groups WHERE id = $1 AND tenant_id = $2`,
+          [config.groupId, ctx.tenantId],
+        );
+        if (!group) return { status: 'success', inputData, outputData: { skipped: true, reason: 'Group not in tenant' } };
         await this.dataSource.query(
           `DELETE FROM public.group_members WHERE group_id = $1 AND user_id = $2`,
           [config.groupId, ctx.targetUserId],
@@ -441,8 +455,8 @@ export class WorkflowEngineService {
       case 'revoke_badge': {
         if (!ctx.targetUserId || !config.badgeId) return { status: 'success', inputData, outputData: { skipped: true } };
         await this.dataSource.query(
-          `DELETE FROM public.member_badges WHERE badge_id = $1 AND user_id = $2`,
-          [config.badgeId, ctx.targetUserId],
+          `DELETE FROM public.member_badges WHERE badge_id = $1 AND user_id = $2 AND tenant_id = $3`,
+          [config.badgeId, ctx.targetUserId, ctx.tenantId],
         );
         return { status: 'success', inputData, outputData: { badgeRevoked: true } };
       }
@@ -460,8 +474,8 @@ export class WorkflowEngineService {
           const rule = badge.auto_award_rule;
           if (!rule || !rule.type) continue;
           const [existing] = await this.dataSource.query(
-            `SELECT 1 FROM public.member_badges WHERE badge_id = $1 AND user_id = $2`,
-            [badge.id, ctx.targetUserId],
+            `SELECT 1 FROM public.member_badges WHERE badge_id = $1 AND user_id = $2 AND tenant_id = $3`,
+            [badge.id, ctx.targetUserId, ctx.tenantId],
           );
           if (existing) continue;
           let qualified = false;
@@ -500,8 +514,10 @@ export class WorkflowEngineService {
             }
             case 'group_count': {
               const [r] = await this.dataSource.query(
-                `SELECT COUNT(DISTINCT group_id)::int AS cnt FROM public.group_members WHERE user_id = $1`,
-                [ctx.targetUserId],
+                `SELECT COUNT(DISTINCT gm.group_id)::int AS cnt FROM public.group_members gm
+                 JOIN public.groups g ON g.id = gm.group_id AND g.tenant_id = $2
+                 WHERE gm.user_id = $1`,
+                [ctx.targetUserId, ctx.tenantId],
               );
               qualified = (r?.cnt ?? 0) >= (rule.min ?? 1);
               break;
@@ -558,8 +574,8 @@ export class WorkflowEngineService {
         const minCount = parseInt(String(config.minCount ?? 1), 10) || 1;
         const [row] = await this.dataSource.query(
           `SELECT COUNT(*)::int AS cnt FROM public.check_ins
-           WHERE user_id = $1 AND checked_in_at >= now() - ($2 || ' days')::interval`,
-          [ctx.targetUserId, days],
+           WHERE user_id = $1 AND tenant_id = $2 AND checked_in_at >= now() - ($3 || ' days')::interval`,
+          [ctx.targetUserId, ctx.tenantId, days],
         );
         const met = (row?.cnt ?? 0) >= minCount;
         return { status: 'success', branch: met ? 'true' : 'false', inputData, outputData: { count: row?.cnt, required: minCount } };
@@ -581,8 +597,10 @@ export class WorkflowEngineService {
       case 'check_group_membership': {
         if (!ctx.targetUserId || !config.groupId) return { status: 'success', branch: 'false', inputData, outputData: {} };
         const [row] = await this.dataSource.query(
-          `SELECT 1 FROM public.group_members WHERE group_id = $1 AND user_id = $2`,
-          [config.groupId, ctx.targetUserId],
+          `SELECT 1 FROM public.group_members gm
+           JOIN public.groups g ON g.id = gm.group_id AND g.tenant_id = $3
+           WHERE gm.group_id = $1 AND gm.user_id = $2`,
+          [config.groupId, ctx.targetUserId, ctx.tenantId],
         );
         return { status: 'success', branch: row ? 'true' : 'false', inputData, outputData: { inGroup: !!row } };
       }
@@ -591,8 +609,8 @@ export class WorkflowEngineService {
         if (!ctx.targetUserId) return { status: 'success', branch: 'false', inputData, outputData: {} };
         // Simple engagement: count activities in last 30 days
         const [checkins] = await this.dataSource.query(
-          `SELECT COUNT(*)::int AS cnt FROM public.check_ins WHERE user_id = $1 AND checked_in_at >= now() - '30 days'::interval`,
-          [ctx.targetUserId],
+          `SELECT COUNT(*)::int AS cnt FROM public.check_ins WHERE user_id = $1 AND tenant_id = $2 AND checked_in_at >= now() - '30 days'::interval`,
+          [ctx.targetUserId, ctx.tenantId],
         );
         const [giving] = await this.dataSource.query(
           `SELECT COUNT(*)::int AS cnt FROM public.transactions WHERE user_id = $1 AND tenant_id = $2 AND created_at >= now() - '30 days'::interval`,
@@ -674,8 +692,8 @@ export class WorkflowEngineService {
       case 'check_badge': {
         if (!ctx.targetUserId || !config.badgeId) return { status: 'success', branch: 'false', inputData, outputData: { reason: 'Missing target or badge' } };
         const [row] = await this.dataSource.query(
-          `SELECT 1 FROM public.member_badges WHERE badge_id = $1 AND user_id = $2`,
-          [config.badgeId, ctx.targetUserId],
+          `SELECT 1 FROM public.member_badges WHERE badge_id = $1 AND user_id = $2 AND tenant_id = $3`,
+          [config.badgeId, ctx.targetUserId, ctx.tenantId],
         );
         return { status: 'success', branch: row ? 'true' : 'false', inputData, outputData: { hasBadge: !!row } };
       }
@@ -922,8 +940,10 @@ export class WorkflowEngineService {
       case 'filter_by_group': {
         if (!config.groupId) return { status: 'skipped', inputData, outputData: { reason: 'No group configured' } };
         const [row] = await this.dataSource.query(
-          `SELECT 1 FROM public.group_members WHERE group_id = $1 AND user_id = $2`,
-          [config.groupId, ctx.targetUserId],
+          `SELECT 1 FROM public.group_members gm
+           JOIN public.groups g ON g.id = gm.group_id AND g.tenant_id = $3
+           WHERE gm.group_id = $1 AND gm.user_id = $2`,
+          [config.groupId, ctx.targetUserId, ctx.tenantId],
         );
         return { status: row ? 'success' : 'skipped', inputData, outputData: { inGroup: !!row } };
       }
@@ -947,8 +967,8 @@ export class WorkflowEngineService {
     // Notify the workflow creator
     try {
       const [workflow] = await this.dataSource.query(
-        `SELECT created_by, name FROM public.workflows WHERE id = $1`,
-        [ctx.workflowId],
+        `SELECT created_by, name FROM public.workflows WHERE id = $1 AND tenant_id = $2`,
+        [ctx.workflowId, ctx.tenantId],
       );
       if (workflow?.created_by) {
         let targetUserName = 'Unknown';
@@ -1074,6 +1094,7 @@ export class WorkflowEngineService {
 
   /* ───── Resume Paused Executions ───── */
 
+  @Cron('*/1 * * * *')
   async resumePausedExecutions() {
     const paused = await this.dataSource.query(
       `SELECT we.*, w.tenant_id AS w_tenant_id
