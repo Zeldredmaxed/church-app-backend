@@ -4,6 +4,7 @@ import { Throttle } from '@nestjs/throttler';
 import { CheckinService } from './checkin.service';
 import { BulkCheckinDto } from './dto/bulk-checkin.dto';
 import { AddVisitorDto } from './dto/add-visitor.dto';
+import { CheckInChildDto } from './dto/check-in-child.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
@@ -92,20 +93,24 @@ export class CheckinController {
 
   @Post('checkin/child')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Check in a child with guardian linking + security code' })
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor', 'volunteer')
+  @ApiOperation({ summary: 'Check in a child with guardian linking + security code (staff only)' })
   @ApiResponse({ status: 201, description: 'Child checked in with security code + label data' })
   checkInChild(
     @CurrentUser() user: SupabaseJwtPayload,
-    @Body() body: { childId?: string; childName?: string; guardianId: string; serviceId?: string },
+    @Body() dto: CheckInChildDto,
   ) {
     const tenantId = user.app_metadata?.current_tenant_id;
     if (!tenantId) throw new BadRequestException('No tenant context');
-    return this.checkinService.checkInChild(tenantId, body);
+    return this.checkinService.checkInChild(tenantId, dto);
   }
 
   @Get('checkin/child/:securityCode/verify')
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor', 'volunteer')
   @Throttle({ default: { ttl: 60000, limit: 10 } })
-  @ApiOperation({ summary: 'Verify a child pickup security code (rate-limited: 10/min)' })
+  @ApiOperation({ summary: 'Verify a child pickup security code (staff only, rate-limited: 10/min)' })
   @ApiResponse({ status: 200, description: 'Verification result with child info + authorized pickups' })
   verifyPickupCode(
     @Param('securityCode') securityCode: string,

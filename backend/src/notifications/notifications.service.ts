@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
@@ -194,6 +195,12 @@ export class NotificationsService {
     body: string,
     tenantId?: string,
   ) {
+    // Platform-wide broadcast requires super-admin. Tenant admins must provide tenantId
+    // — otherwise they could fan out push notifications to every user on the platform.
+    if (!tenantId) {
+      throw new ForbiddenException('Platform-wide broadcast requires super-admin privileges');
+    }
+
     let recipientIds: string[];
 
     if (tenantId) {

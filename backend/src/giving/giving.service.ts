@@ -4,6 +4,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import * as crypto from 'crypto';
 import { StripeService } from '../stripe/stripe.service';
 import { rlsStorage } from '../common/storage/rls.storage';
 import { Tenant } from '../tenants/entities/tenant.entity';
@@ -331,7 +332,7 @@ export class GivingService {
             tenantId,
             item.donorId ?? null,
             item.amount,
-            `offline_${item.method}_${batch.id}_${Math.random().toString(36).substring(7)}`,
+            `offline_${item.method}_${batch.id}_${crypto.randomUUID()}`,
             item.method,
             item.checkNumber ?? null,
             batch.id,
@@ -426,14 +427,17 @@ export class GivingService {
       byFund[d.fund_name] = (byFund[d.fund_name] ?? 0) + Number(d.amount);
     }
 
+    // fundraiser_donations.amount is stored in CENTS (BIGINT, min 100),
+    // while transactions.amount is stored in DOLLARS (DECIMAL 10,2).
+    // Divide by 100 before summing so both are in the same unit (dollars).
     const fundraiserTotal = fundraiserDonations.reduce(
-      (sum: number, d: any) => sum + Number(d.amount), 0,
+      (sum: number, d: any) => sum + Number(d.amount) / 100, 0,
     );
 
-    // Add fundraiser totals to byFund
+    // Add fundraiser totals to byFund (converted to dollars)
     for (const fd of fundraiserDonations) {
       const label = `Fundraiser: ${fd.fundraiser_title}`;
-      byFund[label] = (byFund[label] ?? 0) + Number(fd.amount);
+      byFund[label] = (byFund[label] ?? 0) + Number(fd.amount) / 100;
     }
 
     const grandTotal = totalAmount + fundraiserTotal;
@@ -454,7 +458,8 @@ export class GivingService {
       })),
       fundraiserDonations: fundraiserDonations.map((d: any) => ({
         date: d.created_at,
-        amount: Number(d.amount),
+        // Convert cents → dollars to match transactions.amount unit
+        amount: Number(d.amount) / 100,
         fundraiserTitle: d.fundraiser_title,
         category: d.category,
       })),

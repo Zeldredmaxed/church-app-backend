@@ -366,11 +366,28 @@ export class WorkflowEngineService {
 
       case 'update_journey': {
         if (!ctx.targetUserId || !config.field) return { status: 'success', inputData, outputData: { skipped: true } };
-        // Upsert member journey
+        // Lookup map prevents SQL injection via workflow config.field — untrusted DB
+        // data is never concatenated into the query.
+        const JOURNEY_FIELD_MAP: Record<string, string> = {
+          attended_members_class: 'attended_members_class',
+          members_class_date: 'members_class_date',
+          is_baptized: 'is_baptized',
+          baptism_date: 'baptism_date',
+          salvation_date: 'salvation_date',
+          discipleship_track: 'discipleship_track',
+          skills: 'skills',
+          interests: 'interests',
+          bio: 'bio',
+        };
+        const col = JOURNEY_FIELD_MAP[config.field as string];
+        if (!col) {
+          this.logger.warn(`update_journey: invalid field "${config.field}" rejected`);
+          return { status: 'success', inputData, outputData: { skipped: true, reason: 'Invalid field' } };
+        }
         await this.dataSource.query(
-          `INSERT INTO public.member_journeys (tenant_id, user_id, ${config.field})
+          `INSERT INTO public.member_journeys (tenant_id, user_id, ${col})
            VALUES ($1, $2, $3)
-           ON CONFLICT (tenant_id, user_id) DO UPDATE SET ${config.field} = $3`,
+           ON CONFLICT (tenant_id, user_id) DO UPDATE SET ${col} = $3`,
           [ctx.tenantId, ctx.targetUserId, config.value],
         );
         return { status: 'success', inputData, outputData: { updated: true } };
@@ -893,6 +910,19 @@ export class WorkflowEngineService {
 
       default:
         nextStepAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour fallback
+    }
+
+    // TODO(bullmq-resume): For long delays the execution is persisted as 'paused' and must be
+    // resumed by an external scheduler (e.g. a BullMQ delayed job targeting a 'workflow-resume'
+    // queue). Until that queue exists, a cron job or manual trigger is needed to resume executions
+    // whose next_step_at has passed. Short delays (≤60s) could be kept in-process but all delays
+    // here are stored in the DB and the worker exits — no in-process timer is used.
+    const delayMs = nextStepAt.getTime() - Date.now();
+    if (delayMs > 60_000) {
+      this.logger.warn(
+        `Workflow ${ctx.workflowId} execution ${ctx.executionId} paused for ${Math.round(delayMs / 1000)}s. ` +
+        `Resumption requires an external scheduler (bullmq-resume queue not yet implemented).`,
+      );
     }
 
     // Set execution to paused with next_step_at

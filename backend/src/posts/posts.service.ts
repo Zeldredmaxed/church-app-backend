@@ -197,12 +197,14 @@ export class PostsService {
          u.id         AS u_id,
          u.full_name  AS u_full_name,
          u.avatar_url AS u_avatar_url,
-         (SELECT COUNT(*)::int FROM public.post_likes  WHERE post_id = p.id) AS like_count,
-         (SELECT COUNT(*)::int FROM public.comments    WHERE post_id = p.id) AS comment_count,
+         lc.like_count,
+         cc.comment_count,
          EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $1) AS is_liked_by_me,
          EXISTS(SELECT 1 FROM public.post_saves WHERE post_id = p.id AND user_id = $1) AS is_saved_by_me
        FROM public.posts p
        LEFT JOIN public.users u ON u.id = p.author_id
+       LEFT JOIN LATERAL (SELECT COUNT(*)::int AS like_count FROM public.post_likes WHERE post_id = p.id) lc ON true
+       LEFT JOIN LATERAL (SELECT COUNT(*)::int AS comment_count FROM public.comments WHERE post_id = p.id) cc ON true
        WHERE (p.visibility = 'public' OR p.author_id = $1) ${authorFilter}
        ORDER BY p.created_at DESC
        LIMIT $2 OFFSET $3`,
@@ -256,12 +258,14 @@ export class PostsService {
          u.id         AS u_id,
          u.full_name  AS u_full_name,
          u.avatar_url AS u_avatar_url,
-         (SELECT COUNT(*)::int FROM public.post_likes  WHERE post_id = p.id) AS like_count,
-         (SELECT COUNT(*)::int FROM public.comments    WHERE post_id = p.id) AS comment_count,
+         lc.like_count,
+         cc.comment_count,
          EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $2) AS is_liked_by_me,
          EXISTS(SELECT 1 FROM public.post_saves WHERE post_id = p.id AND user_id = $2) AS is_saved_by_me
        FROM public.posts p
        LEFT JOIN public.users u ON u.id = p.author_id
+       LEFT JOIN LATERAL (SELECT COUNT(*)::int AS like_count FROM public.post_likes WHERE post_id = p.id) lc ON true
+       LEFT JOIN LATERAL (SELECT COUNT(*)::int AS comment_count FROM public.comments WHERE post_id = p.id) cc ON true
        WHERE p.id = $1`,
       [postId, userId],
     );

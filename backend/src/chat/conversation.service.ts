@@ -166,10 +166,16 @@ export class ConversationService {
   }
 
   /**
-   * Get messages in a conversation.
+   * Get messages in a conversation with cursor-based pagination.
    * Returns in chronological order (oldest first) for chat UI rendering.
+   * Pass cursor (message id) to page backwards through history.
    */
-  async getMessages(conversationId: string, userId: string) {
+  async getMessages(
+    conversationId: string,
+    userId: string,
+    cursor?: string,
+    limit: number = 50,
+  ): Promise<{ messages: any[]; nextCursor: string | null }> {
     const { currentTenantId } = this.getRlsContext();
 
     // Verify user is a member of this conversation
@@ -181,12 +187,18 @@ export class ConversationService {
       throw new NotFoundException('Conversation not found');
     }
 
+    const clampedLimit = Math.min(Math.max(1, limit), 100);
+
+    // Fetch one page of messages descending (newest first), then reverse for UI.
+    // When cursor is provided, only return messages older than the cursor message.
     const rows = await this.dataSource.query(
       `SELECT id, channel_id, user_id, content, media_url, media_type, created_at
        FROM public.chat_messages
        WHERE channel_id = $1
-       ORDER BY created_at ASC`,
-      [conversationId],
+         AND ($2::uuid IS NULL OR created_at < (SELECT created_at FROM public.chat_messages WHERE id = $2))
+       ORDER BY created_at DESC
+       LIMIT $3`,
+      [conversationId, cursor ?? null, clampedLimit],
     );
 
     // Mark conversation as read (update last_read_at — resets unread count)
@@ -195,7 +207,8 @@ export class ConversationService {
       [conversationId, userId],
     ).catch(err => this.logger.warn(`Failed to update last_read_at: ${err.message}`));
 
-    return rows.map((r: any) => ({
+    // Reverse so the UI receives oldest-first order
+    const messages = rows.reverse().map((r: any) => ({
       id: r.id,
       conversationId: r.channel_id,
       senderId: r.user_id,
@@ -204,6 +217,11 @@ export class ConversationService {
       mediaType: r.media_type,
       createdAt: r.created_at,
     }));
+
+    // nextCursor is the oldest message id in this page — pass it to load the previous page
+    const nextCursor = rows.length === clampedLimit ? rows[rows.length - 1].id : null;
+
+    return { messages, nextCursor };
   }
 
   /**

@@ -23,6 +23,7 @@ import { SkipThrottle } from '@nestjs/throttler';
 import { DataSource } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
+import * as crypto from 'crypto';
 import { WorkflowsService } from './workflows.service';
 import { WorkflowEngineService } from './workflow-engine.service';
 import { CreateWorkflowDto } from './dto/create-workflow.dto';
@@ -342,13 +343,20 @@ export class WorkflowWebhookController {
       return { received: true, message: 'Workflow is inactive', executionId: null };
     }
 
-    // Optional: verify webhook secret if configured
-    const secret = workflow.trigger_config?.secret;
-    if (secret) {
-      const providedSecret = req.headers['x-webhook-secret'] as string;
-      if (providedSecret !== secret) {
-        throw new BadRequestException('Invalid webhook secret');
-      }
+    // Webhook secret is MANDATORY — an unauthenticated URL that triggers 48+ node types
+    // cannot be guarded by UUID obscurity alone.
+    const secret: string | undefined = workflow.trigger_config?.secret;
+    if (!secret) {
+      throw new BadRequestException('Webhook secret not configured on this workflow');
+    }
+    const providedSecret = req.headers['x-webhook-secret'] as string | undefined;
+    if (!providedSecret) {
+      throw new BadRequestException('Missing x-webhook-secret header');
+    }
+    const a = Buffer.from(providedSecret);
+    const b = Buffer.from(secret);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      throw new BadRequestException('Invalid webhook secret');
     }
 
     this.logger.log(`Inbound webhook received for workflow ${workflowId}`);

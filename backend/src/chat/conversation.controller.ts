@@ -4,13 +4,14 @@ import {
   Post,
   Body,
   Param,
+  Query,
   ParseUUIDPipe,
   UseGuards,
   UseInterceptors,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { IsOptional, IsString, IsUUID } from 'class-validator';
 import { ConversationService } from './conversation.service';
 import { SendMessageDto } from './dto/send-message.dto';
@@ -51,13 +52,18 @@ export class ConversationController {
   }
 
   @Get(':id/messages')
-  @ApiOperation({ summary: 'Fetch all messages in a conversation' })
-  @ApiResponse({ status: 200, description: 'Array of messages in chronological order' })
+  @ApiOperation({ summary: 'Fetch messages in a conversation (cursor-based pagination)' })
+  @ApiQuery({ name: 'cursor', required: false, description: 'Message ID to page before (load older messages)' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Max messages to return (1–100, default 50)' })
+  @ApiResponse({ status: 200, description: '{ messages: [], nextCursor: string | null }' })
   getMessages(
     @Param('id', ParseUUIDPipe) conversationId: string,
     @CurrentUser() user: SupabaseJwtPayload,
+    @Query('cursor') cursor?: string,
+    @Query('limit') limitStr?: string,
   ) {
-    return this.conversationService.getMessages(conversationId, user.sub);
+    const limit = limitStr ? parseInt(limitStr, 10) : undefined;
+    return this.conversationService.getMessages(conversationId, user.sub, cursor, limit);
   }
 
   @Post(':id/messages')

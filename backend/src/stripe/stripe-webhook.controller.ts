@@ -62,6 +62,23 @@ export class StripeWebhookController {
 
     this.logger.log(`Stripe webhook received: ${event.type} (${event.id})`);
 
+    // Filter events from the wrong environment (test events in prod, live events in dev)
+    const isProduction = process.env.NODE_ENV === 'production';
+    if (event.livemode !== isProduction) {
+      this.logger.log(`Skipping ${event.livemode ? 'live' : 'test'} event ${event.id} in ${isProduction ? 'production' : 'development'} environment`);
+      return { received: true };
+    }
+
+    // Idempotency: skip events already processed (handles Stripe retries)
+    const [inserted] = await this.dataSource.query(
+      `INSERT INTO public.stripe_processed_events (event_id) VALUES ($1) ON CONFLICT (event_id) DO NOTHING RETURNING event_id`,
+      [event.id],
+    );
+    if (!inserted) {
+      this.logger.log(`Duplicate Stripe event skipped: ${event.id}`);
+      return { received: true };
+    }
+
     switch (event.type) {
       case 'payment_intent.succeeded': {
         const pi = event.data.object as Stripe.PaymentIntent;

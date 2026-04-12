@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import helmet from 'helmet';
 import { AppModule } from './app.module';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -14,16 +15,17 @@ async function bootstrap() {
     rawBody: true,
   });
 
+  // Security headers — HSTS, X-Frame-Options, X-Content-Type-Options, etc.
+  app.use(helmet());
+
   // Global route prefix — all routes accessible at /api/*
   app.setGlobalPrefix('api');
 
-  // CORS — restrict origins in production, allow all in development.
-  const allowedOrigins = process.env.CORS_ORIGINS?.split(',').map(o => o.trim());
+  // CORS — explicit allowlist only. Never reflect arbitrary origins with credentials.
+  const allowedOrigins = process.env.CORS_ORIGINS?.split(',').map(o => o.trim()).filter(Boolean);
   app.enableCors({
-    origin: process.env.NODE_ENV === 'production' && allowedOrigins?.length
-      ? allowedOrigins
-      : true,
-    credentials: true,
+    origin: allowedOrigins && allowedOrigins.length > 0 ? allowedOrigins : false,
+    credentials: !!(allowedOrigins && allowedOrigins.length > 0),
   });
 
   // Input validation pipe.

@@ -1,10 +1,12 @@
 import {
   Injectable,
   BadRequestException,
+  InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
+import { rlsStorage } from '../common/storage/rls.storage';
 
 /**
  * Shepherd Assistant — AI-powered natural language query engine.
@@ -125,20 +127,29 @@ COMMON PATTERNS:
 
     try {
       // Step 1: Ask Claude to generate SQL
-      const sql = await this.generateSql(query);
+      let sql = await this.generateSql(query);
 
       // Step 2: Validate the SQL is safe
       this.validateSql(sql);
 
-      // Step 3: Execute with tenant_id as $1
-      const rows = await this.dataSource.query(sql, [tenantId]);
+      // Enforce hard LIMIT 1000 on every generated query as a defense-in-depth cap.
+      if (!/\blimit\s+\d+/i.test(sql)) {
+        sql = sql.trimEnd().replace(/;?\s*$/, '') + ' LIMIT 1000';
+      }
+
+      // Step 3: Execute via the RLS-scoped queryRunner — prevents cross-tenant
+      // exfiltration even if the generated SQL attempts to bypass $1.
+      const ctx = rlsStorage.getStore();
+      if (!ctx) throw new InternalServerErrorException('RLS context unavailable');
+      const rows = await ctx.queryRunner.query(sql, [tenantId]);
 
       // Step 4: Ask Claude to summarize the results
       const summary = await this.summarizeResults(query, rows);
 
       return {
         query,
-        sql,
+        // Only expose raw SQL outside production (aids debugging; leaks schema in prod).
+        ...(process.env.NODE_ENV !== 'production' ? { sql } : {}),
         results: rows.slice(0, 100),
         resultCount: rows.length,
         summary,
@@ -195,8 +206,9 @@ COMMON PATTERNS:
   private validateSql(sql: string): void {
     const normalized = sql.toUpperCase().replace(/\s+/g, ' ').trim();
 
-    // Must start with SELECT or WITH (CTEs)
-    if (!normalized.startsWith('SELECT') && !normalized.startsWith('WITH')) {
+    // Strict SELECT-only — CTEs removed from allowlist to prevent WITH ... (DELETE/UPDATE)
+    // constructs that Postgres permits and the keyword denylist can miss inside string literals.
+    if (!normalized.startsWith('SELECT')) {
       throw new BadRequestException('Only SELECT queries are allowed');
     }
 
