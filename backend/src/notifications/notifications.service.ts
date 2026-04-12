@@ -79,7 +79,7 @@ export class NotificationsService {
     );
 
     const [{ count: total }] = await this.dataSource.query(
-      `SELECT COUNT(*)::int AS count FROM public.notifications WHERE recipient_id = $1 ${unreadFilter}`,
+      `SELECT COUNT(*)::int AS count FROM public.notifications n WHERE n.recipient_id = $1 ${unreadFilter}`,
       [userId],
     );
 

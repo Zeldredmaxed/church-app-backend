@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { CreateWorkflowDto } from './dto/create-workflow.dto';
@@ -266,6 +266,13 @@ export class WorkflowsService {
   /* ───── Toggle Active ───── */
 
   async toggleWorkflow(tenantId: string, id: string, isActive: boolean) {
+    // Guard: the controller receives `@Body() body: { isActive: boolean }` as
+    // an inline TS type, which the ValidationPipe does not enforce. If the
+    // client sends { active: true } or omits the body, isActive is undefined
+    // and the UPDATE tries to SET is_active = NULL (NOT NULL column → 500).
+    if (typeof isActive !== 'boolean') {
+      throw new BadRequestException('isActive (boolean) is required');
+    }
     const [row] = await this.dataSource.query(
       `UPDATE public.workflows SET is_active = $1, updated_at = now()
        WHERE id = $2 AND tenant_id = $3 RETURNING *`,
