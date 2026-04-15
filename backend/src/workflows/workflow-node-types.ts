@@ -53,6 +53,8 @@ export const ACTION_TYPES = [
 // ─── CONDITION TYPES ───
 // These branch the flow based on data.
 export const CONDITION_TYPES = [
+  'if_else',
+  'switch_case',
   'check_member_data',
   'check_date',
   'check_giving',
@@ -162,7 +164,9 @@ export const NODE_TYPE_REGISTRY: NodeTypeInfo[] = [
   { type: 'check_auto_badges', category: 'action', label: 'Check All Badges', description: 'Run all auto-award rules for this member', icon: 'RefreshCw', color: 'blue', configFields: [] },
 
   // CONDITIONS
-  { type: 'check_member_data', category: 'condition', label: 'Check Member', description: 'Branch on member data', icon: 'GitFork', color: 'amber', configFields: [{ key: 'field', label: 'Field', type: 'select', options: ['role', 'has_phone', 'has_email', 'full_name'], required: true }, { key: 'operator', label: 'Operator', type: 'select', options: ['equals', 'not_equals', 'exists', 'not_exists'], required: true }, { key: 'value', label: 'Value', type: 'text', required: false }] },
+  { type: 'if_else', category: 'condition', label: 'If / Else', description: 'Generic branching: compares two values and sends the flow down the TRUE branch or the FALSE branch. Use {{context.key}} or {{trigger.key}} to reference values from earlier in the workflow.', icon: 'GitFork', color: 'amber', configFields: [{ key: 'leftValue', label: 'Left Value', type: 'text', required: true, placeholder: '{{context.attended}} or literal' }, { key: 'operator', label: 'Operator', type: 'select', options: ['equals', 'not_equals', 'contains', 'not_contains', 'greater_than', 'less_than', 'is_empty', 'is_not_empty', 'is_true', 'is_false'], required: true }, { key: 'rightValue', label: 'Right Value', type: 'text', required: false, placeholder: 'What to compare against (blank for is_empty / is_true / is_false)' }] },
+  { type: 'switch_case', category: 'condition', label: 'Switch / Case', description: 'Multi-way branching: routes the flow to one of several named branches based on a value. Every branch you draw must match a case name (or "default" for the fall-through).', icon: 'Share2', color: 'amber', configFields: [{ key: 'value', label: 'Value to match', type: 'text', required: true, placeholder: '{{context.tier}}' }, { key: 'cases', label: 'Cases (comma-separated)', type: 'text', required: true, placeholder: 'new_visitor,returning,member' }] },
+  { type: 'check_member_data', category: 'condition', label: 'Check Member', description: 'Branch on member data', icon: 'User', color: 'amber', configFields: [{ key: 'field', label: 'Field', type: 'select', options: ['role', 'has_phone', 'has_email', 'full_name'], required: true }, { key: 'operator', label: 'Operator', type: 'select', options: ['equals', 'not_equals', 'exists', 'not_exists'], required: true }, { key: 'value', label: 'Value', type: 'text', required: false }] },
   { type: 'check_date', category: 'condition', label: 'Check Date', description: 'Branch on date comparison', icon: 'Calendar', color: 'amber', configFields: [{ key: 'dateField', label: 'Date Field', type: 'select', options: ['today', 'day_of_week'], required: true }, { key: 'operator', label: 'Operator', type: 'select', options: ['equals', 'before', 'after'], required: true }, { key: 'value', label: 'Value', type: 'text', required: true }] },
   { type: 'check_tag', category: 'condition', label: 'Has Tag?', description: 'Check if member has a tag', icon: 'Tag', color: 'amber', configFields: [{ key: 'tagId', label: 'Tag', type: 'tag', required: true }] },
   { type: 'check_attendance', category: 'condition', label: 'Attendance Check', description: 'Check attendance frequency', icon: 'CheckCircle', color: 'amber', configFields: [{ key: 'minCount', label: 'Min check-ins', type: 'number', required: true }, { key: 'days', label: 'In last N days', type: 'number', required: true }] },

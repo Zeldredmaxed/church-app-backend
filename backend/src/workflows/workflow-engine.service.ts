@@ -568,6 +568,31 @@ export class WorkflowEngineService {
 
   /* ───── Condition Executor ───── */
 
+  /**
+   * Resolves a string expression to its runtime value. Supports:
+   *   - {{context.key}} or {{trigger.key}} → ctx.triggerData[key]
+   *   - {{member.id}} → ctx.targetUserId
+   *   - {{tenant.id}} → ctx.tenantId
+   *   - anything else → literal (as-is)
+   * Used by if_else and switch_case to let authors pull values from earlier
+   * steps without learning a DSL.
+   */
+  private resolveExpr(raw: any, ctx: ExecutionContext): any {
+    if (raw === null || raw === undefined) return raw;
+    if (typeof raw !== 'string') return raw;
+    const match = raw.match(/^\{\{\s*([\w.]+)\s*\}\}$/);
+    if (!match) return raw;
+    const path = match[1];
+    const [scope, ...rest] = path.split('.');
+    const key = rest.join('.');
+    if (scope === 'context' || scope === 'trigger') {
+      return ctx.triggerData?.[key];
+    }
+    if (scope === 'member' && key === 'id') return ctx.targetUserId;
+    if (scope === 'tenant' && key === 'id') return ctx.tenantId;
+    return raw;
+  }
+
   private async executeCondition(
     nodeType: string,
     config: Record<string, any>,
@@ -576,6 +601,40 @@ export class WorkflowEngineService {
     const inputData = { nodeType, config, targetUserId: ctx.targetUserId };
 
     switch (nodeType) {
+      case 'if_else': {
+        const left = this.resolveExpr(config.leftValue, ctx);
+        const right = this.resolveExpr(config.rightValue, ctx);
+        const op = config.operator ?? 'equals';
+        let met = false;
+        switch (op) {
+          case 'equals':         met = String(left) === String(right); break;
+          case 'not_equals':     met = String(left) !== String(right); break;
+          case 'contains':       met = String(left ?? '').includes(String(right ?? '')); break;
+          case 'not_contains':   met = !String(left ?? '').includes(String(right ?? '')); break;
+          case 'greater_than':   met = Number(left) > Number(right); break;
+          case 'less_than':      met = Number(left) < Number(right); break;
+          case 'is_empty':       met = left === null || left === undefined || left === ''; break;
+          case 'is_not_empty':   met = !(left === null || left === undefined || left === ''); break;
+          case 'is_true':        met = left === true || left === 'true' || left === 1 || left === '1'; break;
+          case 'is_false':       met = left === false || left === 'false' || left === 0 || left === '0'; break;
+          default:               met = false;
+        }
+        return { status: 'success', branch: met ? 'true' : 'false', inputData, outputData: { left, right, operator: op, met } };
+      }
+
+      case 'switch_case': {
+        const value = String(this.resolveExpr(config.value, ctx) ?? '');
+        const cases: string[] = String(config.cases ?? '')
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean);
+        const matched = cases.find(c => c === value);
+        // If no match, fall through to 'default'. The workflow author draws a
+        // connection with branch='default' to handle unmatched values.
+        const branch = matched ?? 'default';
+        return { status: 'success', branch, inputData, outputData: { value, cases, matched: matched ?? null } };
+      }
+
       case 'check_tag': {
         if (!ctx.targetUserId || !config.tagId) return { status: 'success', branch: 'false', inputData, outputData: { reason: 'Missing target or tag' } };
         const [row] = await this.dataSource.query(
