@@ -144,21 +144,31 @@ export class WorkflowsService {
       const idMap = new Map<string, string>();
 
       for (const node of dto.nodes) {
+        // Dual-accept: frontends send either {nodeType/nodeConfig/label} or
+        // {nodeTypeKey/config/title}. Normalize to DB column names here.
+        const nodeType = node.nodeType ?? node.nodeTypeKey;
+        const nodeConfig = node.nodeConfig ?? node.config ?? {};
+        const label = node.label ?? node.title ?? null;
+        if (!nodeType) {
+          throw new Error(`Node ${node.id} is missing nodeType / nodeTypeKey`);
+        }
         const [inserted] = await queryRunner.query(
           `INSERT INTO public.workflow_nodes (workflow_id, node_type, node_config, position_x, position_y, label)
            VALUES ($1, $2, $3, $4, $5, $6)
            RETURNING id`,
-          [workflow.id, node.nodeType, JSON.stringify(node.nodeConfig), node.positionX, node.positionY, node.label ?? null],
+          [workflow.id, nodeType, JSON.stringify(nodeConfig), node.positionX, node.positionY, label],
         );
         idMap.set(node.id, inserted.id);
       }
 
       // 3. Insert connections with mapped IDs
       for (const conn of dto.connections) {
-        const fromId = idMap.get(conn.fromNodeId);
-        const toId = idMap.get(conn.toNodeId);
+        const fromClientId = conn.fromNodeId ?? conn.from;
+        const toClientId = conn.toNodeId ?? conn.to;
+        const fromId = fromClientId ? idMap.get(fromClientId) : undefined;
+        const toId = toClientId ? idMap.get(toClientId) : undefined;
         if (!fromId || !toId) {
-          throw new Error(`Connection references unknown node ID: ${conn.fromNodeId} -> ${conn.toNodeId}`);
+          throw new Error(`Connection references unknown node ID: ${fromClientId} -> ${toClientId}`);
         }
         await queryRunner.query(
           `INSERT INTO public.workflow_connections (workflow_id, from_node_id, to_node_id, branch)
@@ -219,20 +229,28 @@ export class WorkflowsService {
         const idMap = new Map<string, string>();
 
         for (const node of dto.nodes) {
+          const nodeType = node.nodeType ?? node.nodeTypeKey;
+          const nodeConfig = node.nodeConfig ?? node.config ?? {};
+          const label = node.label ?? node.title ?? null;
+          if (!nodeType) {
+            throw new Error(`Node ${node.id} is missing nodeType / nodeTypeKey`);
+          }
           const [inserted] = await queryRunner.query(
             `INSERT INTO public.workflow_nodes (workflow_id, node_type, node_config, position_x, position_y, label)
              VALUES ($1, $2, $3, $4, $5, $6)
              RETURNING id`,
-            [id, node.nodeType, JSON.stringify(node.nodeConfig), node.positionX, node.positionY, node.label ?? null],
+            [id, nodeType, JSON.stringify(nodeConfig), node.positionX, node.positionY, label],
           );
           idMap.set(node.id, inserted.id);
         }
 
         for (const conn of dto.connections) {
-          const fromId = idMap.get(conn.fromNodeId);
-          const toId = idMap.get(conn.toNodeId);
+          const fromClientId = conn.fromNodeId ?? conn.from;
+          const toClientId = conn.toNodeId ?? conn.to;
+          const fromId = fromClientId ? idMap.get(fromClientId) : undefined;
+          const toId = toClientId ? idMap.get(toClientId) : undefined;
           if (!fromId || !toId) {
-            throw new Error(`Connection references unknown node ID: ${conn.fromNodeId} -> ${conn.toNodeId}`);
+            throw new Error(`Connection references unknown node ID: ${fromClientId} -> ${toClientId}`);
           }
           await queryRunner.query(
             `INSERT INTO public.workflow_connections (workflow_id, from_node_id, to_node_id, branch)
