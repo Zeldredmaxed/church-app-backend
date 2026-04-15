@@ -8,8 +8,10 @@
  *   CHECK (tier IN ('standard', 'premium', 'enterprise'))
  *
  * Tier philosophy ("Grow with Us"):
- *   standard   → Core offering. Mobile app + basic community feed.
- *   premium    → Growth tools: video, chat, push, search, granular roles.
+ *   standard   → Core social platform. Feed + chat + push — the essentials
+ *                every church needs to function as a community.
+ *   premium    → Growth tools: video, segmented push, search, granular roles,
+ *                AI Assistant, larger storage.
  *   enterprise → White-glove: custom branding, multi-site, API access.
  */
 
@@ -66,9 +68,12 @@ export const TIER_FEATURES: Record<TierName, TierFeatures> = {
     globalFeed: true,
     videoPostsAllowed: false,
     search: false,
-    pushNotifications: false,
+    // Chat and push moved to Standard — a social platform without the ability
+    // to message or receive notifications is not usable as a community app.
+    // Segmented push (audience-targeted broadcasts) stays Premium.
+    pushNotifications: true,
     pushNotificationsSegmented: false,
-    chat: false,
+    chat: true,
     videoUploads: false,
     storageLimit: 10,
     transactionFeePercent: 1.3,
