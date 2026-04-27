@@ -104,6 +104,63 @@ Search the mobile profile screen for any of these strings and rip them out:
 
 ---
 
+## Bug 3 — Push notifications: device tokens never get registered
+
+### Symptom
+> Push notifications never arrive, even though backend logs show `[NotificationsProcessor] Processing job N: NEW_MESSAGE` etc.
+
+### Cause
+Verified against prod: the test user has **zero rows** in `device_tokens`. The backend dispatches push jobs correctly, but the processor finds no token to send to, so each job is a no-op. The mobile app isn't calling `POST /api/notifications/register-device` after login.
+
+### Fix
+Wire device registration into the post-login flow. Expo example:
+
+```ts
+import * as Notifications from 'expo-notifications';
+import { Platform } from 'react-native';
+
+async function registerForPushNotifications(apiClient) {
+  // 1. Request permission (iOS prompts on first call; Android 13+ requires it explicitly)
+  const { status } = await Notifications.requestPermissionsAsync();
+  if (status !== 'granted') {
+    // User declined — leave them un-registered. Optionally show a settings deep-link.
+    return;
+  }
+
+  // 2. Acquire the Expo push token (requires permission AND a real device — Expo Go works,
+  //    simulators do not. Standalone APK/IPA needs `expo-notifications` configured in app.json.)
+  const tokenResult = await Notifications.getExpoPushTokenAsync();
+  const token = tokenResult.data; // e.g. "ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]"
+
+  // 3. POST it to the backend
+  await apiClient.post('/api/notifications/register-device', {
+    token,
+    platform: Platform.OS, // 'ios' | 'android'
+  });
+}
+```
+
+**Where to call this:**
+- After every successful login (in the auth-success handler)
+- On app foreground if you want to refresh stale tokens (Expo can rotate them)
+- The endpoint is idempotent on `(user_id, token)` — calling it repeatedly is safe
+
+**On logout:**
+```ts
+await apiClient.delete('/api/notifications/unregister-device', { data: { token } });
+```
+This deactivates the token so the now-logged-out device doesn't keep getting the previous user's pushes.
+
+### How to verify it worked
+After logging in once with the new code, ping me — I can check `device_tokens` directly and trigger a test push (have a demo user DM you). The push should land within ~5 seconds.
+
+### Notes
+- **Standalone APK requires `expo-notifications` in `app.json`** (`"plugins": ["expo-notifications"]`) — without it, `getExpoPushTokenAsync()` returns nothing in the production build even though it works in Expo Go.
+- **iOS additionally needs an APNs key** uploaded to Expo's dashboard. Not a concern for Android-only testing right now.
+- The backend currently routes everything through Expo Push — the OneSignal columns in `device_tokens` are a legacy artifact; ignore them. Just send `{ token, platform }`.
+
+---
+
 ## Optional improvement — Foreground heartbeat for presence
 
 The backend updates `last_seen_at` on every authenticated request, throttled to once per 5 minutes per user. So if the user is making any API calls (feed refresh, message send, etc.) at least every 5 min, they appear online to others.
@@ -132,4 +189,5 @@ This is optional — not strictly needed for the test round. Add it once everyth
 - [ ] Send a text message — should appear immediately
 - [ ] Send a photo attachment — should upload and send without "UUID is expected"
 - [ ] Search for a user → tap follow button on the search row → button toggles, status persists when navigating to their profile
+- [ ] Grant the notification permission prompt on first launch → `device_tokens` row appears for your user → sending a DM from another user causes your phone to buzz within ~5s
 - [ ] View another user's profile → followers/following counts are real numbers, role label is one of the canonical roles (or hidden if user has no admin role)
