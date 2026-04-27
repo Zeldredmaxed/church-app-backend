@@ -63,6 +63,16 @@ export class ChatService {
 
       return saved;
     } catch (err: any) {
+      // Probe what RLS sees inside this same transaction.
+      try {
+        const probe = await queryRunner.query(
+          `SELECT current_user AS role, auth.jwt() AS jwt,
+                  (SELECT count(*) FROM public.chat_channels ch WHERE ch.created_by = (auth.jwt() ->> 'sub')::uuid) AS visible_self_channels`,
+        );
+        console.error('[CHAT-DIAG] RLS probe:', JSON.stringify(probe[0]));
+      } catch (probeErr: any) {
+        console.error('[CHAT-DIAG] RLS probe failed:', probeErr?.message);
+      }
       console.error('[CHAT-DIAG] createChannel failed:', {
         code: err?.code,
         message: err?.message,
@@ -72,6 +82,7 @@ export class ChatService {
         where: err?.where,
         hint: err?.hint,
         type: dto.type,
+        userId,
       });
       throw err;
     }

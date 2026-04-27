@@ -48,7 +48,7 @@ export class ConversationService {
          u.id AS participant_id,
          u.full_name AS participant_name,
          u.avatar_url AS participant_avatar,
-         u.is_online AS participant_is_online,
+         (u.last_seen_at IS NOT NULL AND u.last_seen_at > now() - INTERVAL '5 minutes') AS participant_is_online,
          u.last_seen_at AS participant_last_seen_at,
          -- Last message preview
          lm.content AS last_message_content,
@@ -157,9 +157,12 @@ export class ConversationService {
       }
     }
 
-    // Fetch participant info with presence
+    // Fetch participant info with presence (online = active within last 5 min)
     const [participant] = await this.dataSource.query(
-      `SELECT id, full_name, avatar_url, is_online, last_seen_at FROM public.users WHERE id = $1`,
+      `SELECT id, full_name, avatar_url,
+              (last_seen_at IS NOT NULL AND last_seen_at > now() - INTERVAL '5 minutes') AS is_online,
+              last_seen_at
+       FROM public.users WHERE id = $1`,
       [participantId],
     );
 
