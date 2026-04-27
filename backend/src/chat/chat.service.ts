@@ -42,14 +42,16 @@ export class ChatService {
   async createChannel(dto: CreateChannelDto, userId: string): Promise<ChatChannel> {
     const { queryRunner, currentTenantId } = this.requireTenantContext();
 
-    // PRE-INSERT probe — what does the transaction actually see?
-    try {
-      const probe = await queryRunner.query(
-        `SELECT current_user AS role, current_setting('request.jwt.claims', true) AS raw_claims, auth.jwt() AS jwt`,
+    // Direct channels go through a SECURITY DEFINER function to avoid the
+    // chat_channels SELECT / channel_members WITH CHECK recursion. The
+    // function performs its own auth checks via auth.jwt(), and createChannel
+    // for `type='direct'` doesn't accept a participantId from the DTO — that
+    // path belongs to POST /api/messages/conversations, which has the
+    // participant. Reject direct here so callers use the right endpoint.
+    if (dto.type === 'direct') {
+      throw new BadRequestException(
+        'Use POST /api/messages/conversations to start a direct message — pass { participantId }.',
       );
-      console.log('[CHAT-DIAG] pre-insert probe:', JSON.stringify(probe[0]));
-    } catch (probeErr: any) {
-      console.error('[CHAT-DIAG] pre-insert probe failed:', probeErr?.message);
     }
 
     const channel = queryRunner.manager.create(ChatChannel, {
@@ -59,32 +61,18 @@ export class ChatService {
       createdBy: userId,
     });
 
-    try {
-      const saved = await queryRunner.manager.save(ChatChannel, channel);
+    const saved = await queryRunner.manager.save(ChatChannel, channel);
 
-      await queryRunner.manager.save(
-        ChannelMember,
-        queryRunner.manager.create(ChannelMember, {
-          channelId: saved.id,
-          userId,
-        }),
-      );
-
-      return saved;
-    } catch (err: any) {
-      console.error('[CHAT-DIAG] createChannel failed:', {
-        code: err?.code,
-        message: err?.message,
-        detail: err?.detail,
-        table: err?.table,
-        constraint: err?.constraint,
-        where: err?.where,
-        hint: err?.hint,
-        type: dto.type,
+    // Auto-add the creator as a channel member (public/private only)
+    await queryRunner.manager.save(
+      ChannelMember,
+      queryRunner.manager.create(ChannelMember, {
+        channelId: saved.id,
         userId,
-      });
-      throw err;
-    }
+      }),
+    );
+
+    return saved;
   }
 
   /**

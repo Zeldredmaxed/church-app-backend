@@ -104,58 +104,22 @@ export class ConversationService {
    * Otherwise, create a new one.
    */
   async getOrCreateConversation(userId: string, participantId: string) {
-    const { queryRunner, currentTenantId } = this.getRlsContext();
+    const { queryRunner } = this.getRlsContext();
 
     if (userId === participantId) {
       throw new BadRequestException('Cannot create a conversation with yourself.');
     }
 
-    // Check if a direct channel already exists between these two users
-    const existing = await this.dataSource.query(
-      `SELECT ch.id, ch.updated_at
-       FROM public.chat_channels ch
-       JOIN public.channel_members cm1 ON cm1.channel_id = ch.id AND cm1.user_id = $1
-       JOIN public.channel_members cm2 ON cm2.channel_id = ch.id AND cm2.user_id = $2
-       WHERE ch.tenant_id = $3 AND ch.type = 'direct'
-       LIMIT 1`,
-      [userId, participantId, currentTenantId],
+    // Delegate to a SECURITY DEFINER function so the create-or-fetch operation
+    // runs atomically and bypasses the RLS recursion that plagued the prior
+    // direct-INSERT approach (chat_channels SELECT policy depends on channel
+    // membership; new direct channels have no members at WITH-CHECK time).
+    // The function performs its own auth checks via auth.jwt().
+    const [channel] = await queryRunner.query(
+      `SELECT * FROM public.create_direct_channel($1)`,
+      [participantId],
     );
-
-    let conversationId: string;
-    if (existing.length > 0) {
-      conversationId = existing[0].id;
-    } else {
-      try {
-        const channel = queryRunner.manager.create(ChatChannel, {
-          tenantId: currentTenantId!,
-          name: null,
-          type: 'direct',
-          createdBy: userId,
-        });
-        const saved = await queryRunner.manager.save(ChatChannel, channel);
-        conversationId = saved.id;
-
-        await queryRunner.manager.save(ChannelMember, [
-          queryRunner.manager.create(ChannelMember, { channelId: saved.id, userId }),
-          queryRunner.manager.create(ChannelMember, { channelId: saved.id, userId: participantId }),
-        ]);
-
-        this.logger.log(`DM conversation created: ${saved.id} between ${userId} and ${participantId}`);
-      } catch (err: any) {
-        console.error('[CHAT-DIAG] getOrCreateConversation failed:', {
-          code: err?.code,
-          message: err?.message,
-          detail: err?.detail,
-          table: err?.table,
-          constraint: err?.constraint,
-          where: err?.where,
-          hint: err?.hint,
-          userId,
-          participantId,
-        });
-        throw err;
-      }
-    }
+    const conversationId: string = channel.id;
 
     // Fetch participant info with presence (online = active within last 5 min)
     const [participant] = await this.dataSource.query(
@@ -177,7 +141,7 @@ export class ConversationService {
         isOnline: participant.is_online ?? false,
         lastSeenAt: participant.last_seen_at,
       },
-      updatedAt: existing[0]?.updated_at ?? new Date().toISOString(),
+      updatedAt: channel.updated_at ?? new Date().toISOString(),
     };
   }
 
