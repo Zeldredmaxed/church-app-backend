@@ -533,7 +533,7 @@ export class BadgesService {
           const rows = await queryRunner.query(
             `SELECT DISTINCT DATE(last_seen_at) AS d FROM public.users WHERE id = $1 AND last_seen_at IS NOT NULL
              UNION
-             SELECT DISTINCT DATE(created_at) AS d FROM public.daily_app_opens WHERE user_id = $1
+             SELECT DISTINCT open_date AS d FROM public.daily_app_opens WHERE user_id = $1
              ORDER BY d DESC`,
             [userId],
           );
