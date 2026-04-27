@@ -83,6 +83,23 @@ export class FollowsService {
   }
 
   /**
+   * Returns follower + following counts in a single round trip.
+   * Cheaper than two paginated /followers + /following calls when the
+   * caller only needs totals (e.g., profile header).
+   */
+  async getFollowCounts(
+    userId: string,
+  ): Promise<{ followers: number; following: number }> {
+    const [row] = await this.dataSource.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM public.follows WHERE following_id = $1) AS followers,
+         (SELECT COUNT(*)::int FROM public.follows WHERE follower_id  = $1) AS following`,
+      [userId],
+    );
+    return { followers: row.followers, following: row.following };
+  }
+
+  /**
    * Returns paginated list of users who follow the specified user.
    */
   async getFollowers(

@@ -47,6 +47,13 @@ export class FollowsController {
     return this.followsService.unfollow(user.sub, followingId);
   }
 
+  @Get(':id/follow-counts')
+  @ApiOperation({ summary: 'Follower + following counts in one cheap call (for profile headers)' })
+  @ApiResponse({ status: 200, description: '{ followers: number, following: number }' })
+  getFollowCounts(@Param('id', ParseUUIDPipe) userId: string) {
+    return this.followsService.getFollowCounts(userId);
+  }
+
   @Get(':id/followers')
   @ApiOperation({ summary: 'List users who follow the specified user' })
   @ApiResponse({ status: 200, description: 'Paginated follower list' })
