@@ -42,6 +42,16 @@ export class ChatService {
   async createChannel(dto: CreateChannelDto, userId: string): Promise<ChatChannel> {
     const { queryRunner, currentTenantId } = this.requireTenantContext();
 
+    // PRE-INSERT probe — what does the transaction actually see?
+    try {
+      const probe = await queryRunner.query(
+        `SELECT current_user AS role, current_setting('request.jwt.claims', true) AS raw_claims, auth.jwt() AS jwt`,
+      );
+      console.log('[CHAT-DIAG] pre-insert probe:', JSON.stringify(probe[0]));
+    } catch (probeErr: any) {
+      console.error('[CHAT-DIAG] pre-insert probe failed:', probeErr?.message);
+    }
+
     const channel = queryRunner.manager.create(ChatChannel, {
       tenantId: currentTenantId!,
       name: dto.name ?? null,
@@ -52,7 +62,6 @@ export class ChatService {
     try {
       const saved = await queryRunner.manager.save(ChatChannel, channel);
 
-      // Auto-add the creator as a channel member
       await queryRunner.manager.save(
         ChannelMember,
         queryRunner.manager.create(ChannelMember, {
@@ -63,16 +72,6 @@ export class ChatService {
 
       return saved;
     } catch (err: any) {
-      // Probe what RLS sees inside this same transaction.
-      try {
-        const probe = await queryRunner.query(
-          `SELECT current_user AS role, auth.jwt() AS jwt,
-                  (SELECT count(*) FROM public.chat_channels ch WHERE ch.created_by = (auth.jwt() ->> 'sub')::uuid) AS visible_self_channels`,
-        );
-        console.error('[CHAT-DIAG] RLS probe:', JSON.stringify(probe[0]));
-      } catch (probeErr: any) {
-        console.error('[CHAT-DIAG] RLS probe failed:', probeErr?.message);
-      }
       console.error('[CHAT-DIAG] createChannel failed:', {
         code: err?.code,
         message: err?.message,
