@@ -125,23 +125,36 @@ export class ConversationService {
     if (existing.length > 0) {
       conversationId = existing[0].id;
     } else {
-      // Create a new direct channel
-      const channel = queryRunner.manager.create(ChatChannel, {
-        tenantId: currentTenantId!,
-        name: null,
-        type: 'direct',
-        createdBy: userId,
-      });
-      const saved = await queryRunner.manager.save(ChatChannel, channel);
-      conversationId = saved.id;
+      try {
+        const channel = queryRunner.manager.create(ChatChannel, {
+          tenantId: currentTenantId!,
+          name: null,
+          type: 'direct',
+          createdBy: userId,
+        });
+        const saved = await queryRunner.manager.save(ChatChannel, channel);
+        conversationId = saved.id;
 
-      // Add both users as members
-      await queryRunner.manager.save(ChannelMember, [
-        queryRunner.manager.create(ChannelMember, { channelId: saved.id, userId }),
-        queryRunner.manager.create(ChannelMember, { channelId: saved.id, userId: participantId }),
-      ]);
+        await queryRunner.manager.save(ChannelMember, [
+          queryRunner.manager.create(ChannelMember, { channelId: saved.id, userId }),
+          queryRunner.manager.create(ChannelMember, { channelId: saved.id, userId: participantId }),
+        ]);
 
-      this.logger.log(`DM conversation created: ${saved.id} between ${userId} and ${participantId}`);
+        this.logger.log(`DM conversation created: ${saved.id} between ${userId} and ${participantId}`);
+      } catch (err: any) {
+        console.error('[CHAT-DIAG] getOrCreateConversation failed:', {
+          code: err?.code,
+          message: err?.message,
+          detail: err?.detail,
+          table: err?.table,
+          constraint: err?.constraint,
+          where: err?.where,
+          hint: err?.hint,
+          userId,
+          participantId,
+        });
+        throw err;
+      }
     }
 
     // Fetch participant info with presence

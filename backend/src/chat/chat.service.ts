@@ -49,18 +49,32 @@ export class ChatService {
       createdBy: userId,
     });
 
-    const saved = await queryRunner.manager.save(ChatChannel, channel);
+    try {
+      const saved = await queryRunner.manager.save(ChatChannel, channel);
 
-    // Auto-add the creator as a channel member
-    await queryRunner.manager.save(
-      ChannelMember,
-      queryRunner.manager.create(ChannelMember, {
-        channelId: saved.id,
-        userId,
-      }),
-    );
+      // Auto-add the creator as a channel member
+      await queryRunner.manager.save(
+        ChannelMember,
+        queryRunner.manager.create(ChannelMember, {
+          channelId: saved.id,
+          userId,
+        }),
+      );
 
-    return saved;
+      return saved;
+    } catch (err: any) {
+      console.error('[CHAT-DIAG] createChannel failed:', {
+        code: err?.code,
+        message: err?.message,
+        detail: err?.detail,
+        table: err?.table,
+        constraint: err?.constraint,
+        where: err?.where,
+        hint: err?.hint,
+        type: dto.type,
+      });
+      throw err;
+    }
   }
 
   /**
