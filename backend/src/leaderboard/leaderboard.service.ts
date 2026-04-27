@@ -115,8 +115,17 @@ export class LeaderboardService {
     tenantId: string,
   ): { sql: string; params: any[]; dateColumn: string } {
     const params: any[] = [];
-    let paramIdx = 0;
-    const nextParam = () => `$${++paramIdx}`;
+
+    // Only bind a tenantId param when the SQL actually references it
+    // (scope='church'). If we pushed it unconditionally, Postgres would
+    // see an unreferenced $1 and fail with "could not determine data type
+    // of parameter $1" — TypeORM uses the extended query protocol, which
+    // requires every bound parameter to appear in the SQL.
+    const tenantFilter = (col: string): string => {
+      if (scope !== 'church') return '';
+      params.push(tenantId);
+      return `AND ${col} = $${params.length}`;
+    };
 
     const periodDateColumn = this.getDateColumn(category);
     const periodClause = this.periodFilter(period, periodDateColumn);
@@ -125,8 +134,6 @@ export class LeaderboardService {
 
     switch (category) {
       case 'check_ins': {
-        const p1 = nextParam(); // tenantId
-        params.push(tenantId);
         sql = `
           SELECT u.id AS user_id, u.full_name, u.avatar_url,
             COUNT(DISTINCT dao.open_date)::int AS value
@@ -136,15 +143,13 @@ export class LeaderboardService {
           LEFT JOIN public.leaderboard_settings ls ON ls.user_id = u.id
           ${scope === 'global' ? 'JOIN public.tenants t ON t.id = dao.tenant_id AND t.leaderboard_enabled = true' : ''}
           WHERE (ls.visible IS NULL OR ls.visible = true)
-            ${scope === 'church' ? `AND dao.tenant_id = ${p1}` : ''}
+            ${tenantFilter('dao.tenant_id')}
             ${periodClause}
           GROUP BY u.id${scope === 'global' ? ', t.name' : ''}
           ORDER BY value DESC`;
         break;
       }
       case 'giving': {
-        const p1 = nextParam();
-        params.push(tenantId);
         sql = `
           SELECT u.id AS user_id, u.full_name, u.avatar_url,
             SUM(tr.amount)::float AS value
@@ -154,15 +159,13 @@ export class LeaderboardService {
           LEFT JOIN public.leaderboard_settings ls ON ls.user_id = u.id
           ${scope === 'global' ? 'JOIN public.tenants t ON t.id = tr.tenant_id AND t.leaderboard_enabled = true' : ''}
           WHERE tr.status = 'succeeded' AND (ls.visible IS NULL OR ls.visible = true)
-            ${scope === 'church' ? `AND tr.tenant_id = ${p1}` : ''}
+            ${tenantFilter('tr.tenant_id')}
             ${periodClause}
           GROUP BY u.id${scope === 'global' ? ', t.name' : ''}
           ORDER BY value DESC`;
         break;
       }
       case 'attendance': {
-        const p1 = nextParam();
-        params.push(tenantId);
         sql = `
           SELECT u.id AS user_id, u.full_name, u.avatar_url,
             COUNT(*)::int AS value
@@ -173,15 +176,13 @@ export class LeaderboardService {
           ${scope === 'global' ? 'JOIN public.tenants t ON t.id = ci.tenant_id AND t.leaderboard_enabled = true' : ''}
           WHERE ci.user_id IS NOT NULL AND ci.is_visitor = false
             AND (ls.visible IS NULL OR ls.visible = true)
-            ${scope === 'church' ? `AND ci.tenant_id = ${p1}` : ''}
+            ${tenantFilter('ci.tenant_id')}
             ${periodClause}
           GROUP BY u.id${scope === 'global' ? ', t.name' : ''}
           ORDER BY value DESC`;
         break;
       }
       case 'posts': {
-        const p1 = nextParam();
-        params.push(tenantId);
         sql = `
           SELECT u.id AS user_id, u.full_name, u.avatar_url,
             COUNT(*)::int AS value
@@ -191,7 +192,7 @@ export class LeaderboardService {
           LEFT JOIN public.leaderboard_settings ls ON ls.user_id = u.id
           ${scope === 'global' ? 'JOIN public.tenants t ON t.id = p.tenant_id AND t.leaderboard_enabled = true' : ''}
           WHERE (ls.visible IS NULL OR ls.visible = true)
-            ${scope === 'church' ? `AND p.tenant_id = ${p1}` : ''}
+            ${tenantFilter('p.tenant_id')}
             ${periodClause}
           GROUP BY u.id${scope === 'global' ? ', t.name' : ''}
           ORDER BY value DESC`;
