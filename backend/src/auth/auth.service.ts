@@ -286,11 +286,13 @@ export class AuthService {
    *
    * Always returns success to prevent email enumeration.
    */
-  async forgotPassword(dto: ForgotPasswordDto, redirectTo?: string) {
-    // Default to our hosted reset page so the email link always lands on a
-    // working UI regardless of what the client passes (or doesn't pass).
+  async forgotPassword(dto: ForgotPasswordDto, _redirectTo?: string) {
+    // We deliberately ignore the client-supplied redirectTo. Letting the
+    // mobile/web app pick the redirect URL caused emails to point at
+    // http://localhost:3000 (a dev value left in the build) — testers
+    // received a link to nowhere. Always send to our hosted reset page;
+    // override only via the RESET_PAGE_URL env var on the backend itself.
     const finalRedirect =
-      redirectTo ??
       process.env.RESET_PAGE_URL ??
       'https://church-app-backend-27hc.onrender.com/api/auth/reset';
 
