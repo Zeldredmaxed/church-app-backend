@@ -38,10 +38,23 @@ async function bootstrap() {
     .map(o => o.trim())
     .filter(Boolean);
 
+  // Same-origin requests should always pass — they're not cross-origin and
+  // the page being served from this very backend has every right to call it.
+  // Browsers send Origin on POST even for same-origin requests, so without
+  // this the hosted password-reset page (and any future backend-served HTML)
+  // would be rejected by its own server. RENDER_EXTERNAL_URL is set by
+  // Render automatically; the hardcoded fallback covers anyone running
+  // this elsewhere without that env var.
+  const selfOrigin =
+    process.env.RENDER_EXTERNAL_URL ??
+    'https://church-app-backend-27hc.onrender.com';
+
   app.enableCors({
     origin: (origin, cb) => {
       // Non-browser clients (mobile apps, curl, server-to-server) have no Origin.
       if (!origin) return cb(null, true);
+      // Always allow same-origin
+      if (origin === selfOrigin) return cb(null, true);
       const ok = allowedOrigins.some(a => {
         if (a === origin) return true;
         // Wildcard subdomain: https://*.vercel.app matches https://anything.vercel.app
