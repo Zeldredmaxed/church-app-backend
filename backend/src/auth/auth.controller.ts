@@ -106,6 +106,21 @@ export class AuthController {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     // Don't let intermediaries cache this — page is small and version-bound to the app.
     res.setHeader('Cache-Control', 'no-store');
+    // Override Helmet's default CSP — the page intentionally inlines its
+    // <style> and <script> (self-contained, no external deps). Lock it down
+    // tight: only same-origin connections, no frames, no form retargeting.
+    res.setHeader(
+      'Content-Security-Policy',
+      [
+        "default-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "script-src 'self' 'unsafe-inline'",
+        "connect-src 'self'",
+        "form-action 'self'",
+        "base-uri 'self'",
+        "frame-ancestors 'none'",
+      ].join('; '),
+    );
     res.send(RESET_PAGE_HTML);
   }
 
