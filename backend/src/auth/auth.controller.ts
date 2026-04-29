@@ -5,13 +5,14 @@ import {
   Body,
   Query,
   Req,
+  Res,
   UseGuards,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiExcludeEndpoint } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
@@ -22,6 +23,7 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
+import { RESET_PAGE_HTML } from './reset-page.html';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -87,6 +89,24 @@ export class AuthController {
   ) {
     const token = (req.headers.authorization ?? '').replace('Bearer ', '');
     return this.authService.resetPassword(dto, token);
+  }
+
+  /**
+   * Hosted password-reset page. Supabase recovery emails redirect here;
+   * the page reads the access_token from the URL hash, lets the user enter
+   * a new password, and POSTs to /auth/reset-password.
+   *
+   * No JWT guard — this is the unauthenticated landing page; the access
+   * token never leaves the browser (it's read from window.location.hash,
+   * which is not sent to the server).
+   */
+  @Get('reset')
+  @ApiExcludeEndpoint()
+  serveResetPage(@Res() res: Response) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    // Don't let intermediaries cache this — page is small and version-bound to the app.
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(RESET_PAGE_HTML);
   }
 
   @Post('logout')

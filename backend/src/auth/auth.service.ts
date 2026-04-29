@@ -287,9 +287,16 @@ export class AuthService {
    * Always returns success to prevent email enumeration.
    */
   async forgotPassword(dto: ForgotPasswordDto, redirectTo?: string) {
+    // Default to our hosted reset page so the email link always lands on a
+    // working UI regardless of what the client passes (or doesn't pass).
+    const finalRedirect =
+      redirectTo ??
+      process.env.RESET_PAGE_URL ??
+      'https://church-app-backend-27hc.onrender.com/api/auth/reset';
+
     const { error } = await this.supabase.auth.resetPasswordForEmail(
       dto.email,
-      { redirectTo },
+      { redirectTo: finalRedirect },
     );
 
     if (error) {
