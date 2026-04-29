@@ -2,6 +2,7 @@ import {
   Injectable,
   UnauthorizedException,
   ForbiddenException,
+  InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
@@ -320,18 +321,32 @@ export class AuthService {
    * in the Authorization header.
    */
   async resetPassword(dto: ResetPasswordDto, accessToken: string) {
-    // Use the user's access token from the reset flow to update their password
-    const { error } = await this.supabase.auth.admin.updateUserById(
-      // Decode the sub from the token to get the user ID
-      (await this.extractUserId(accessToken)),
-      { password: dto.password },
-    );
+    let userId: string;
+    try {
+      userId = await this.extractUserId(accessToken);
+    } catch (err: any) {
+      this.logger.warn(`[RESET-DIAG] extractUserId failed: ${err?.message ?? err}`);
+      throw err;
+    }
+    this.logger.log(`[RESET-DIAG] resetPassword for userId=${userId}, pw_len=${dto.password?.length}`);
 
-    if (error) {
-      this.logger.warn(`Password reset failed: ${error.message}`);
+    let result;
+    try {
+      result = await this.supabase.auth.admin.updateUserById(
+        userId,
+        { password: dto.password },
+      );
+    } catch (err: any) {
+      this.logger.error(`[RESET-DIAG] updateUserById threw: name=${err?.name} message=${err?.message} status=${err?.status}`, err?.stack);
+      throw new InternalServerErrorException('Password reset failed unexpectedly. Try again or request a new email.');
+    }
+
+    if (result.error) {
+      this.logger.warn(`[RESET-DIAG] updateUserById returned error: ${result.error.message} (status=${(result.error as any).status})`);
       throw new UnauthorizedException('Password reset failed. The link may have expired.');
     }
 
+    this.logger.log(`[RESET-DIAG] resetPassword success for userId=${userId}`);
     return { message: 'Password updated successfully. You can now log in with your new password.' };
   }
 
