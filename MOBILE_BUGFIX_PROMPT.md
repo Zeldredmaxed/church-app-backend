@@ -161,6 +161,74 @@ After logging in once with the new code, ping me — I can check `device_tokens`
 
 ---
 
+## Bug 4 — Notifications screen shows count but renders empty list
+
+### Symptom
+> The notifications badge shows "4 notifications," but when the user taps it, the screen shows nothing — empty list. Verified the user actually has unread notifications in the DB.
+
+### Cause (verified server-side)
+The backend is fine. I hit `/api/notifications` as the affected user against live prod and got back all 4 notifications fully-formed. The count comes from the same data source as the list — there's no scenario where the count can be > 0 and the list is genuinely empty. So this is a parser or render bug on mobile.
+
+### What the API actually returns
+
+```ts
+GET /api/notifications
+→ {
+  notifications: [
+    {
+      id: "uuid",
+      type: "NEW_MESSAGE",     // also: NEW_COMMENT, POST_MENTION, NEW_GLOBAL_POST, etc.
+      title: "Zel",            // sender name or notification title
+      body: "Replied to your story...",
+      data: {
+        params: { userId: "uuid" },
+        screen: "Conversation"
+      },
+      sender: {
+        id: "uuid",
+        fullName: "Zel",
+        avatarUrl: "https://..."
+      },
+      isRead: false,
+      createdAt: "2026-04-29T12:19:20.538Z"
+    },
+    ...
+  ],
+  unreadCount: 4,
+  total: 4,
+  page: 1
+}
+
+GET /api/notifications/unread-count
+→ { count: 4 }
+```
+
+The list endpoint accepts `?unreadOnly=true&limit=20&page=1` for filtering/pagination if you need it.
+
+### Likely root causes (in order of probability)
+
+1. **Response parser mismatch.** The list code reads the response wrong — e.g., expects a flat array, or reads `data` as the top-level key, or destructures `items` instead of `notifications`. The list field is literally `response.notifications` (or `response.data.notifications` if your client wraps responses). Confirm by logging the parsed object right after the fetch.
+
+2. **Auto-navigation on render crashes the screen.** Each notification has `data.screen` (e.g., `"Conversation"`). If your render code tries to `navigation.navigate(notification.data.screen, ...)` for every item on render instead of only on tap, and one of those screen names isn't registered in your nav stack, React Navigation throws and the list unmounts. The `data.screen` field is meant for *click-to-navigate* (tap an item → go to that screen), not for auto-routing.
+
+3. **Wrong endpoint URL.** Mobile might be hitting `/api/notifications/list` or `/api/notifications/all` — neither exists. The correct path is just `/api/notifications`. Check the actual outgoing request URL.
+
+4. **Silent ErrorBoundary.** Some prop being `undefined` (e.g., `sender.avatarUrl` for a notification with no avatar — though our data always sets it) causes a render error that an ErrorBoundary swallows, leaving the list area blank.
+
+### Quickest debug
+
+In the notifications-screen component, right after the API call:
+
+```ts
+const res = await apiClient.get('/api/notifications');
+console.log('[NOTIF-DEBUG]', JSON.stringify(res, null, 2));
+console.log('[NOTIF-DEBUG] notifications array:', res.notifications?.length);
+```
+
+If `res.notifications` is an array of 4 → it's a render bug, look at the FlatList/map. If `res.notifications` is `undefined` → it's a parser/path bug, check the request URL and response handling.
+
+---
+
 ## Optional improvement — Foreground heartbeat for presence
 
 The backend updates `last_seen_at` on every authenticated request, throttled to once per 5 minutes per user. So if the user is making any API calls (feed refresh, message send, etc.) at least every 5 min, they appear online to others.
@@ -190,4 +258,5 @@ This is optional — not strictly needed for the test round. Add it once everyth
 - [ ] Send a photo attachment — should upload and send without "UUID is expected"
 - [ ] Search for a user → tap follow button on the search row → button toggles, status persists when navigating to their profile
 - [ ] Grant the notification permission prompt on first launch → `device_tokens` row appears for your user → sending a DM from another user causes your phone to buzz within ~5s
+- [ ] Tap the notifications badge with unread items → list renders all of them (not empty); each item shows sender name, body, relative time
 - [ ] View another user's profile → followers/following counts are real numbers, role label is one of the canonical roles (or hidden if user has no admin role)
