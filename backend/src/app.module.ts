@@ -52,6 +52,7 @@ import { GroupsModule } from './groups/groups.module';
 import { Group } from './groups/entities/group.entity';
 import { GroupMember } from './groups/entities/group-member.entity';
 import { GroupMessage } from './groups/entities/group-message.entity';
+import { GroupJoinRequest } from './groups/entities/group-join-request.entity';
 import { AnnouncementsModule } from './announcements/announcements.module';
 import { Announcement } from './announcements/entities/announcement.entity';
 import { SermonsModule } from './sermons/sermons.module';
@@ -149,7 +150,7 @@ import { NotificationPreference } from './notifications/entities/notification-pr
           Tenant, User, TenantMembership, Post, Invitation, Comment, Notification,
           Follow, ChatChannel, ChannelMember, ChatMessage, Transaction, RegistrationKey, Role,
           Prayer, PrayerPray, Event, EventRsvp,
-          Group, GroupMember, GroupMessage, Announcement, Sermon, SermonLike,
+          Group, GroupMember, GroupMessage, GroupJoinRequest, Announcement, Sermon, SermonLike,
           Opportunity, VolunteerSignup, ServiceSchedule, CheckIn,
           GalleryPhoto, PostReport, RecurringGift, Tag, MemberTag,
           Story, StoryView,
