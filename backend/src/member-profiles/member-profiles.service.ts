@@ -55,7 +55,7 @@ export class MemberProfilesService {
 
   private async getPersonalInfo(tenantId: string, memberId: string) {
     const [row] = await this.dataSource.query(
-      `SELECT u.id, u.email, u.full_name, u.avatar_url, u.phone, u.created_at AS joined_at,
+      `SELECT u.id, u.email, u.full_name, u.avatar_url, u.phone, u.gender, u.created_at AS joined_at,
         tm.role, tm.permissions
        FROM public.tenant_memberships tm
        JOIN public.users u ON u.id = tm.user_id
@@ -71,6 +71,7 @@ export class MemberProfilesService {
       fullName: row.full_name,
       avatarUrl: row.avatar_url,
       phone: row.phone,
+      gender: row.gender,
       joinedAt: row.joined_at,
       role: row.role,
       permissions: row.permissions,

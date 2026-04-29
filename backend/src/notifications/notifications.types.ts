@@ -8,6 +8,7 @@ export enum NotificationType {
   NEW_GLOBAL_POST = 'NEW_GLOBAL_POST',
   INVITATION_EMAIL = 'INVITATION_EMAIL',
   NEW_MESSAGE = 'NEW_MESSAGE',
+  FAMILY_REQUEST = 'family_request',
 }
 
 /** Base shape for all notification jobs. */
@@ -63,9 +64,21 @@ export interface NewMessageJob extends BaseNotificationJob {
   previewText: string;
 }
 
+/** Dispatched when one user sends a family-connection request to another. */
+export interface FamilyRequestJob extends BaseNotificationJob {
+  type: NotificationType.FAMILY_REQUEST;
+  recipientUserId: string;
+  actorUserId: string;
+  requestId: string;
+  relationship: string;
+  /** Resolved label using target's gender (e.g. "father" not "parent"). */
+  relationshipLabel: string;
+}
+
 export type NotificationJobData =
   | NewCommentJob
   | PostMentionJob
   | NewGlobalPostJob
   | InvitationEmailJob
-  | NewMessageJob;
+  | NewMessageJob
+  | FamilyRequestJob;

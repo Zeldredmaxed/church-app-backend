@@ -70,6 +70,7 @@ export class UsersService {
     const updates: Partial<User> = {};
     if (dto.fullName !== undefined) updates.fullName = dto.fullName;
     if (dto.avatarUrl !== undefined) updates.avatarUrl = dto.avatarUrl;
+    if (dto.gender !== undefined) updates.gender = dto.gender;
 
     if (Object.keys(updates).length === 0) {
       // Nothing to update — return current profile unchanged
@@ -187,7 +188,7 @@ export class UsersService {
       await Promise.all([
         // Profile
         manager.query(
-          `SELECT id, email, full_name, avatar_url, created_at
+          `SELECT id, email, full_name, avatar_url, phone, gender, created_at
            FROM public.users WHERE id = $1`,
           [userId],
         ),

@@ -280,6 +280,31 @@ export class NotificationsProcessor extends WorkerHost {
           deepLink: { screen: 'Comments', params: { postId: data.postId } },
         };
 
+      // Family connection request
+      case 'family_request':
+      case 'FAMILY_REQUEST':
+        return {
+          title: 'Family Connection Request',
+          body: `${senderName} wants to add you as their ${data.relationshipLabel ?? 'family'}`,
+          deepLink: {
+            screen: 'Family',
+            params: { requestId: data.requestId },
+            requesterId: data.actorUserId,
+            relationship: data.relationship,
+          },
+        };
+
+      case 'family_accepted':
+        return {
+          title: 'Family Connection Accepted',
+          body: `${senderName} accepted your family request (${data.relationshipLabel ?? 'family'})`,
+          deepLink: {
+            screen: 'Family',
+            params: { connectionId: data.connectionId },
+            relationship: data.relationship,
+          },
+        };
+
       default:
         return {
           title: 'Notification',

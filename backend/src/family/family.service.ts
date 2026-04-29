@@ -1,5 +1,7 @@
 import { Injectable, Logger, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import {
   Relationship,
   ALL_RELATIONSHIPS,
@@ -7,6 +9,7 @@ import {
   SPOUSE_PROPAGATION,
   resolveLabel,
 } from './family-types';
+import { NotificationType } from '../notifications/notifications.types';
 
 /** Grouped relationship types for the mobile picker */
 const RELATIONSHIP_TYPES = [
@@ -54,7 +57,10 @@ const RELATIONSHIP_COLORS: Record<string, string> = {
 export class FamilyService {
   private readonly logger = new Logger(FamilyService.name);
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    @InjectQueue('notifications') private readonly notificationsQueue: Queue,
+  ) {}
 
   // ────────────────────────────────────────────────────────
   // GET /family/types
@@ -142,22 +148,19 @@ export class FamilyService {
       [tenantId, requesterId, targetUserId, relationship, label],
     );
 
-    // Notification to target
-    const [requester] = await this.dataSource.query(
-      `SELECT full_name FROM public.users WHERE id = $1`, [requesterId],
-    );
-    const fromName = requester?.full_name || 'Someone';
-
-    await this.dataSource.query(
-      `INSERT INTO public.notifications (tenant_id, recipient_id, type, title, body, data)
-       VALUES ($1, $2, 'family_request', $3, $4, $5::jsonb)`,
-      [
-        tenantId, targetUserId,
-        'Family Connection Request',
-        `${fromName} wants to add you as their ${label}`,
-        JSON.stringify({ requestId: row.id, requesterId, relationship, actionUrl: '/family/requests' }),
-      ],
-    );
+    // Dispatch notification (in-app row + push) via the BullMQ pipeline.
+    // The processor builds the title/body and resolves the requester name,
+    // and ExpoPushService creates the notifications row + pushes to all
+    // active device tokens (with per-type preference + invalid-token cleanup).
+    await this.notificationsQueue.add('notification', {
+      type: NotificationType.FAMILY_REQUEST,
+      tenantId,
+      recipientUserId: targetUserId,
+      actorUserId: requesterId,
+      requestId: row.id,
+      relationship,
+      relationshipLabel: label,
+    });
 
     return this.mapRow(row);
   }
@@ -235,22 +238,16 @@ export class FamilyService {
     // 3. Run inference engine
     await this.runInference(tenantId, req.user_id, req.related_user_id, rel, requestId);
 
-    // 4. Notify requester of acceptance
-    const [target] = await this.dataSource.query(
-      `SELECT full_name FROM public.users WHERE id = $1`, [req.related_user_id],
-    );
-    const targetName = target?.full_name || 'Someone';
-
-    await this.dataSource.query(
-      `INSERT INTO public.notifications (tenant_id, recipient_id, type, title, body, data)
-       VALUES ($1, $2, 'family_accepted', $3, $4, $5::jsonb)`,
-      [
-        tenantId, req.user_id,
-        'Family Connection Accepted',
-        `${targetName} accepted your family request (${forwardLabel})`,
-        JSON.stringify({ connectionId: requestId, relationship: rel }),
-      ],
-    );
+    // 4. Notify requester of acceptance — queue, so push also fires.
+    await this.notificationsQueue.add('notification', {
+      type: 'family_accepted',
+      tenantId,
+      recipientUserId: req.user_id,
+      actorUserId: req.related_user_id,
+      connectionId: requestId,
+      relationship: rel,
+      relationshipLabel: forwardLabel,
+    });
 
     return { status: 'accepted' };
   }

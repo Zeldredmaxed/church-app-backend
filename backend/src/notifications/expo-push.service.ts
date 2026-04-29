@@ -69,11 +69,21 @@ export class ExpoPushService {
     const devices = await this.dataSource.manager.find(DeviceToken, {
       where: { userId: params.recipientId, isActive: true },
     });
-    if (devices.length === 0) return notification;
+    if (devices.length === 0) {
+      this.logger.log(
+        `In-app notification ${notification.id} created for user ${params.recipientId} (${params.type}); push skipped — no active device tokens registered`,
+      );
+      return notification;
+    }
 
     // 5. Build and send Expo messages
     const validDevices = devices.filter(d => Expo.isExpoPushToken(d.token));
-    if (validDevices.length === 0) return notification;
+    if (validDevices.length === 0) {
+      this.logger.warn(
+        `Push skipped for user ${params.recipientId}: ${devices.length} device(s) registered but none have valid Expo tokens`,
+      );
+      return notification;
+    }
 
     // Get unread count for badge
     const [{ count }] = await this.dataSource.query(

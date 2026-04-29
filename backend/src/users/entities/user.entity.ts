@@ -39,6 +39,10 @@ export class User {
   @Column({ type: 'text', nullable: true })
   phone: string | null;
 
+  /** User-selected gender. CHECK constraint allows only the four values listed. */
+  @Column({ type: 'text', nullable: true })
+  gender: 'female' | 'male' | 'non_binary' | 'prefer_not_to_say' | null;
+
   /** Stripe Customer ID (cus_xxx). Created lazily on first SetupIntent. User-global. */
   @Column({ type: 'text', nullable: true, unique: true, name: 'stripe_customer_id' })
   stripeCustomerId: string | null;
