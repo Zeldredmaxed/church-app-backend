@@ -218,7 +218,11 @@ export class PostsService {
       params,
     );
 
-    const countParams: unknown[] = [userId];
+    // countParams must only contain values referenced by the SQL —
+    // previously userId was bound to $1 (used in author_id = $1) but the
+    // visibility-filter removal left it dangling, which Postgres rejects
+    // with "could not determine data type of parameter $1".
+    const countParams: unknown[] = [];
     let countAuthorFilter = '';
     if (query.authorId) {
       countParams.push(query.authorId);
