@@ -423,15 +423,16 @@ export class CampusService {
        FROM public.posts p
        LEFT JOIN public.users u ON u.id = p.author_id
        LEFT JOIN public.tenants t ON t.id = p.tenant_id
-       WHERE p.tenant_id = ANY($1) AND p.visibility = 'public'
+       WHERE p.tenant_id = ANY($1)
        ORDER BY p.created_at DESC
        LIMIT $3 OFFSET $4`,
       [targetTenantIds, userId, limit, offset],
     );
 
+    // visibility filter removed — see posts.service.ts findAll for rationale.
     const total = await this.dataSource.query(
       `SELECT COUNT(*)::int AS count FROM public.posts
-       WHERE tenant_id = ANY($1) AND visibility = 'public'`,
+       WHERE tenant_id = ANY($1)`,
       [targetTenantIds],
     );
 

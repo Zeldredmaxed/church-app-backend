@@ -78,9 +78,12 @@ export class SearchService {
       FROM public.posts p
       LEFT JOIN public.users u ON u.id = p.author_id
       WHERE p.search_vector @@ websearch_to_tsquery('english', $1)
-      AND (p.visibility = 'public' OR p.author_id = $2)
       AND p.tenant_id IS NOT NULL
     `;
+    // visibility filter removed — see posts.service.ts findAll for rationale.
+    // RLS already scopes to the caller's tenant; per-post visibility is not
+    // a shipped feature, and the previous filter hid mobile-created posts
+    // (which default to visibility='private').
 
     if (cursor) {
       params.push(cursor);

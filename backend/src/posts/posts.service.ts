@@ -212,7 +212,7 @@ export class PostsService {
        LEFT JOIN public.users u ON u.id = p.author_id
        LEFT JOIN LATERAL (SELECT COUNT(*)::int AS like_count FROM public.post_likes WHERE post_id = p.id) lc ON true
        LEFT JOIN LATERAL (SELECT COUNT(*)::int AS comment_count FROM public.comments WHERE post_id = p.id) cc ON true
-       WHERE (p.visibility = 'public' OR p.author_id = $1) ${authorFilter} ${mediaTypeFilter}
+       WHERE 1=1 ${authorFilter} ${mediaTypeFilter}
        ORDER BY p.created_at DESC
        LIMIT $2 OFFSET $3`,
       params,
@@ -229,9 +229,14 @@ export class PostsService {
       countParams.push(query.mediaType);
       countMediaTypeFilter = `AND media_type = $${countParams.length}`;
     }
+    // Tenant scoping is enforced by RLS on public.posts; no extra filter here.
+    // The previous "visibility = 'public' OR author_id = me" filter hid every
+    // post the mobile created (it sends visibility='private' by default), so
+    // members couldn't see each other's posts. Per-post visibility isn't a
+    // shipped product feature — if it comes back, gate it here.
     const [{ total }]: [{ total: string }] = await queryRunner.query(
       `SELECT COUNT(*)::int AS total FROM public.posts
-       WHERE (visibility = 'public' OR author_id = $1) ${countAuthorFilter} ${countMediaTypeFilter}`,
+       WHERE 1=1 ${countAuthorFilter} ${countMediaTypeFilter}`,
       countParams,
     );
 
