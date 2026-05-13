@@ -2,6 +2,7 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  ForbiddenException,
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
@@ -152,6 +153,35 @@ export class CommentsService {
     });
 
     return { comments, total, limit, offset };
+  }
+
+  /**
+   * Deletes a comment. The RLS DELETE policy permits author_id = auth.uid()
+   * OR a tenant admin — we don't repeat that check in service code.
+   *
+   * Distinguishes 404 (comment doesn't exist in this tenant — RLS SELECT
+   * returns nothing) from 403 (comment exists but caller isn't the author
+   * or an admin — SELECT returns the row but DELETE affects 0 rows).
+   */
+  async deleteComment(postId: string, commentId: string): Promise<{ deleted: true }> {
+    const { queryRunner } = this.getRlsContext();
+
+    const existing = await queryRunner.manager.findOne(Comment, {
+      where: { id: commentId, postId },
+    });
+    if (!existing) {
+      throw new NotFoundException('Comment not found');
+    }
+
+    const result = await queryRunner.query(
+      `DELETE FROM public.comments WHERE id = $1 AND post_id = $2 RETURNING id`,
+      [commentId, postId],
+    );
+    if (!result.length) {
+      throw new ForbiddenException('You can only delete your own comments');
+    }
+
+    return { deleted: true };
   }
 
   private getRlsContext() {

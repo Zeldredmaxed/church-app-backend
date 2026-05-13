@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Delete,
   Body,
   Param,
   Query,
@@ -50,5 +51,21 @@ export class CommentsController {
     @Query() query: GetCommentsDto,
   ) {
     return this.commentsService.getComments(postId, query);
+  }
+
+  @Delete(':commentId')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Delete a comment',
+    description: 'Author can delete their own comment; tenant admin can delete any comment in the tenant. RLS DELETE policy enforces both.',
+  })
+  @ApiResponse({ status: 200, description: '{ deleted: true }' })
+  @ApiResponse({ status: 403, description: 'Not the author and not an admin' })
+  @ApiResponse({ status: 404, description: 'Comment not found in current tenant' })
+  deleteComment(
+    @Param('postId', ParseUUIDPipe) postId: string,
+    @Param('commentId', ParseUUIDPipe) commentId: string,
+  ) {
+    return this.commentsService.deleteComment(postId, commentId);
   }
 }
