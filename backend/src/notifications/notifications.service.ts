@@ -135,6 +135,41 @@ export class NotificationsService {
     return { markedRead: result[1] ?? 0 };
   }
 
+  // ── Delete ──
+
+  /**
+   * Delete a single notification. The WHERE includes recipient_id so a
+   * non-recipient (or a bogus id) silently affects zero rows — we then
+   * throw 404. Folding "not yours" into "not found" avoids leaking the
+   * existence of other users' notifications.
+   */
+  async deleteNotification(notificationId: string, userId: string): Promise<void> {
+    const result = await this.dataSource.query(
+      `DELETE FROM public.notifications WHERE id = $1 AND recipient_id = $2`,
+      [notificationId, userId],
+    );
+    const affected = Array.isArray(result) ? result[1] : (result?.rowCount ?? 0);
+    if (affected === 0) {
+      throw new NotFoundException('Notification not found');
+    }
+  }
+
+  /**
+   * Batch delete — single round trip for "clear N selected" UX.
+   * Same recipient_id filter; only the caller's rows are touched. The
+   * count returned reflects rows actually deleted (silently drops ids
+   * that don't belong to the caller or never existed).
+   */
+  async deleteNotifications(notificationIds: string[], userId: string): Promise<{ deletedCount: number }> {
+    if (!notificationIds.length) return { deletedCount: 0 };
+    const result = await this.dataSource.query(
+      `DELETE FROM public.notifications WHERE id = ANY($1::uuid[]) AND recipient_id = $2`,
+      [notificationIds, userId],
+    );
+    const affected = Array.isArray(result) ? result[1] : (result?.rowCount ?? 0);
+    return { deletedCount: affected ?? 0 };
+  }
+
   // ── Unread Count ──
 
   async getUnreadCount(userId: string) {

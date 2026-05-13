@@ -15,6 +15,7 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsOptional, IsBoolean, IsUUID, IsIn } from 'class-validator';
 import { NotificationsService } from './notifications.service';
+import { DeleteNotificationsDto } from './dto/delete-notifications.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -156,6 +157,37 @@ export class NotificationsController {
     @CurrentUser() user: SupabaseJwtPayload,
   ) {
     return this.notificationsService.markAsRead(id, user.sub);
+  }
+
+  // ── Delete ──
+  // Static routes must precede :id-param routes — Nest matches in declaration
+  // order. DELETE / (batch) is declared before DELETE /:id below; the batch
+  // route has no extra path segment, so they don't conflict.
+
+  @Delete()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Batch-delete notifications by id',
+    description: 'Body: { ids: [uuid, ...] }. Only ids the caller owns are deleted; others are silently skipped. Returns the actual count deleted.',
+  })
+  @ApiResponse({ status: 200, description: '{ deletedCount: N }' })
+  deleteNotifications(
+    @CurrentUser() user: SupabaseJwtPayload,
+    @Body() dto: DeleteNotificationsDto,
+  ) {
+    return this.notificationsService.deleteNotifications(dto.ids, user.sub);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Delete a notification' })
+  @ApiResponse({ status: 204, description: 'Deleted' })
+  @ApiResponse({ status: 404, description: 'Notification not found or not the recipient' })
+  deleteNotification(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    return this.notificationsService.deleteNotification(id, user.sub);
   }
 
   // ── Admin Broadcast ──
