@@ -231,7 +231,10 @@ export class AuthService {
    * The returned accessToken is a Supabase JWT containing current_tenant_id
    * in app_metadata (if the user has been assigned a tenant).
    */
-  async login(dto: LoginDto) {
+  async login(
+    dto: LoginDto,
+    requestContext?: { userAgent?: string | null; ipAddress?: string | null },
+  ) {
     const { data, error } = await this.supabase.auth.signInWithPassword({
       email: dto.email,
       password: dto.password,
@@ -243,6 +246,18 @@ export class AuthService {
 
     // Record login for streak tracking (fire-and-forget)
     this.recordLogin(data.user!.id).catch(err => this.logger.warn(`Login streak recording failed: ${err.message}`));
+
+    // Record the sign-in event for the Activity → Recent logins screen.
+    // Fire-and-forget — login response shouldn't wait on an audit insert.
+    this.dataSource.query(
+      `INSERT INTO public.user_login_events (user_id, user_agent, ip_address)
+       VALUES ($1, $2, $3)`,
+      [
+        data.user!.id,
+        requestContext?.userAgent ?? null,
+        requestContext?.ipAddress ?? null,
+      ],
+    ).catch(err => this.logger.warn(`Login event recording failed: ${err.message}`));
 
     return {
       accessToken: data.session!.access_token,

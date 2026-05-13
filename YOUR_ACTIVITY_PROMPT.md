@@ -6,18 +6,28 @@ A self-contained dashboard the user opens to see what they've been doing inside 
 
 ## Status
 
-**Deploy 1 (shipped):** usage tracking + summary card.
+**Deploy 1 + 2 shipped.** All endpoints below are live in production.
+
 - `POST /api/me/activity/heartbeat`
 - `GET /api/me/activity` (summary)
 - `GET /api/me/activity/usage?range=week|month|all`
+- `GET /api/me/activity/posts`
+- `GET /api/me/activity/comments`
+- `GET /api/me/activity/likes`
+- `GET /api/me/activity/saves` — alias of `GET /api/posts/saved` (mobile can call either)
+- `GET /api/me/activity/story-views`
+- `GET /api/me/activity/family`
+- `GET /api/me/activity/giving`
+- `GET /api/me/activity/events?status=upcoming|past`
+- `GET /api/me/activity/checkins`
+- `GET /api/me/activity/prayers`
+- `GET /api/me/activity/logins`
 
-Mobile can wire the heartbeat + render the dashboard header now. Real data starts populating as soon as the first heartbeats arrive.
+Sign-in events start populating from this deploy forward (we added a `user_login_events` write to `POST /auth/login` — Supabase's own audit log was empty on this project's plan, so we record our own).
 
-**Deploy 2 (pending):** all per-section detail endpoints — posts, comments, likes, saves, story-views, family, giving, events, check-ins, prayers, logins.
-
-**Deferred follow-ups (after deploy 2):**
-- Sermon watch tracking — new table + mobile fires `POST /api/sermons/:id/watch` on player open.
-- IP→city for login history — skipped (cost + dependency outweighs the value).
+**Deferred follow-ups:**
+- Sermon watch tracking — new table + mobile fires `POST /api/sermons/:id/watch` on player open. Not built yet; the activity screen can omit the sermons row until this lands.
+- IP→city for login history — skipped (cost + dependency outweighs the value). The `device` field is derived from User-Agent (iOS / Android / macOS / Windows / Linux / Other).
 
 **Backend origin:** `https://church-app-backend-27hc.onrender.com` — endpoints under `/api/...`.
 

@@ -47,8 +47,11 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Returns accessToken, refreshToken, expiresAt, and user metadata' })
   @ApiResponse({ status: 401, description: 'Invalid email or password' })
   @ApiResponse({ status: 429, description: 'Rate limit exceeded (5 req/min)' })
-  login(@Body() dto: LoginDto) {
-    return this.authService.login(dto);
+  login(@Body() dto: LoginDto, @Req() req: Request) {
+    return this.authService.login(dto, {
+      userAgent: (req.headers['user-agent'] as string) ?? null,
+      ipAddress: req.ip ?? null,
+    });
   }
 
   @Post('refresh')
