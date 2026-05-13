@@ -11,6 +11,8 @@ import { join } from 'path';
 import { AuthModule } from './auth/auth.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { UsersModule } from './users/users.module';
+import { MeActivityModule } from './me-activity/me-activity.module';
+import { UserAppActivity } from './me-activity/entities/user-app-activity.entity';
 import { MembershipsModule } from './memberships/memberships.module';
 import { PostsModule } from './posts/posts.module';
 import { InvitationsModule } from './invitations/invitations.module';
@@ -174,6 +176,7 @@ import { NotificationPreference } from './notifications/entities/notification-pr
           FundraiserBookmark,
           DeviceToken,
           NotificationPreference,
+          UserAppActivity,
         ],
 
         // CRITICAL: synchronize must ALWAYS be false.
@@ -256,6 +259,7 @@ import { NotificationPreference } from './notifications/entities/notification-pr
     AuthModule,
     TenantsModule,
     UsersModule,
+    MeActivityModule,
     MembershipsModule,
     PostsModule,
     InvitationsModule,

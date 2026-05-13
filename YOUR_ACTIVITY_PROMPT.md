@@ -4,7 +4,20 @@
 
 A self-contained dashboard the user opens to see what they've been doing inside the app. Instagram-style. Covers usage stats (time, opens, streak), content history (posts, comments, likes, saves), and church-specific activity (giving, events, check-ins, prayers, family).
 
-This doc is a **design + handoff spec**. Backend implementation is gated on your sign-off — most of the read endpoints reuse data we already have; the only net-new infrastructure is time-on-app tracking, which needs a mobile contract too. Tell me which sections you want shipped and I'll build them.
+## Status
+
+**Deploy 1 (shipped):** usage tracking + summary card.
+- `POST /api/me/activity/heartbeat`
+- `GET /api/me/activity` (summary)
+- `GET /api/me/activity/usage?range=week|month|all`
+
+Mobile can wire the heartbeat + render the dashboard header now. Real data starts populating as soon as the first heartbeats arrive.
+
+**Deploy 2 (pending):** all per-section detail endpoints — posts, comments, likes, saves, story-views, family, giving, events, check-ins, prayers, logins.
+
+**Deferred follow-ups (after deploy 2):**
+- Sermon watch tracking — new table + mobile fires `POST /api/sermons/:id/watch` on player open.
+- IP→city for login history — skipped (cost + dependency outweighs the value).
 
 **Backend origin:** `https://church-app-backend-27hc.onrender.com` — endpoints under `/api/...`.
 
@@ -281,6 +294,7 @@ GET /api/me/activity
     likes: 17,
     checkins: 1,
     donations: 1,
+    followersGained: 4,
     streakDays: 5
   },
   lifetime: {
@@ -292,6 +306,8 @@ GET /api/me/activity
   }
 }
 ```
+
+"This week" is a rolling 7-day window, not a calendar week — simpler + more useful than resetting on Mondays.
 
 One round-trip for the dashboard header. Pulls from the same data the section endpoints expose. The mobile screen renders this immediately and lazy-loads each detail section on tap.
 
@@ -321,16 +337,19 @@ let intervalId: NodeJS.Timeout | null = null;
 let isNewSession = true;
 let lastSent = Date.now();
 
+function sendHeartbeat() {
+  const now = Date.now();
+  const deltaSeconds = Math.min(Math.round((now - lastSent) / 1000), 90);
+  apiClient.post('/api/me/activity/heartbeat', { deltaSeconds, isNewSession })
+    .catch(() => {});  // fire-and-forget
+  lastSent = now;
+  isNewSession = false;
+}
+
 function startHeartbeat() {
   if (intervalId) return;
-  intervalId = setInterval(() => {
-    const now = Date.now();
-    const deltaSeconds = Math.min(Math.round((now - lastSent) / 1000), 90);
-    apiClient.post('/api/me/activity/heartbeat', { deltaSeconds, isNewSession })
-      .catch(() => {}); // fire-and-forget
-    lastSent = now;
-    isNewSession = false;
-  }, 60_000);
+  sendHeartbeat();                                  // immediate — see note below
+  intervalId = setInterval(sendHeartbeat, 60_000);
 }
 
 function stopHeartbeat() {
@@ -355,6 +374,8 @@ useEffect(() => {
   };
 }, []);
 ```
+
+> **Why the immediate fire?** Without it, `setInterval(..., 60_000)` waits a full minute before the first call. A user who opens the app and backgrounds it in 50 seconds would generate zero heartbeats — the session would be invisible. Firing once at the top of `startHeartbeat()` catches that case and also makes `isNewSession: true` arrive promptly instead of a minute late.
 
 ---
 
