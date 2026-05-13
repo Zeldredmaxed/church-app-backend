@@ -65,6 +65,14 @@ export class PostsController {
     return this.postsService.getSavedPosts(user.sub, query.limit ?? 20, query.offset ?? 0);
   }
 
+  @Get('archive')
+  @UseInterceptors(RlsContextInterceptor)
+  @ApiOperation({ summary: "List the caller's own archived posts" })
+  @ApiResponse({ status: 200, description: 'Same shape as GET /api/posts — owner-only' })
+  getArchivedPosts(@CurrentUser() user: SupabaseJwtPayload, @Query() query: GetPostsDto) {
+    return this.postsService.getArchivedPosts(user.sub, query.limit ?? 20, query.offset ?? 0);
+  }
+
   @Get(':id')
   @UseInterceptors(RlsContextInterceptor)
   @ApiOperation({ summary: 'Get a single post by ID' })
@@ -127,5 +135,28 @@ export class PostsController {
   @ApiResponse({ status: 204, description: 'Unsaved' })
   unsavePost(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: SupabaseJwtPayload) {
     return this.postsService.unsavePost(id, user.sub);
+  }
+
+  @Post(':id/archive')
+  @UseInterceptors(RlsContextInterceptor)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Archive a post (author only) — hides it from every feed/search/profile',
+    description: "The post is still accessible to the author through GET /api/posts/archive and GET /api/posts/:id, but is filtered out of all public-facing queries.",
+  })
+  @ApiResponse({ status: 200, description: '{ archived: true }' })
+  @ApiResponse({ status: 404, description: 'Post not found or caller is not the author' })
+  archivePost(@Param('id', ParseUUIDPipe) id: string) {
+    return this.postsService.archivePost(id);
+  }
+
+  @Delete(':id/archive')
+  @UseInterceptors(RlsContextInterceptor)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Unarchive a post (author only) — restores it to feeds' })
+  @ApiResponse({ status: 200, description: '{ archived: false }' })
+  @ApiResponse({ status: 404, description: 'Post not found or caller is not the author' })
+  unarchivePost(@Param('id', ParseUUIDPipe) id: string) {
+    return this.postsService.unarchivePost(id);
   }
 }

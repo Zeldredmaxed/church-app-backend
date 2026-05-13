@@ -212,7 +212,7 @@ export class PostsService {
        LEFT JOIN public.users u ON u.id = p.author_id
        LEFT JOIN LATERAL (SELECT COUNT(*)::int AS like_count FROM public.post_likes WHERE post_id = p.id) lc ON true
        LEFT JOIN LATERAL (SELECT COUNT(*)::int AS comment_count FROM public.comments WHERE post_id = p.id) cc ON true
-       WHERE 1=1 ${authorFilter} ${mediaTypeFilter}
+       WHERE p.is_archived = false ${authorFilter} ${mediaTypeFilter}
        ORDER BY p.created_at DESC
        LIMIT $2 OFFSET $3`,
       params,
@@ -240,7 +240,7 @@ export class PostsService {
     // shipped product feature — if it comes back, gate it here.
     const [{ total }]: [{ total: string }] = await queryRunner.query(
       `SELECT COUNT(*)::int AS total FROM public.posts
-       WHERE 1=1 ${countAuthorFilter} ${countMediaTypeFilter}`,
+       WHERE is_archived = false ${countAuthorFilter} ${countMediaTypeFilter}`,
       countParams,
     );
 
@@ -291,7 +291,8 @@ export class PostsService {
        LEFT JOIN public.users u ON u.id = p.author_id
        LEFT JOIN LATERAL (SELECT COUNT(*)::int AS like_count FROM public.post_likes WHERE post_id = p.id) lc ON true
        LEFT JOIN LATERAL (SELECT COUNT(*)::int AS comment_count FROM public.comments WHERE post_id = p.id) cc ON true
-       WHERE p.id = $1`,
+       WHERE p.id = $1
+         AND (p.is_archived = false OR p.author_id = $2)`,
       [postId, userId],
     );
 
@@ -452,14 +453,17 @@ export class PostsService {
        FROM public.post_saves ps
        JOIN public.posts p ON p.id = ps.post_id
        LEFT JOIN public.users u ON u.id = p.author_id
-       WHERE ps.user_id = $1
+       WHERE ps.user_id = $1 AND p.is_archived = false
        ORDER BY ps.created_at DESC
        LIMIT $2 OFFSET $3`,
       [userId, limit, offset],
     );
 
+    // Same archive filter on the count so the count matches the page contents.
     const [{ total }]: [{ total: string }] = await queryRunner.query(
-      `SELECT COUNT(*)::int AS total FROM public.post_saves WHERE user_id = $1`,
+      `SELECT COUNT(*)::int AS total FROM public.post_saves ps
+       JOIN public.posts p ON p.id = ps.post_id
+       WHERE ps.user_id = $1 AND p.is_archived = false`,
       [userId],
     );
 
@@ -481,6 +485,95 @@ export class PostsService {
       commentCount: Number(r.comment_count),
       isLikedByMe: r.is_liked_by_me,
       isSavedByMe: true,
+    }));
+
+    return { posts, total: Number(total), limit, offset };
+  }
+
+  /**
+   * Toggles is_archived on a post. Author-only — the RLS UPDATE policy
+   * already enforces author_id = auth.uid(), so a non-author update affects
+   * zero rows. We surface that as 404 to avoid leaking whether the post
+   * exists.
+   */
+  private async setArchived(postId: string, isArchived: boolean): Promise<{ archived: boolean }> {
+    const { queryRunner } = this.getRlsContext();
+    const result = await queryRunner.query(
+      `UPDATE public.posts SET is_archived = $1, updated_at = now()
+       WHERE id = $2 RETURNING id`,
+      [isArchived, postId],
+    );
+    if (!result.length) {
+      throw new NotFoundException('Post not found');
+    }
+    return { archived: isArchived };
+  }
+
+  archivePost(postId: string) {
+    return this.setArchived(postId, true);
+  }
+
+  unarchivePost(postId: string) {
+    return this.setArchived(postId, false);
+  }
+
+  /**
+   * Returns the caller's archived posts. Only the author sees their own
+   * archive; this endpoint is implicitly scoped to the caller.
+   */
+  async getArchivedPosts(userId: string, limit: number, offset: number): Promise<PaginatedPosts> {
+    const { queryRunner } = this.getRlsContext();
+
+    const rows: Array<{
+      id: string; tenant_id: string; author_id: string; content: string;
+      media_type: string; media_url: string | null; video_mux_playback_id: string | null;
+      visibility: 'public' | 'private';
+      created_at: Date; updated_at: Date;
+      u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
+      like_count: string; comment_count: string;
+      is_liked_by_me: boolean; is_saved_by_me: boolean;
+    }> = await queryRunner.query(
+      `SELECT
+         p.id, p.tenant_id, p.author_id, p.content,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.visibility,
+         p.created_at, p.updated_at,
+         u.id AS u_id, u.full_name AS u_full_name, u.avatar_url AS u_avatar_url,
+         (SELECT COUNT(*)::int FROM public.post_likes WHERE post_id = p.id) AS like_count,
+         (SELECT COUNT(*)::int FROM public.comments   WHERE post_id = p.id) AS comment_count,
+         EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $1) AS is_liked_by_me,
+         EXISTS(SELECT 1 FROM public.post_saves WHERE post_id = p.id AND user_id = $1) AS is_saved_by_me
+       FROM public.posts p
+       LEFT JOIN public.users u ON u.id = p.author_id
+       WHERE p.author_id = $1 AND p.is_archived = true
+       ORDER BY p.created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [userId, limit, offset],
+    );
+
+    const [{ total }]: [{ total: string }] = await queryRunner.query(
+      `SELECT COUNT(*)::int AS total FROM public.posts
+       WHERE author_id = $1 AND is_archived = true`,
+      [userId],
+    );
+
+    const posts: PostWithMeta[] = rows.map(r => ({
+      id: r.id,
+      tenantId: r.tenant_id,
+      authorId: r.author_id,
+      content: r.content,
+      mediaType: r.media_type,
+      mediaUrl: r.media_url,
+      videoMuxPlaybackId: r.video_mux_playback_id,
+      visibility: r.visibility,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      author: r.u_id
+        ? { id: r.u_id, fullName: r.u_full_name, avatarUrl: r.u_avatar_url }
+        : null,
+      likeCount: Number(r.like_count),
+      commentCount: Number(r.comment_count),
+      isLikedByMe: r.is_liked_by_me,
+      isSavedByMe: r.is_saved_by_me,
     }));
 
     return { posts, total: Number(total), limit, offset };

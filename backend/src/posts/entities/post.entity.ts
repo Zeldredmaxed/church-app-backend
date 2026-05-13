@@ -56,6 +56,14 @@ export class Post {
   @Column({ type: 'text', nullable: true, name: 'video_mux_playback_id' })
   videoMuxPlaybackId: string | null;
 
+  /**
+   * Instagram-style archive flag. When true, the post is hidden from every
+   * feed/search/profile view and only appears in the owner's archive list.
+   * Toggled via POST/DELETE /api/posts/:id/archive.
+   */
+  @Column({ type: 'boolean', name: 'is_archived', default: false })
+  isArchived: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

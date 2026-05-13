@@ -79,6 +79,7 @@ export class SearchService {
       LEFT JOIN public.users u ON u.id = p.author_id
       WHERE p.search_vector @@ websearch_to_tsquery('english', $1)
       AND p.tenant_id IS NOT NULL
+      AND p.is_archived = false
     `;
     // visibility filter removed — see posts.service.ts findAll for rationale.
     // RLS already scopes to the caller's tenant; per-post visibility is not

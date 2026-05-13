@@ -27,6 +27,12 @@ export class StoriesController {
     return this.storiesService.getMyStories(user.sub);
   }
 
+  @Get('archive')
+  @ApiOperation({ summary: "Get the caller's archived stories (persist beyond 24h expiry)" })
+  getArchivedStories(@CurrentUser() user: SupabaseJwtPayload) {
+    return this.storiesService.getArchivedStories(user.sub);
+  }
+
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create a new story' })
@@ -46,5 +52,22 @@ export class StoriesController {
   @ApiOperation({ summary: 'Mark story as viewed' })
   viewStory(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: SupabaseJwtPayload) {
     return this.storiesService.viewStory(id, user.sub);
+  }
+
+  @Post(':id/archive')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Archive a story (owner only) — hides from feed, persists past 24h expiry',
+    description: 'Once archived, the story is excluded from /api/stories/feed and /api/stories/mine but is retained indefinitely in /api/stories/archive.',
+  })
+  archiveStory(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: SupabaseJwtPayload) {
+    return this.storiesService.archiveStory(id, user.sub);
+  }
+
+  @Delete(':id/archive')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Unarchive a story (owner only)' })
+  unarchiveStory(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: SupabaseJwtPayload) {
+    return this.storiesService.unarchiveStory(id, user.sub);
   }
 }

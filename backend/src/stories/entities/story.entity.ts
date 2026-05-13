@@ -30,6 +30,14 @@ export class Story {
   @Column({ type: 'timestamptz', name: 'expires_at' })
   expiresAt: Date;
 
+  /**
+   * When true, the story is excluded from the feed and from the author's
+   * active "my stories" list. Archived stories persist beyond expires_at,
+   * giving the owner a place to keep stories they want to save.
+   */
+  @Column({ type: 'boolean', name: 'is_archived', default: false })
+  isArchived: boolean;
+
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'author_id' })
   author: User;

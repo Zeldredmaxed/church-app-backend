@@ -43,7 +43,7 @@ export class StoriesService {
               EXISTS(SELECT 1 FROM public.story_views WHERE story_id = s.id AND viewer_id = $1) AS is_viewed_by_me
        FROM public.stories s
        JOIN public.users u ON u.id = s.author_id
-       WHERE s.expires_at > now()
+       WHERE s.expires_at > now() AND s.is_archived = false
        ORDER BY s.created_at ASC`,
       [userId],
     );
@@ -121,11 +121,56 @@ export class StoriesService {
               (SELECT COUNT(*)::int FROM public.story_views WHERE story_id = s.id) AS view_count
        FROM public.stories s
        JOIN public.users u ON u.id = s.author_id
-       WHERE s.author_id = $1 AND s.expires_at > now()
+       WHERE s.author_id = $1 AND s.expires_at > now() AND s.is_archived = false
        ORDER BY s.created_at DESC`,
       [userId],
     );
 
+    return rows.map((r: any) => this.mapStory(r));
+  }
+
+  /**
+   * Toggles is_archived on a story. Owner-only — the UPDATE WHERE clause
+   * filters by author_id so a non-author update affects zero rows.
+   */
+  private async setArchived(storyId: string, userId: string, isArchived: boolean) {
+    const { queryRunner } = this.getRlsContext();
+    const result = await queryRunner.query(
+      `UPDATE public.stories SET is_archived = $1
+       WHERE id = $2 AND author_id = $3 RETURNING id`,
+      [isArchived, storyId, userId],
+    );
+    if (!result.length) {
+      throw new NotFoundException('Story not found');
+    }
+    return { archived: isArchived };
+  }
+
+  archiveStory(storyId: string, userId: string) {
+    return this.setArchived(storyId, userId, true);
+  }
+
+  unarchiveStory(storyId: string, userId: string) {
+    return this.setArchived(storyId, userId, false);
+  }
+
+  /**
+   * Returns the caller's archived stories. Archived stories persist beyond
+   * the 24h expiry — that's the whole point of archiving.
+   */
+  async getArchivedStories(userId: string) {
+    const { queryRunner } = this.getRlsContext();
+    const rows = await queryRunner.query(
+      `SELECT s.id, s.author_id, s.media_url, s.media_type, s.text, s.background_color,
+              s.created_at, s.expires_at,
+              u.full_name, u.avatar_url,
+              (SELECT COUNT(*)::int FROM public.story_views WHERE story_id = s.id) AS view_count
+       FROM public.stories s
+       JOIN public.users u ON u.id = s.author_id
+       WHERE s.author_id = $1 AND s.is_archived = true
+       ORDER BY s.created_at DESC`,
+      [userId],
+    );
     return rows.map((r: any) => this.mapStory(r));
   }
 
