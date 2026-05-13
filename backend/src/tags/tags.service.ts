@@ -27,6 +27,7 @@ export class TagsService {
       tenantId: r.tenant_id,
       name: r.name,
       color: r.color,
+      grantsRole: r.grants_role ?? null,
       memberCount: Number(r.member_count ?? 0),
       createdAt: r.created_at,
     }));
@@ -39,6 +40,7 @@ export class TagsService {
         tenantId: currentTenantId!,
         name: dto.name,
         color: dto.color,
+        grantsRole: dto.grantsRole ?? null,
       });
       return await queryRunner.manager.save(Tag, tag);
     } catch (err: any) {
@@ -54,6 +56,11 @@ export class TagsService {
     const updates: any = {};
     if (dto.name !== undefined) updates.name = dto.name;
     if (dto.color !== undefined) updates.color = dto.color;
+    // grantsRole supports explicit null to clear the grant. Note: this does
+    // NOT retroactively demote existing assignees — clearing the config means
+    // future un-assignments won't trigger a role check, but anyone already
+    // promoted via this tag keeps their current tenant_memberships.role.
+    if (dto.grantsRole !== undefined) updates.grantsRole = dto.grantsRole;
 
     const result = await queryRunner.manager.update(Tag, { id }, updates);
     if (result.affected === 0) throw new NotFoundException('Tag not found');
@@ -66,8 +73,26 @@ export class TagsService {
     if (result.affected === 0) throw new NotFoundException('Tag not found');
   }
 
+  /**
+   * Assign a tag to N users. Idempotent — re-assigning is a no-op. If the
+   * tag has grants_role set, each user's tenant_memberships.role is updated
+   * to that role. Tag-granted role overwrites the current role unconditionally
+   * (the model is intentionally simple — no role hierarchy logic).
+   *
+   * All writes happen inside the request transaction (RLS interceptor opens
+   * one), so either every assignment + role upsert commits, or nothing does.
+   */
   async assignTag(tagId: string, dto: AssignTagDto, assignedBy: string) {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, currentTenantId } = this.getRlsContext();
+
+    // Fetch the tag's grants_role once — applies to every user in this batch.
+    const [tag] = await queryRunner.query(
+      `SELECT grants_role FROM public.tags WHERE id = $1`,
+      [tagId],
+    );
+    if (!tag) throw new NotFoundException('Tag not found');
+    const grantsRole: string | null = tag.grants_role ?? null;
+
     for (const userId of dto.userIds) {
       await queryRunner.query(
         `INSERT INTO public.member_tags (tag_id, user_id, assigned_by)
@@ -75,14 +100,74 @@ export class TagsService {
          ON CONFLICT (tag_id, user_id) DO NOTHING`,
         [tagId, userId, assignedBy],
       );
+
+      if (grantsRole) {
+        // Only update if the user is actually a member of this tenant.
+        // Filtering by tenant_id + user_id means a no-op for non-members
+        // (e.g., stale UI calling with someone who left the church).
+        await queryRunner.query(
+          `UPDATE public.tenant_memberships
+           SET role = $1
+           WHERE tenant_id = $2 AND user_id = $3`,
+          [grantsRole, currentTenantId, userId],
+        );
+      }
     }
+
     return { assigned: dto.userIds.length };
   }
 
-  async removeTagFromMember(tagId: string, userId: string) {
-    const { queryRunner } = this.getRlsContext();
+  /**
+   * Remove a user from a tag. Idempotent — removing someone who isn't tagged
+   * is a no-op (no 404).
+   *
+   * If the tag granted a role:
+   *   1. Check whether the user has another tag granting the same role.
+   *   2. If yes → leave their tenant_memberships.role alone.
+   *   3. If no AND their current role matches the grant → demote to 'member'.
+   *
+   * Step (3)'s "current role matches" guard is a foot-gun mitigation: if
+   * something else gave them a different role (manual promotion, another
+   * tag granting a different role), we don't clobber it.
+   */
+  async removeTagFromMember(tagId: string, userId: string): Promise<{ removed: boolean }> {
+    const { queryRunner, currentTenantId } = this.getRlsContext();
+
+    const [tag] = await queryRunner.query(
+      `SELECT grants_role FROM public.tags WHERE id = $1`,
+      [tagId],
+    );
+    const grantsRole: string | null = tag?.grants_role ?? null;
+
     const result = await queryRunner.manager.delete(MemberTag, { tagId, userId });
-    if (result.affected === 0) throw new NotFoundException('Tag assignment not found');
+    const removed = (result.affected ?? 0) > 0;
+
+    if (removed && grantsRole) {
+      // Does the user still hold this role via another tag in this tenant?
+      const [other] = await queryRunner.query(
+        `SELECT 1
+         FROM public.member_tags mt
+         JOIN public.tags t ON t.id = mt.tag_id
+         WHERE mt.user_id = $1
+           AND t.tenant_id = $2
+           AND t.grants_role = $3
+         LIMIT 1`,
+        [userId, currentTenantId, grantsRole],
+      );
+
+      if (!other) {
+        // Demote only if their current role matches the grant — protects
+        // any role set by another path from being clobbered.
+        await queryRunner.query(
+          `UPDATE public.tenant_memberships
+           SET role = 'member'
+           WHERE tenant_id = $1 AND user_id = $2 AND role = $3`,
+          [currentTenantId, userId, grantsRole],
+        );
+      }
+    }
+
+    return { removed };
   }
 
   async getMemberTags(userId: string) {

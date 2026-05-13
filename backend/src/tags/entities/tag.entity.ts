@@ -14,6 +14,15 @@ export class Tag {
   @Column({ type: 'text', default: '#6366f1' })
   color: string;
 
+  /**
+   * When set, assigning this tag promotes the user to this role in
+   * tenant_memberships; removing the tag (if no other tag grants the same
+   * role) demotes them back to 'member'. NULL = plain label tag with no
+   * role side-effect.
+   */
+  @Column({ type: 'text', nullable: true, name: 'grants_role' })
+  grantsRole: 'admin' | 'pastor' | 'moderator' | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }
