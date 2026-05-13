@@ -5,13 +5,25 @@ import { MemberTag } from './entities/member-tag.entity';
 import { CreateTagDto } from './dto/create-tag.dto';
 import { UpdateTagDto } from './dto/update-tag.dto';
 import { AssignTagDto } from './dto/assign-tag.dto';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class TagsService {
+  constructor(private readonly audit: AuditService) {}
+
   private getRlsContext() {
     const ctx = rlsStorage.getStore();
     if (!ctx) throw new InternalServerErrorException('RLS context unavailable');
     return ctx;
+  }
+
+  private async resolveName(userId: string): Promise<string> {
+    const ctx = this.getRlsContext();
+    const [row] = await ctx.queryRunner.query(
+      `SELECT full_name FROM public.users WHERE id = $1`,
+      [userId],
+    );
+    return row?.full_name ?? 'Someone';
   }
 
   async getTags() {
@@ -35,6 +47,7 @@ export class TagsService {
 
   async createTag(dto: CreateTagDto, userId: string) {
     const { queryRunner, currentTenantId } = this.getRlsContext();
+    let saved: Tag;
     try {
       const tag = queryRunner.manager.create(Tag, {
         tenantId: currentTenantId!,
@@ -42,17 +55,37 @@ export class TagsService {
         color: dto.color,
         grantsRole: dto.grantsRole ?? null,
       });
-      return await queryRunner.manager.save(Tag, tag);
+      saved = await queryRunner.manager.save(Tag, tag);
     } catch (err: any) {
       if (err.code === '23505') {
         throw new ConflictException('A tag with this name already exists');
       }
       throw err;
     }
+
+    const actorName = await this.resolveName(userId);
+    await this.audit.log({
+      action: 'tag.created',
+      resourceType: 'tag',
+      resourceId: saved.id,
+      summary: `${actorName} created tag "${saved.name}"${saved.grantsRole ? ` (grants ${saved.grantsRole})` : ''}`,
+      metadata: {
+        name: saved.name,
+        color: saved.color,
+        grantsRole: saved.grantsRole,
+      },
+    });
+
+    return saved;
   }
 
   async updateTag(id: string, dto: UpdateTagDto) {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, userId } = this.getRlsContext();
+
+    // Capture the pre-update state so the audit diff is meaningful.
+    const before = await queryRunner.manager.findOne(Tag, { where: { id } });
+    if (!before) throw new NotFoundException('Tag not found');
+
     const updates: any = {};
     if (dto.name !== undefined) updates.name = dto.name;
     if (dto.color !== undefined) updates.color = dto.color;
@@ -64,13 +97,45 @@ export class TagsService {
 
     const result = await queryRunner.manager.update(Tag, { id }, updates);
     if (result.affected === 0) throw new NotFoundException('Tag not found');
-    return queryRunner.manager.findOneOrFail(Tag, { where: { id } });
+    const after = await queryRunner.manager.findOneOrFail(Tag, { where: { id } });
+
+    const actorName = await this.resolveName(userId);
+    await this.audit.log({
+      action: 'tag.updated',
+      resourceType: 'tag',
+      resourceId: id,
+      summary: `${actorName} updated tag "${after.name}"`,
+      metadata: {
+        before: { name: before.name, color: before.color, grantsRole: before.grantsRole },
+        after: { name: after.name, color: after.color, grantsRole: after.grantsRole },
+        changedFields: Object.keys(updates),
+      },
+    });
+
+    return after;
   }
 
   async deleteTag(id: string) {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, userId } = this.getRlsContext();
+
+    const before = await queryRunner.manager.findOne(Tag, { where: { id } });
+    if (!before) throw new NotFoundException('Tag not found');
+
     const result = await queryRunner.manager.delete(Tag, { id });
     if (result.affected === 0) throw new NotFoundException('Tag not found');
+
+    const actorName = await this.resolveName(userId);
+    await this.audit.log({
+      action: 'tag.deleted',
+      resourceType: 'tag',
+      resourceId: id,
+      summary: `${actorName} deleted tag "${before.name}"`,
+      metadata: {
+        name: before.name,
+        color: before.color,
+        grantsRole: before.grantsRole,
+      },
+    });
   }
 
   /**
@@ -85,15 +150,25 @@ export class TagsService {
   async assignTag(tagId: string, dto: AssignTagDto, assignedBy: string) {
     const { queryRunner, currentTenantId } = this.getRlsContext();
 
-    // Fetch the tag's grants_role once — applies to every user in this batch.
+    // Fetch the tag once — applies to every user in this batch.
     const [tag] = await queryRunner.query(
-      `SELECT grants_role FROM public.tags WHERE id = $1`,
+      `SELECT name, grants_role FROM public.tags WHERE id = $1`,
       [tagId],
     );
     if (!tag) throw new NotFoundException('Tag not found');
     const grantsRole: string | null = tag.grants_role ?? null;
+    const tagName: string = tag.name;
+    const actorName = await this.resolveName(assignedBy);
 
     for (const userId of dto.userIds) {
+      // Was the user already in the tag? Affects whether we emit
+      // tag.member_added (real net-new) vs skip (idempotent re-assign).
+      const [existing] = await queryRunner.query(
+        `SELECT 1 FROM public.member_tags WHERE tag_id = $1 AND user_id = $2`,
+        [tagId, userId],
+      );
+      const wasAlreadyMember = !!existing;
+
       await queryRunner.query(
         `INSERT INTO public.member_tags (tag_id, user_id, assigned_by)
          VALUES ($1, $2, $3)
@@ -101,7 +176,14 @@ export class TagsService {
         [tagId, userId, assignedBy],
       );
 
+      let priorRole: string | null = null;
       if (grantsRole) {
+        const [m] = await queryRunner.query(
+          `SELECT role FROM public.tenant_memberships
+            WHERE tenant_id = $1 AND user_id = $2`,
+          [currentTenantId, userId],
+        );
+        priorRole = m?.role ?? null;
         // Only update if the user is actually a member of this tenant.
         // Filtering by tenant_id + user_id means a no-op for non-members
         // (e.g., stale UI calling with someone who left the church).
@@ -111,6 +193,39 @@ export class TagsService {
            WHERE tenant_id = $2 AND user_id = $3`,
           [grantsRole, currentTenantId, userId],
         );
+      }
+
+      const targetName = await this.resolveName(userId);
+
+      if (!wasAlreadyMember) {
+        await this.audit.log({
+          action: 'tag.member_added',
+          resourceType: 'tag',
+          resourceId: tagId,
+          targetUserId: userId,
+          summary: `${actorName} added ${targetName} to tag "${tagName}"`,
+          metadata: { tagName, grantsRole },
+        });
+      }
+
+      // member.role_changed only fires when there was an actual change.
+      // priorRole !== grantsRole skips redundant audit rows for re-assigns
+      // of users already at the granted role.
+      if (grantsRole && priorRole && priorRole !== grantsRole) {
+        await this.audit.log({
+          action: 'member.role_changed',
+          resourceType: 'user',
+          resourceId: userId,
+          targetUserId: userId,
+          summary: `${actorName} changed ${targetName}'s role from ${priorRole} to ${grantsRole} via tag "${tagName}"`,
+          metadata: {
+            from: priorRole,
+            to: grantsRole,
+            via: 'tag',
+            tagId,
+            tagName,
+          },
+        });
       }
     }
 
@@ -183,25 +298,40 @@ export class TagsService {
       [currentTenantId],
     );
 
-    return {
-      upgraded: rows.map((r: any) => ({
-        userId: r.user_id,
-        toRole: r.new_role,
-      })),
-    };
+    const upgraded: Array<{ userId: string; toRole: string }> = rows.map((r: any) => ({
+      userId: r.user_id,
+      toRole: r.new_role,
+    }));
+
+    const actorName = await this.resolveName(this.getRlsContext().userId);
+    await this.audit.log({
+      action: 'tag.reconcile_roles_ran',
+      resourceType: 'tag',
+      summary: `${actorName} ran the tag-role reconciler — ${upgraded.length} member(s) upgraded`,
+      metadata: {
+        upgradedCount: upgraded.length,
+        upgradedUserIds: upgraded.map(u => u.userId),
+        upgrades: upgraded,
+      },
+    });
+
+    return { upgraded };
   }
 
   async removeTagFromMember(tagId: string, userId: string): Promise<{ removed: boolean }> {
-    const { queryRunner, currentTenantId } = this.getRlsContext();
+    const { queryRunner, currentTenantId, userId: actorId } = this.getRlsContext();
 
     const [tag] = await queryRunner.query(
-      `SELECT grants_role FROM public.tags WHERE id = $1`,
+      `SELECT name, grants_role FROM public.tags WHERE id = $1`,
       [tagId],
     );
     const grantsRole: string | null = tag?.grants_role ?? null;
+    const tagName: string = tag?.name ?? '(unknown)';
 
     const result = await queryRunner.manager.delete(MemberTag, { tagId, userId });
     const removed = (result.affected ?? 0) > 0;
+
+    let roleDemoted: { from: string; to: 'member' } | null = null;
 
     if (removed && grantsRole) {
       // Does the user still hold this role via another tag in this tenant?
@@ -219,12 +349,46 @@ export class TagsService {
       if (!other) {
         // Demote only if their current role matches the grant — protects
         // any role set by another path from being clobbered.
-        await queryRunner.query(
+        const demoteResult = await queryRunner.query(
           `UPDATE public.tenant_memberships
            SET role = 'member'
-           WHERE tenant_id = $1 AND user_id = $2 AND role = $3`,
+           WHERE tenant_id = $1 AND user_id = $2 AND role = $3
+           RETURNING $3 AS from_role`,
           [currentTenantId, userId, grantsRole],
         );
+        if (demoteResult.length > 0) {
+          roleDemoted = { from: grantsRole, to: 'member' };
+        }
+      }
+    }
+
+    if (removed) {
+      const actorName = await this.resolveName(actorId);
+      const targetName = await this.resolveName(userId);
+      await this.audit.log({
+        action: 'tag.member_removed',
+        resourceType: 'tag',
+        resourceId: tagId,
+        targetUserId: userId,
+        summary: `${actorName} removed ${targetName} from tag "${tagName}"`,
+        metadata: { tagName, grantsRole },
+      });
+
+      if (roleDemoted) {
+        await this.audit.log({
+          action: 'member.role_changed',
+          resourceType: 'user',
+          resourceId: userId,
+          targetUserId: userId,
+          summary: `${actorName} changed ${targetName}'s role from ${roleDemoted.from} to ${roleDemoted.to} via tag "${tagName}" removal`,
+          metadata: {
+            from: roleDemoted.from,
+            to: roleDemoted.to,
+            via: 'tag_removal',
+            tagId,
+            tagName,
+          },
+        });
       }
     }
 

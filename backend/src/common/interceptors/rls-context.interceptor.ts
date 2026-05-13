@@ -90,6 +90,7 @@ export class RlsContextInterceptor implements NestInterceptor {
           queryRunner,
           userId: user.sub,
           currentTenantId: user.app_metadata?.current_tenant_id ?? null,
+          request,
         };
 
         // Run the rest of the request inside this AsyncLocalStorage context

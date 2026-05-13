@@ -13,6 +13,8 @@ import { TenantsModule } from './tenants/tenants.module';
 import { UsersModule } from './users/users.module';
 import { MeActivityModule } from './me-activity/me-activity.module';
 import { UserAppActivity } from './me-activity/entities/user-app-activity.entity';
+import { AuditModule } from './audit/audit.module';
+import { AuditLogEntry } from './audit/entities/audit-log-entry.entity';
 import { MembershipsModule } from './memberships/memberships.module';
 import { PostsModule } from './posts/posts.module';
 import { InvitationsModule } from './invitations/invitations.module';
@@ -177,6 +179,7 @@ import { NotificationPreference } from './notifications/entities/notification-pr
           DeviceToken,
           NotificationPreference,
           UserAppActivity,
+          AuditLogEntry,
         ],
 
         // CRITICAL: synchronize must ALWAYS be false.
@@ -260,6 +263,7 @@ import { NotificationPreference } from './notifications/entities/notification-pr
     TenantsModule,
     UsersModule,
     MeActivityModule,
+    AuditModule,
     MembershipsModule,
     PostsModule,
     InvitationsModule,

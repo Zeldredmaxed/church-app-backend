@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from 'async_hooks';
+import type { Request } from 'express';
 import { QueryRunner } from 'typeorm';
+import type { SupabaseJwtPayload } from '../types/jwt-payload.type';
 
 /**
  * Carries the RLS-scoped QueryRunner and authenticated user context
@@ -20,6 +22,12 @@ export interface RlsContext {
   userId: string;
   /** The tenant the user is currently acting within. NULL = no context set yet. */
   currentTenantId: string | null;
+  /**
+   * The Express request for this turn. Services that need IP / User-Agent /
+   * arbitrary header context (e.g. AuditService) can read it here without
+   * accepting `req` as an explicit parameter on every call.
+   */
+  request: Request & { user?: SupabaseJwtPayload };
 }
 
 export const rlsStorage = new AsyncLocalStorage<RlsContext>();
