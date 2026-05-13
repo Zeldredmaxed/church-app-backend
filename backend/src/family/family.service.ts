@@ -1,7 +1,5 @@
 import { Injectable, Logger, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { InjectQueue } from '@nestjs/bullmq';
-import { Queue } from 'bullmq';
 import {
   Relationship,
   ALL_RELATIONSHIPS,
@@ -9,7 +7,7 @@ import {
   SPOUSE_PROPAGATION,
   resolveLabel,
 } from './family-types';
-import { NotificationType } from '../notifications/notifications.types';
+import { ExpoPushService } from '../notifications/expo-push.service';
 
 /** Grouped relationship types for the mobile picker */
 const RELATIONSHIP_TYPES = [
@@ -59,7 +57,7 @@ export class FamilyService {
 
   constructor(
     private readonly dataSource: DataSource,
-    @InjectQueue('notifications') private readonly notificationsQueue: Queue,
+    private readonly expoPushService: ExpoPushService,
   ) {}
 
   // ────────────────────────────────────────────────────────
@@ -148,19 +146,50 @@ export class FamilyService {
       [tenantId, requesterId, targetUserId, relationship, label],
     );
 
-    // Dispatch notification (in-app row + push) via the BullMQ pipeline.
-    // The processor builds the title/body and resolves the requester name,
-    // and ExpoPushService creates the notifications row + pushes to all
-    // active device tokens (with per-type preference + invalid-token cleanup).
-    await this.notificationsQueue.add('notification', {
-      type: NotificationType.FAMILY_REQUEST,
-      tenantId,
-      recipientUserId: targetUserId,
-      actorUserId: requesterId,
+    // Notification: do it synchronously rather than via the BullMQ queue.
+    // The queue flow has been unreliable for this code path (testers reported
+    // notifications missing and we observed zero notification rows landing
+    // for recent family_requests). Direct INSERT guarantees the in-app row,
+    // and we fire the Expo push inline as a separate fire-and-forget call.
+    const [requester] = await this.dataSource.query(
+      `SELECT full_name FROM public.users WHERE id = $1`,
+      [requesterId],
+    );
+    const requesterName = requester?.full_name ?? 'Someone';
+    const title = 'Family Connection Request';
+    const body = `${requesterName} wants to add you as their ${label}`;
+    // Payload mobile expects: type + screen for the type-based fallback +
+    // deep-link, plus the original fields we already stored (requestId,
+    // requesterId, relationship) so the Family screen can render quick
+    // approve/deny actions without an extra fetch.
+    const notificationData = {
+      type: 'family_request',
+      screen: 'Family',
+      params: { requestId: row.id },
       requestId: row.id,
+      requesterId,
       relationship,
-      relationshipLabel: label,
-    });
+    };
+
+    await this.dataSource.query(
+      `INSERT INTO public.notifications
+        (tenant_id, recipient_id, sender_id, type, title, body, data, payload)
+       VALUES ($1, $2, $3, 'family_request', $4, $5, $6::jsonb, '{}'::jsonb)`,
+      [tenantId, targetUserId, requesterId, title, body, JSON.stringify(notificationData)],
+    );
+
+    // Fire-and-forget push — don't block the response on Expo or token
+    // lookup, and don't fail the request if the push pipeline hiccups.
+    this.expoPushService
+      .sendPushOnly({
+        recipientId: targetUserId,
+        senderId: requesterId,
+        type: 'family_request',
+        title,
+        body,
+        data: notificationData,
+      })
+      .catch(err => this.logger.warn(`family_request push failed: ${err.message}`));
 
     return this.mapRow(row);
   }
@@ -238,16 +267,40 @@ export class FamilyService {
     // 3. Run inference engine
     await this.runInference(tenantId, req.user_id, req.related_user_id, rel, requestId);
 
-    // 4. Notify requester of acceptance — queue, so push also fires.
-    await this.notificationsQueue.add('notification', {
+    // 4. Notify requester of acceptance (synchronous insert + inline push,
+    //    same pattern as sendRequest for reliability).
+    const [accepter] = await this.dataSource.query(
+      `SELECT full_name FROM public.users WHERE id = $1`,
+      [req.related_user_id],
+    );
+    const accepterName = accepter?.full_name ?? 'Someone';
+    const acceptTitle = 'Family Connection Accepted';
+    const acceptBody = `${accepterName} accepted your family request (${forwardLabel})`;
+    const acceptData = {
       type: 'family_accepted',
-      tenantId,
-      recipientUserId: req.user_id,
-      actorUserId: req.related_user_id,
+      screen: 'Family',
+      params: { connectionId: requestId },
       connectionId: requestId,
       relationship: rel,
-      relationshipLabel: forwardLabel,
-    });
+    };
+
+    await this.dataSource.query(
+      `INSERT INTO public.notifications
+        (tenant_id, recipient_id, sender_id, type, title, body, data, payload)
+       VALUES ($1, $2, $3, 'family_accepted', $4, $5, $6::jsonb, '{}'::jsonb)`,
+      [tenantId, req.user_id, req.related_user_id, acceptTitle, acceptBody, JSON.stringify(acceptData)],
+    );
+
+    this.expoPushService
+      .sendPushOnly({
+        recipientId: req.user_id,
+        senderId: req.related_user_id,
+        type: 'family_accepted',
+        title: acceptTitle,
+        body: acceptBody,
+        data: acceptData,
+      })
+      .catch(err => this.logger.warn(`family_accepted push failed: ${err.message}`));
 
     return { status: 'accepted' };
   }
@@ -328,9 +381,12 @@ export class FamilyService {
       return { root: null, isPublic: false, totalMembers: 0 };
     }
 
-    // Get ALL accepted connections from this user with visibility info
+    // Pull all accepted connections from this user, including the
+    // is_inferred flag and inferred_via source so the mobile can render
+    // derived (in-law, transitive) relationships with isDerived: true.
     const rows = await this.dataSource.query(
       `SELECT fc.related_user_id, fc.relationship, fc.relationship_label,
+              fc.is_inferred, fc.inferred_via,
               u.full_name, u.avatar_url,
               COALESCE(fv.is_public, true) AS is_public
        FROM public.family_connections fc
@@ -351,30 +407,41 @@ export class FamilyService {
         color: RELATIONSHIP_COLORS[relationship] ?? '#6B7280',
         relationship,
         label: r.relationship_label,
+        // Inferred rows (e.g., parent_in_law derived from a spouse edge) carry
+        // is_inferred = true in the DB. Surface as isDerived so the mobile
+        // can style/badge them differently from direct relationships.
+        isDerived: r.is_inferred === true,
+        derivedVia: r.inferred_via ?? null,
         children: [] as any[],
         parents: [] as any[],
       };
     };
 
-    // Group by relationship
+    // Group rows by relationship type
     const byRel: Record<string, any[]> = {};
     for (const r of rows) {
       if (!byRel[r.relationship]) byRel[r.relationship] = [];
       byRel[r.relationship].push(r);
     }
 
-    // Build hierarchical tree
-    const spouseRow = (byRel['spouse'] ?? [])[0];
-    const children = (byRel['child'] ?? []).map((r: any) => mapNode(r, 'child'));
-    const parents = (byRel['parent'] ?? []).map((r: any) => {
-      const node = mapNode(r, 'parent');
-      // Fetch grandparents (parent's parents) — 1 level up
-      const grandparents = (byRel['grandparent'] ?? []).map((g: any) => mapNode(g, 'grandparent'));
-      node.parents = grandparents;
-      // Siblings are parent's other children
-      node.children = (byRel['sibling'] ?? []).map((s: any) => mapNode(s, 'sibling'));
+    // Build each relationship bucket. Every one of the 13 relationship types
+    // gets its own array — previously only spouse/child/parent/sibling/
+    // grandparent were rendered, which silently dropped uncles/aunts/nephews/
+    // cousins and all the *_in_law derivatives. Mobile was reporting empty
+    // in-law branches; this is the root cause.
+    const bucket = (rel: Relationship) =>
+      (byRel[rel] ?? []).map((r: any) => mapNode(r, rel));
+
+    const parentsArr = bucket('parent').map(node => {
+      // Keep the legacy nesting under each parent (grandparents + siblings as
+      // children of the parent node) so existing mobile renderers don't break.
+      // New top-level arrays carry the full data too.
+      node.parents = bucket('grandparent');
+      node.children = bucket('sibling');
       return node;
     });
+
+    const spouseNode = bucket('spouse')[0] ?? null;
 
     const root = {
       id: rootRow?.id ?? userId,
@@ -383,17 +450,26 @@ export class FamilyService {
       isPrivate: false,
       color: RELATIONSHIP_COLORS['self'],
       relationship: 'self',
-      children,
-      parents,
-      spouse: spouseRow ? {
-        id: spouseRow.related_user_id,
-        name: spouseRow.is_public ? spouseRow.full_name : null,
-        avatarUrl: spouseRow.is_public ? spouseRow.avatar_url : null,
-        isPrivate: !spouseRow.is_public,
-        color: RELATIONSHIP_COLORS['spouse'],
-        relationship: 'spouse',
-        label: spouseRow.relationship_label,
-      } : null,
+      isDerived: false,
+
+      // Legacy fields — keep so existing mobile renderers don't break.
+      children: bucket('child'),
+      parents: parentsArr,
+      spouse: spouseNode,
+
+      // New flat buckets — one per relationship type. Mobile can render
+      // these as horizontal scrollers / additional sections without doing
+      // its own grouping.
+      siblings: bucket('sibling'),
+      grandparents: bucket('grandparent'),
+      grandchildren: bucket('grandchild'),
+      unclesAunts: bucket('uncle_aunt'),
+      nephewsNieces: bucket('nephew_niece'),
+      cousins: bucket('cousin'),
+      parentsInLaw: bucket('parent_in_law'),
+      childrenInLaw: bucket('child_in_law'),
+      siblingsInLaw: bucket('sibling_in_law'),
+      cousinsInLaw: bucket('cousin_in_law'),
     };
 
     return {

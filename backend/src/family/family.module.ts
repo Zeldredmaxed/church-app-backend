@@ -1,13 +1,11 @@
 import { Module } from '@nestjs/common';
-import { BullModule } from '@nestjs/bullmq';
 import { FamilyController } from './family.controller';
 import { FamilyService } from './family.service';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [
-    BullModule.registerQueue({ name: 'notifications' }),
-  ],
+  imports: [NotificationsModule],
   controllers: [FamilyController],
   providers: [FamilyService, RlsContextInterceptor],
 })

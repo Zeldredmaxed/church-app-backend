@@ -106,6 +106,61 @@ export class ExpoPushService {
   }
 
   /**
+   * Send a push notification to a user WITHOUT creating an in-app
+   * notifications row. Use when the caller has already inserted the
+   * notification synchronously (e.g., family service does its own INSERT
+   * for correctness guarantees and just needs the push delivered).
+   *
+   * Respects per-type push preference and active device tokens. Returns
+   * silently if there's nothing to send.
+   */
+  async sendPushOnly(params: {
+    recipientId: string;
+    senderId?: string;
+    type: string;
+    title: string;
+    body: string;
+    data?: Record<string, any>;
+  }): Promise<void> {
+    if (params.senderId && params.recipientId === params.senderId) return;
+
+    const pref = await this.dataSource.manager.findOne(NotificationPreference, {
+      where: { userId: params.recipientId, type: params.type },
+    });
+    if (pref && !pref.pushEnabled) return;
+
+    const devices = await this.dataSource.manager.find(DeviceToken, {
+      where: { userId: params.recipientId, isActive: true },
+    });
+    if (devices.length === 0) {
+      this.logger.log(
+        `Push skipped for user ${params.recipientId} (${params.type}) — no active device tokens registered`,
+      );
+      return;
+    }
+
+    const validDevices = devices.filter(d => Expo.isExpoPushToken(d.token));
+    if (validDevices.length === 0) return;
+
+    const [{ count }] = await this.dataSource.query(
+      `SELECT COUNT(*)::int AS count FROM public.notifications WHERE recipient_id = $1 AND read_at IS NULL`,
+      [params.recipientId],
+    );
+
+    const messages: ExpoPushMessage[] = validDevices.map(d => ({
+      to: d.token,
+      title: params.title,
+      body: params.body,
+      data: params.data,
+      sound: 'default' as const,
+      badge: Number(count),
+      channelId: this.getChannelId(params.type),
+    }));
+
+    await this.sendMessages(messages, validDevices);
+  }
+
+  /**
    * Send a notification to multiple users (bulk).
    * Used for church-wide announcements, event notifications, etc.
    */
