@@ -130,6 +130,67 @@ export class TagsService {
    * something else gave them a different role (manual promotion, another
    * tag granting a different role), we don't clobber it.
    */
+  /**
+   * Reconciler — fix tag-granted role drift that can happen during a
+   * deploy window (where a member_tags row gets inserted by the old code
+   * path before the new tenant_memberships role-upsert is live). Or any
+   * other case where the role didn't land in lock-step with the tag.
+   *
+   * Conservative policy: ONLY promote users from 'member'. Never
+   * demote, never overwrite a user who's already privileged (admin /
+   * pastor / accountant / worship_leader / moderator). This way running
+   * the reconciler is always safe and never undoes a manual assignment.
+   *
+   * If a user has multiple tags granting different roles, deterministic
+   * priority: admin > pastor > moderator. That's the intuitive ordering
+   * of authority and avoids surprising "alphabetical wins" behavior.
+   */
+  async reconcileRoles(): Promise<{ upgraded: Array<{ userId: string; toRole: string }> }> {
+    const { queryRunner, currentTenantId } = this.getRlsContext();
+
+    const rows = await queryRunner.query(
+      `
+      WITH user_grants AS (
+        SELECT DISTINCT mt.user_id, t.grants_role
+        FROM public.member_tags mt
+        JOIN public.tags t ON t.id = mt.tag_id
+        WHERE t.tenant_id = $1 AND t.grants_role IS NOT NULL
+      ),
+      ranked AS (
+        SELECT user_id, grants_role,
+          ROW_NUMBER() OVER (
+            PARTITION BY user_id
+            ORDER BY CASE grants_role
+              WHEN 'admin' THEN 1
+              WHEN 'pastor' THEN 2
+              WHEN 'moderator' THEN 3
+              ELSE 99
+            END
+          ) AS rn
+        FROM user_grants
+      ),
+      target AS (
+        SELECT user_id, grants_role FROM ranked WHERE rn = 1
+      )
+      UPDATE public.tenant_memberships tm
+      SET role = tgt.grants_role
+      FROM target tgt
+      WHERE tm.tenant_id = $1
+        AND tm.user_id = tgt.user_id
+        AND tm.role = 'member'
+      RETURNING tm.user_id, tgt.grants_role AS new_role
+      `,
+      [currentTenantId],
+    );
+
+    return {
+      upgraded: rows.map((r: any) => ({
+        userId: r.user_id,
+        toRole: r.new_role,
+      })),
+    };
+  }
+
   async removeTagFromMember(tagId: string, userId: string): Promise<{ removed: boolean }> {
     const { queryRunner, currentTenantId } = this.getRlsContext();
 

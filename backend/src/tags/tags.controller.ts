@@ -1,10 +1,11 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, Query, ParseUUIDPipe, UseGuards, UseInterceptors, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse } from '@nestjs/swagger';
 import { TagsService } from './tags.service';
 import { CreateTagDto } from './dto/create-tag.dto';
 import { UpdateTagDto } from './dto/update-tag.dto';
 import { AssignTagDto } from './dto/assign-tag.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -28,6 +29,20 @@ export class TagsController {
   @ApiOperation({ summary: 'Create a tag (admin: manage_members)' })
   createTag(@Body() dto: CreateTagDto, @CurrentUser() user: SupabaseJwtPayload) {
     return this.tagsService.createTag(dto, user.sub);
+  }
+
+  // Static route placed before any :id-param routes so Nest matches it first.
+  @Post('reconcile-roles')
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Reconcile tag-granted roles for the current tenant (admin only)',
+    description: 'For each user with a tag that has grants_role set, ensures tenant_memberships.role is promoted to that grant — but only if the user is currently a plain "member". Never demotes or overwrites an existing privileged role. Use to catch deploy-window or other drift where a tag was assigned but the role upsert did not land. Idempotent.',
+  })
+  @ApiResponse({ status: 200, description: '{ upgraded: [{ userId, toRole }] }' })
+  reconcileRoles() {
+    return this.tagsService.reconcileRoles();
   }
 
   @Patch(':id')
