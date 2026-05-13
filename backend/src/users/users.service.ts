@@ -284,6 +284,7 @@ export class UsersService {
         emailNotifications: true,
         pushNotifications: true,
         smsNotifications: false,
+        inAppNotifications: true,
         updatedAt: new Date(),
       } as UserSettings;
     }
@@ -303,6 +304,7 @@ export class UsersService {
       if (dto.emailNotifications !== undefined) existing.emailNotifications = dto.emailNotifications;
       if (dto.pushNotifications !== undefined) existing.pushNotifications = dto.pushNotifications;
       if (dto.smsNotifications !== undefined) existing.smsNotifications = dto.smsNotifications;
+      if (dto.inAppNotifications !== undefined) existing.inAppNotifications = dto.inAppNotifications;
       return this.dataSource.manager.save(UserSettings, existing);
     }
 
@@ -311,6 +313,7 @@ export class UsersService {
       emailNotifications: dto.emailNotifications ?? true,
       pushNotifications: dto.pushNotifications ?? true,
       smsNotifications: dto.smsNotifications ?? false,
+      inAppNotifications: dto.inAppNotifications ?? true,
     });
     return this.dataSource.manager.save(UserSettings, settings);
   }
