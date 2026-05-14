@@ -60,8 +60,9 @@ export class FollowsController {
   getFollowers(
     @Param('id', ParseUUIDPipe) userId: string,
     @Query() query: PaginationDto,
+    @CurrentUser() viewer: SupabaseJwtPayload,
   ) {
-    return this.followsService.getFollowers(userId, query.limit, query.offset);
+    return this.followsService.getFollowers(userId, viewer.sub, query.limit, query.offset);
   }
 
   @Get(':id/following')
@@ -70,7 +71,8 @@ export class FollowsController {
   getFollowing(
     @Param('id', ParseUUIDPipe) userId: string,
     @Query() query: PaginationDto,
+    @CurrentUser() viewer: SupabaseJwtPayload,
   ) {
-    return this.followsService.getFollowing(userId, query.limit, query.offset);
+    return this.followsService.getFollowing(userId, viewer.sub, query.limit, query.offset);
   }
 }

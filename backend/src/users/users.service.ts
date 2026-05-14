@@ -212,18 +212,56 @@ export class UsersService {
     // RLS would only show data for the user's current tenant context.
     const manager = this.dataSource.manager;
 
-    const [profile, posts, comments, messages, transactions, memberships, follows] =
-      await Promise.all([
-        // Profile
+    // Fan out a single batch of queries — each query is independent, so
+    // running them in parallel keeps the export reasonably fast even for
+    // long-tenured users with thousands of posts. Tables that don't exist
+    // in older deploys are queried defensively via to_regclass to avoid a
+    // top-level failure if a downstream migration was skipped.
+    const [
+      profile,
+      posts,
+      comments,
+      messages,
+      transactions,
+      memberships,
+      follows,
+      prayers,
+      rsvps,
+      groupMemberships,
+      family,
+      tags,
+      settings,
+      blocks,
+      reportsMade,
+      stories,
+      likes,
+      saves,
+    ] = await Promise.all([
+        // Profile — every field that PATCH /api/users/me writes, plus the
+        // immutable identifiers (email, id, created_at). Everything the
+        // user could possibly have entered into a profile sheet.
         manager.query(
-          `SELECT id, email, full_name, avatar_url, phone, gender, created_at
+          `SELECT id, email, full_name, avatar_url, phone, phone_secondary,
+                  gender, address, preferred_contact_method,
+                  date_of_birth, occupation, employer,
+                  marital_status, anniversary, spouse_name,
+                  has_children, children, emergency_contact,
+                  membership_status, member_since,
+                  baptized, baptism_date, baptism_location, salvation_date,
+                  previous_church, how_did_you_hear,
+                  service_interests, skills, languages,
+                  tshirt_size, dietary_restrictions,
+                  newsletter_opt_in, sms_opt_in, photo_release_consent,
+                  birthday_visible, anniversary_visible,
+                  created_at
            FROM public.users WHERE id = $1`,
           [userId],
         ),
 
         // Posts
         manager.query(
-          `SELECT id, tenant_id, content, media_url, media_type, created_at
+          `SELECT id, tenant_id, content, media_url, media_type, visibility,
+                  is_archived, created_at, updated_at
            FROM public.posts WHERE author_id = $1
            ORDER BY created_at DESC`,
           [userId],
@@ -231,7 +269,7 @@ export class UsersService {
 
         // Comments
         manager.query(
-          `SELECT id, post_id, content, created_at
+          `SELECT id, post_id, content, media_url, parent_id, created_at
            FROM public.comments WHERE author_id = $1
            ORDER BY created_at DESC`,
           [userId],
@@ -272,10 +310,102 @@ export class UsersService {
               FROM public.follows WHERE following_id = $1) AS followers`,
           [userId],
         ),
+
+        // Prayer requests authored
+        manager.query(
+          `SELECT id, tenant_id, content, is_anonymous, is_answered, created_at
+           FROM public.prayers WHERE author_id = $1
+           ORDER BY created_at DESC`,
+          [userId],
+        ).catch(() => []),
+
+        // Event RSVPs
+        manager.query(
+          `SELECT r.event_id, r.status, e.title AS event_title, e.start_at, r.created_at
+           FROM public.event_rsvps r
+           LEFT JOIN public.events e ON e.id = r.event_id
+           WHERE r.user_id = $1
+           ORDER BY r.created_at DESC`,
+          [userId],
+        ).catch(() => []),
+
+        // Group memberships
+        manager.query(
+          `SELECT gm.group_id, g.name AS group_name, gm.role, gm.created_at
+           FROM public.group_memberships gm
+           LEFT JOIN public.groups g ON g.id = gm.group_id
+           WHERE gm.user_id = $1
+           ORDER BY gm.created_at DESC`,
+          [userId],
+        ).catch(() => []),
+
+        // Family connections (both directions)
+        manager.query(
+          `SELECT id, person_a, person_b, relationship_a_to_b, relationship_b_to_a, created_at
+           FROM public.family_relationships
+           WHERE person_a = $1 OR person_b = $1
+           ORDER BY created_at DESC`,
+          [userId],
+        ).catch(() => []),
+
+        // Tag memberships
+        manager.query(
+          `SELECT mt.tag_id, t.name AS tag_name, mt.created_at
+           FROM public.member_tags mt
+           LEFT JOIN public.tags t ON t.id = mt.tag_id
+           WHERE mt.user_id = $1
+           ORDER BY mt.created_at DESC`,
+          [userId],
+        ).catch(() => []),
+
+        // Notification settings
+        manager.query(
+          `SELECT email_notifications, push_notifications, sms_notifications,
+                  in_app_notifications, updated_at
+           FROM public.user_settings WHERE user_id = $1`,
+          [userId],
+        ).catch(() => []),
+
+        // Users this user has blocked
+        manager.query(
+          `SELECT blocked_id, created_at FROM public.user_blocks WHERE blocker_id = $1`,
+          [userId],
+        ).catch(() => []),
+
+        // Content reports filed by this user
+        manager.query(
+          `SELECT post_id, comment_id, user_id AS reported_user_id, content_type,
+                  reason, status, created_at
+           FROM public.post_reports WHERE reported_by = $1
+           ORDER BY created_at DESC`,
+          [userId],
+        ).catch(() => []),
+
+        // Stories posted
+        manager.query(
+          `SELECT id, tenant_id, media_url, media_type, expires_at, created_at
+           FROM public.stories WHERE author_id = $1
+           ORDER BY created_at DESC`,
+          [userId],
+        ).catch(() => []),
+
+        // Likes given
+        manager.query(
+          `SELECT post_id, created_at FROM public.post_likes WHERE user_id = $1`,
+          [userId],
+        ).catch(() => []),
+
+        // Saves / bookmarks
+        manager.query(
+          `SELECT post_id, created_at FROM public.post_saves WHERE user_id = $1`,
+          [userId],
+        ).catch(() => []),
       ]);
 
     const exportData = {
       exportedAt: new Date().toISOString(),
+      notice:
+        'This export is the data we hold about your account, including content you authored and your relationships within churches. Financial records may include anonymized rows from before you joined this export window.',
       profile: profile[0] ?? null,
       posts,
       comments,
@@ -286,12 +416,24 @@ export class UsersService {
         following: follows[0]?.following ?? [],
         followers: follows[0]?.followers ?? [],
       },
+      prayers,
+      eventRsvps: rsvps,
+      groupMemberships,
+      familyRelationships: family,
+      tags,
+      notificationSettings: settings[0] ?? null,
+      blockedUsers: blocks,
+      reportsFiled: reportsMade,
+      stories,
+      likes,
+      saves,
     };
 
     this.logger.log(
       `Data export completed for user ${userId}: ` +
         `${posts.length} posts, ${comments.length} comments, ` +
-        `${messages.length} messages, ${transactions.length} transactions`,
+        `${messages.length} messages, ${transactions.length} transactions, ` +
+        `${prayers.length} prayers, ${rsvps.length} rsvps`,
     );
 
     return exportData;

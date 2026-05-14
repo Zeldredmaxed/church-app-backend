@@ -190,6 +190,15 @@ export class PostsService {
       mediaTypeFilter = `AND p.media_type = $${params.length}`;
     }
 
+    // Apple/Google UGC requirement: a user must not see content from
+     // someone they've blocked (or someone who has blocked them). Apply
+     // in both directions so the relationship is symmetric on the feed.
+    const blockFilter = `AND p.author_id NOT IN (
+       SELECT blocked_id FROM public.user_blocks WHERE blocker_id = $1
+       UNION
+       SELECT blocker_id FROM public.user_blocks WHERE blocked_id = $1
+     )`;
+
     const rows: Array<{
       id: string; tenant_id: string; author_id: string; content: string;
       media_type: string; media_url: string | null; video_mux_playback_id: string | null;
@@ -214,17 +223,16 @@ export class PostsService {
        LEFT JOIN public.users u ON u.id = p.author_id
        LEFT JOIN LATERAL (SELECT COUNT(*)::int AS like_count FROM public.post_likes WHERE post_id = p.id) lc ON true
        LEFT JOIN LATERAL (SELECT COUNT(*)::int AS comment_count FROM public.comments WHERE post_id = p.id) cc ON true
-       WHERE p.is_archived = false ${authorFilter} ${mediaTypeFilter}
+       WHERE p.is_archived = false ${authorFilter} ${mediaTypeFilter} ${blockFilter}
        ORDER BY p.created_at DESC
        LIMIT $2 OFFSET $3`,
       params,
     );
 
-    // countParams must only contain values referenced by the SQL —
-    // previously userId was bound to $1 (used in author_id = $1) but the
-    // visibility-filter removal left it dangling, which Postgres rejects
-    // with "could not determine data type of parameter $1".
-    const countParams: unknown[] = [];
+    // Count query mirrors the feed query — same block filter so the page
+    // count matches what the user will actually see. userId is bound to
+    // $1 so the block subquery can reference it.
+    const countParams: unknown[] = [userId];
     let countAuthorFilter = '';
     if (query.authorId) {
       countParams.push(query.authorId);
@@ -235,14 +243,14 @@ export class PostsService {
       countParams.push(query.mediaType);
       countMediaTypeFilter = `AND media_type = $${countParams.length}`;
     }
-    // Tenant scoping is enforced by RLS on public.posts; no extra filter here.
-    // The previous "visibility = 'public' OR author_id = me" filter hid every
-    // post the mobile created (it sends visibility='private' by default), so
-    // members couldn't see each other's posts. Per-post visibility isn't a
-    // shipped product feature — if it comes back, gate it here.
     const [{ total }]: [{ total: string }] = await queryRunner.query(
       `SELECT COUNT(*)::int AS total FROM public.posts
-       WHERE is_archived = false ${countAuthorFilter} ${countMediaTypeFilter}`,
+       WHERE is_archived = false ${countAuthorFilter} ${countMediaTypeFilter}
+         AND author_id NOT IN (
+           SELECT blocked_id FROM public.user_blocks WHERE blocker_id = $1
+           UNION
+           SELECT blocker_id FROM public.user_blocks WHERE blocked_id = $1
+         )`,
       countParams,
     );
 

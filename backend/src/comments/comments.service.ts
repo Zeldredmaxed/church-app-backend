@@ -134,7 +134,7 @@ export class CommentsService {
    * same result as a post with no comments. This is intentional.
    */
   async getComments(postId: string, query: GetCommentsDto): Promise<PaginatedComments> {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, userId } = this.getRlsContext();
     const limit = query.limit ?? 20;
     const offset = query.offset ?? 0;
 
@@ -146,13 +146,30 @@ export class CommentsService {
       throw new NotFoundException('Post not found');
     }
 
-    const [comments, total] = await queryRunner.manager.findAndCount(Comment, {
-      where: { postId },
-      relations: ['author'],
-      order: { createdAt: 'DESC' },
-      take: limit,
-      skip: offset,
-    });
+    // Apple/Google UGC: comments from blocked users (either direction) must
+    // not appear. TypeORM's findAndCount can't express the NOT IN subquery
+    // cleanly, so first read the set of blocked user IDs (very small per
+    // user) and pass it to a QueryBuilder.
+    const blockedRows: Array<{ uid: string }> = await queryRunner.query(
+      `SELECT blocked_id AS uid FROM public.user_blocks WHERE blocker_id = $1
+       UNION
+       SELECT blocker_id AS uid FROM public.user_blocks WHERE blocked_id = $1`,
+      [userId],
+    );
+    const blockedIds = blockedRows.map(r => r.uid);
+
+    const qb = queryRunner.manager.createQueryBuilder(Comment, 'c')
+      .leftJoinAndSelect('c.author', 'author')
+      .where('c.postId = :postId', { postId })
+      .orderBy('c.createdAt', 'DESC')
+      .take(limit)
+      .skip(offset);
+
+    if (blockedIds.length > 0) {
+      qb.andWhere('c.authorId NOT IN (:...blockedIds)', { blockedIds });
+    }
+
+    const [comments, total] = await qb.getManyAndCount();
 
     return { comments, total, limit, offset };
   }

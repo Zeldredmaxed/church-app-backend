@@ -15,6 +15,7 @@ import { MeActivityModule } from './me-activity/me-activity.module';
 import { UserAppActivity } from './me-activity/entities/user-app-activity.entity';
 import { AuditModule } from './audit/audit.module';
 import { AuditLogEntry } from './audit/entities/audit-log-entry.entity';
+import { LegalModule } from './legal/legal.module';
 import { MembershipsModule } from './memberships/memberships.module';
 import { PostsModule } from './posts/posts.module';
 import { InvitationsModule } from './invitations/invitations.module';
@@ -260,6 +261,7 @@ import { NotificationPreference } from './notifications/entities/notification-pr
 
     SupabaseAdminModule,
     AuthModule,
+    LegalModule,
     TenantsModule,
     UsersModule,
     MeActivityModule,

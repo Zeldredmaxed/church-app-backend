@@ -101,40 +101,60 @@ export class FollowsService {
 
   /**
    * Returns paginated list of users who follow the specified user.
+   * Filters out anyone the viewer has blocked (either direction) so blocked
+   * users don't surface in follower lists the viewer might browse.
    */
   async getFollowers(
     userId: string,
+    viewerId: string,
     limit = 20,
     offset = 0,
   ): Promise<FollowListResult> {
-    const [follows, total] = await this.dataSource.manager.findAndCount(Follow, {
-      where: { followingId: userId },
-      order: { createdAt: 'DESC' },
-      take: limit,
-      skip: offset,
-    });
+    const qb = this.dataSource.manager.createQueryBuilder(Follow, 'f')
+      .where('f.followingId = :userId', { userId })
+      .andWhere(this.notBlockedClause('f.followerId'), { viewerId })
+      .orderBy('f.createdAt', 'DESC')
+      .take(limit)
+      .skip(offset);
 
+    const [follows, total] = await qb.getManyAndCount();
     const users = await this.resolveUsers(follows.map(f => f.followerId));
     return { users, total, limit, offset };
   }
 
   /**
    * Returns paginated list of users the specified user is following.
+   * Same block-filter rule as getFollowers.
    */
   async getFollowing(
     userId: string,
+    viewerId: string,
     limit = 20,
     offset = 0,
   ): Promise<FollowListResult> {
-    const [follows, total] = await this.dataSource.manager.findAndCount(Follow, {
-      where: { followerId: userId },
-      order: { createdAt: 'DESC' },
-      take: limit,
-      skip: offset,
-    });
+    const qb = this.dataSource.manager.createQueryBuilder(Follow, 'f')
+      .where('f.followerId = :userId', { userId })
+      .andWhere(this.notBlockedClause('f.followingId'), { viewerId })
+      .orderBy('f.createdAt', 'DESC')
+      .take(limit)
+      .skip(offset);
 
+    const [follows, total] = await qb.getManyAndCount();
     const users = await this.resolveUsers(follows.map(f => f.followingId));
     return { users, total, limit, offset };
+  }
+
+  /**
+   * Returns a WHERE-clause fragment that excludes users the viewer has
+   * blocked or who have blocked the viewer. Bind :viewerId to the caller's
+   * user id; the parameter name stays stable across builders.
+   */
+  private notBlockedClause(column: string): string {
+    return `${column} NOT IN (
+      SELECT blocked_id FROM public.user_blocks WHERE blocker_id = :viewerId
+      UNION
+      SELECT blocker_id FROM public.user_blocks WHERE blocked_id = :viewerId
+    )`;
   }
 
   /**
