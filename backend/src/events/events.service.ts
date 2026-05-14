@@ -1,4 +1,6 @@
-import { Injectable, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, InternalServerErrorException } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { DataSource } from 'typeorm';
 import { rlsStorage } from '../common/storage/rls.storage';
 import { Event } from './entities/event.entity';
@@ -9,6 +11,7 @@ import { AuditService } from '../audit/audit.service';
 @Injectable()
 export class EventsService {
   constructor(
+    @InjectQueue('notifications') private readonly notificationsQueue: Queue,
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
   ) {}
@@ -123,6 +126,75 @@ export class EventsService {
     return after;
   }
 
+  /**
+   * Cancel an event without removing it.
+   *
+   * Cancellation differs from delete in three ways:
+   *   1. The event row stays in place — attendees see it marked cancelled
+   *      instead of vanishing from the calendar.
+   *   2. All "going" and "interested" RSVPs are notified via BullMQ so they
+   *      don't show up to a non-event.
+   *   3. The audit log captures the optional reason for posterity.
+   *
+   * Idempotent — cancelling a cancelled event returns 409 rather than
+   * re-firing notifications.
+   */
+  async cancelEvent(id: string, reason: string | null) {
+    const { queryRunner, userId, currentTenantId } = this.getRlsContext();
+    const event = await queryRunner.manager.findOne(Event, { where: { id } });
+    if (!event) throw new NotFoundException('Event not found');
+    if (event.cancelledAt) {
+      throw new ConflictException('Event is already cancelled');
+    }
+
+    const now = new Date();
+    await queryRunner.manager.update(
+      Event,
+      { id },
+      { cancelledAt: now, cancellationReason: reason },
+    );
+
+    // Notify everyone who RSVPed (going OR interested) via the bulk path.
+    // Use the RLS queryRunner so the RSVP read stays tenant-scoped.
+    const rsvps: Array<{ user_id: string }> = await queryRunner.query(
+      `SELECT user_id FROM public.event_rsvps
+       WHERE event_id = $1 AND status IN ('going', 'interested')`,
+      [id],
+    );
+    if (rsvps.length > 0) {
+      await this.notificationsQueue.add('event_cancelled', {
+        type: 'event_cancelled',
+        tenantId: currentTenantId,
+        actorUserId: userId,
+        recipientIds: rsvps.map(r => r.user_id),
+        eventId: id,
+        eventTitle: event.title,
+        eventDate: event.startAt,
+        reason: reason ?? undefined,
+      });
+    }
+
+    await this.audit.log({
+      action: 'event.cancelled',
+      resourceType: 'event',
+      resourceId: id,
+      summary: `${await this.actorName(userId)} cancelled event "${event.title}"`,
+      metadata: {
+        title: event.title,
+        startAt: event.startAt,
+        reason,
+        notifiedCount: rsvps.length,
+      },
+    });
+
+    return {
+      id,
+      cancelledAt: now,
+      cancellationReason: reason,
+      notifiedCount: rsvps.length,
+    };
+  }
+
   async deleteEvent(id: string) {
     const { queryRunner, userId } = this.getRlsContext();
     const before = await queryRunner.manager.findOne(Event, { where: { id } });
@@ -192,6 +264,8 @@ export class EventsService {
       coverImageUrl: r.cover_image_url,
       isFeatured: r.is_featured,
       attendeeCount: Number(r.attendee_count ?? 0),
+      cancelledAt: r.cancelled_at ?? null,
+      cancellationReason: r.cancellation_reason ?? null,
       createdAt: r.created_at,
     };
   }
@@ -207,7 +281,7 @@ export class EventsService {
     const churchName = tenant?.name ?? 'Church';
 
     const events = await this.dataSource.query(
-      `SELECT title, description, start_at, end_at, location
+      `SELECT title, description, start_at, end_at, location, cancelled_at
        FROM public.events
        WHERE tenant_id = $1 AND start_at >= now() - interval '30 days'
        ORDER BY start_at ASC LIMIT 100`,
@@ -227,7 +301,7 @@ export class EventsService {
       const uid = Buffer.from(e.title + e.start_at).toString('base64').substring(0, 20);
       const dtStart = new Date(e.start_at).toISOString().replace(/[-:]/g, '').replace('.000Z', 'Z');
       const dtEnd = new Date(e.end_at).toISOString().replace(/[-:]/g, '').replace('.000Z', 'Z');
-      lines.push(
+      const block: string[] = [
         'BEGIN:VEVENT',
         `UID:${uid}@shepard.app`,
         `DTSTART:${dtStart}`,
@@ -235,8 +309,12 @@ export class EventsService {
         `SUMMARY:${(e.title || '').replace(/[,;\\]/g, '')}`,
         `DESCRIPTION:${(e.description || '').replace(/\n/g, '\\n').replace(/[,;\\]/g, '')}`,
         `LOCATION:${(e.location || '').replace(/[,;\\]/g, '')}`,
-        'END:VEVENT',
-      );
+      ];
+      // RFC 5545: cancelled events keep their UID and carry STATUS:CANCELLED
+      // so subscribers' calendars remove them on next sync.
+      if (e.cancelled_at) block.push('STATUS:CANCELLED');
+      block.push('END:VEVENT');
+      lines.push(...block);
     }
 
     lines.push('END:VCALENDAR');

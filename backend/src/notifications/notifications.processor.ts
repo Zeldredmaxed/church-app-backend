@@ -190,6 +190,15 @@ export class NotificationsProcessor extends WorkerHost {
           deepLink: { screen: 'EventDetail', params: { eventId: data.eventId } },
         };
 
+      case 'event_cancelled':
+        return {
+          title: `Cancelled: "${data.eventTitle ?? ''}"`,
+          body: data.reason
+            ? `Reason: ${String(data.reason).slice(0, 100)}`
+            : 'This event has been cancelled.',
+          deepLink: { screen: 'EventDetail', params: { eventId: data.eventId } },
+        };
+
       // Prayer
       case 'prayer_prayed':
         return {

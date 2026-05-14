@@ -4,6 +4,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { EventsService } from './events.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { RsvpDto } from './dto/rsvp.dto';
+import { CancelEventDto } from './dto/cancel-event.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -51,6 +52,20 @@ export class EventsController {
   @ApiOperation({ summary: 'Delete an event (admin: manage_content)' })
   deleteEvent(@Param('id', ParseUUIDPipe) id: string) {
     return this.eventsService.deleteEvent(id);
+  }
+
+  @Post(':id/cancel')
+  @ApiOperation({
+    summary: 'Cancel an event (admin: manage_content)',
+    description:
+      'Marks the event cancelled (keeps it visible so RSVPs see what happened) and notifies all "going"/"interested" attendees. Distinct from DELETE which removes the event entirely.',
+  })
+  @ApiResponse({ status: 200, description: 'Event cancelled — { id, cancelledAt, cancellationReason }' })
+  cancelEvent(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CancelEventDto,
+  ) {
+    return this.eventsService.cancelEvent(id, dto.reason ?? null);
   }
 
   @Post(':id/rsvp')

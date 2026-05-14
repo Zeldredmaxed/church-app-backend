@@ -562,6 +562,67 @@ export class PostsService {
   }
 
   /**
+   * Admin/pastor moderation path — archive someone else's post.
+   *
+   * The standard archive route (setArchived) goes through RLS, whose
+   * UPDATE policy on public.posts pins author_id = auth.uid(). That's the
+   * correct guard for self-archive but locks admins out of moderation —
+   * they'd have to delete (heavy, destroys content) or do nothing.
+   *
+   * This method bypasses RLS via the service-role DataSource. The
+   * controller layer is responsible for gating the route with
+   * @RequiresRole('admin', 'pastor'); we additionally pin the UPDATE to
+   * tenant_id = JWT current_tenant_id so the bypass can't leak across
+   * tenants. Only is_archived is touched — content/visibility/author
+   * stay immutable, satisfying the principle of least privilege.
+   */
+  async adminArchivePost(postId: string, archived: boolean, reason: string | null): Promise<{ archived: boolean }> {
+    const { userId, currentTenantId } = this.getRlsContext();
+    if (!currentTenantId) {
+      throw new BadRequestException('No active tenant context.');
+    }
+
+    const rows: Array<{ id: string; author_id: string; content: string | null; tenant_id: string }> =
+      await this.dataSource.query(
+        `UPDATE public.posts
+         SET is_archived = $1, updated_at = now()
+         WHERE id = $2 AND tenant_id = $3
+         RETURNING id, author_id, content, tenant_id`,
+        [archived, postId, currentTenantId],
+      );
+
+    if (!rows.length) {
+      throw new NotFoundException('Post not found');
+    }
+
+    const post = rows[0];
+    const [actor] = await this.dataSource.query(
+      `SELECT full_name FROM public.users WHERE id = $1`,
+      [userId],
+    );
+    const [author] = await this.dataSource.query(
+      `SELECT full_name FROM public.users WHERE id = $1`,
+      [post.author_id],
+    );
+
+    await this.audit.log({
+      action: archived ? 'post.archived' : 'post.unarchived',
+      resourceType: 'post',
+      resourceId: postId,
+      targetUserId: post.author_id,
+      summary: `${actor?.full_name ?? 'Admin'} ${archived ? 'archived' : 'unarchived'} a post by ${author?.full_name ?? 'unknown'}`,
+      metadata: {
+        byAdmin: true,
+        authorId: post.author_id,
+        contentPreview: (post.content ?? '').slice(0, 200),
+        reason,
+      },
+    });
+
+    return { archived };
+  }
+
+  /**
    * Returns the caller's archived posts. Only the author sees their own
    * archive; this endpoint is implicitly scoped to the caller.
    */

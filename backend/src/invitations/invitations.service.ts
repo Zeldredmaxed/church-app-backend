@@ -16,6 +16,7 @@ import { TenantMembership } from '../memberships/entities/tenant-membership.enti
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
+import { AuditService } from '../audit/audit.service';
 
 const INVITATION_TTL_HOURS = 24;
 
@@ -23,7 +24,10 @@ const INVITATION_TTL_HOURS = 24;
 export class InvitationsService {
   private readonly logger = new Logger(InvitationsService.name);
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly audit: AuditService,
+  ) {}
 
   /**
    * Returns all pending (unaccepted) invitations for the current tenant.
@@ -118,6 +122,26 @@ export class InvitationsService {
     });
 
     const saved = await queryRunner.manager.save(Invitation, invitation);
+
+    // Audit the admin action — the "how did this person get into our tenant"
+    // trail starts here. target_user_id is intentionally null because the
+    // invitee doesn't yet have a user row tied to this tenant.
+    const [actor] = await queryRunner.query(
+      `SELECT full_name FROM public.users WHERE id = $1`,
+      [requestingUser.sub],
+    );
+    await this.audit.log({
+      action: 'member.invited',
+      resourceType: 'user',
+      resourceId: saved.id,
+      summary: `${actor?.full_name ?? 'Admin'} invited ${dto.email} as ${dto.role}`,
+      metadata: {
+        email: saved.email,
+        role: saved.role,
+        invitationId: saved.id,
+        expiresAt: saved.expiresAt,
+      },
+    });
 
     this.logger.log(
       `Invitation created: ${saved.id} for ${dto.email} in tenant ${currentTenantId}`,

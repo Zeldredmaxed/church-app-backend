@@ -18,7 +18,9 @@ import { PostsService } from './posts.service';
 import { CreatePostDto } from './dto/create-post.dto';
 import { GetPostsDto } from './dto/get-posts.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
+import { AdminArchivePostDto } from './dto/admin-archive-post.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -158,5 +160,45 @@ export class PostsController {
   @ApiResponse({ status: 404, description: 'Post not found or caller is not the author' })
   unarchivePost(@Param('id', ParseUUIDPipe) id: string) {
     return this.postsService.unarchivePost(id);
+  }
+
+  @Post(':id/admin-archive')
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @UseInterceptors(RlsContextInterceptor)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Admin moderation — archive someone else\'s post',
+    description:
+      'Hides the post from every feed/search/profile (same effect as the author archiving). Author archive routes still enforce author_id = auth.uid(); this route bypasses that constraint for admin/pastor moderation and writes an audit log entry with target_user_id = original author.',
+  })
+  @ApiResponse({ status: 200, description: '{ archived: true }' })
+  @ApiResponse({ status: 403, description: 'Caller is not admin/pastor' })
+  @ApiResponse({ status: 404, description: 'Post not found in current tenant' })
+  adminArchivePost(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdminArchivePostDto,
+  ) {
+    return this.postsService.adminArchivePost(id, true, dto.reason ?? null);
+  }
+
+  @Delete(':id/admin-archive')
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @UseInterceptors(RlsContextInterceptor)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Admin moderation — restore an archived post by another user',
+    description:
+      'Inverse of POST /admin-archive. Restores the post to all feed/search/profile surfaces and records the action in the audit log.',
+  })
+  @ApiResponse({ status: 200, description: '{ archived: false }' })
+  @ApiResponse({ status: 403, description: 'Caller is not admin/pastor' })
+  @ApiResponse({ status: 404, description: 'Post not found in current tenant' })
+  adminUnarchivePost(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdminArchivePostDto,
+  ) {
+    return this.postsService.adminArchivePost(id, false, dto.reason ?? null);
   }
 }

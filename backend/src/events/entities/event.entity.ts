@@ -37,6 +37,14 @@ export class Event {
   @JoinColumn({ name: 'created_by' })
   creator?: User;
 
+  /** Set by POST /events/:id/cancel. NULL means the event is active. */
+  @Column({ type: 'timestamptz', nullable: true, name: 'cancelled_at' })
+  cancelledAt: Date | null;
+
+  /** Free-text reason shown to attendees on the cancellation notification. */
+  @Column({ type: 'text', nullable: true, name: 'cancellation_reason' })
+  cancellationReason: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
