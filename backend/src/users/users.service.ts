@@ -63,14 +63,42 @@ export class UsersService {
    * Returns the full updated profile so the client can update its local state
    * without a separate GET request.
    */
+  /**
+   * Whitelist of fields PATCH /api/users/me may modify. Every key here is
+   * a property name on both UpdateUserDto and the User entity (camelCase).
+   * Adding a new profile field = add it to the migration, the entity, the
+   * DTO, and this list.
+   *
+   * Explicitly excluded: id, email, lastAccessedTenantId, isOnline,
+   * lastSeenAt, stripeCustomerId, createdAt — these are managed by other
+   * paths (Supabase Auth, tenant-switch, presence interceptor, Stripe).
+   */
+  private static readonly UPDATABLE_FIELDS = [
+    'fullName', 'avatarUrl', 'gender',
+    'phone', 'phoneSecondary', 'address', 'preferredContactMethod',
+    'dateOfBirth', 'occupation', 'employer',
+    'maritalStatus', 'anniversary', 'spouseName',
+    'hasChildren', 'children', 'emergencyContact',
+    'membershipStatus', 'memberSince',
+    'baptized', 'baptismDate', 'baptismLocation', 'salvationDate',
+    'previousChurch', 'howDidYouHear',
+    'serviceInterests', 'skills', 'languages',
+    'tshirtSize', 'dietaryRestrictions',
+    'newsletterOptIn', 'smsOptIn', 'photoReleaseConsent',
+    'birthdayVisible', 'anniversaryVisible',
+  ] as const;
+
   async updateMe(userId: string, dto: UpdateUserDto): Promise<User> {
     const { queryRunner } = this.getRlsContext();
 
-    // Build partial update — only include fields present in the DTO
+    // Build a partial update from the DTO's defined fields. Whitelist
+    // enforces "no surprise writes" — even if a future controller bug
+    // forwarded an unexpected key, the update wouldn't apply it.
     const updates: Partial<User> = {};
-    if (dto.fullName !== undefined) updates.fullName = dto.fullName;
-    if (dto.avatarUrl !== undefined) updates.avatarUrl = dto.avatarUrl;
-    if (dto.gender !== undefined) updates.gender = dto.gender;
+    for (const key of UsersService.UPDATABLE_FIELDS) {
+      const v = (dto as Record<string, unknown>)[key];
+      if (v !== undefined) (updates as Record<string, unknown>)[key] = v;
+    }
 
     if (Object.keys(updates).length === 0) {
       // Nothing to update — return current profile unchanged

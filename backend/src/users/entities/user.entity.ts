@@ -55,6 +55,108 @@ export class User {
   @Column({ type: 'timestamptz', name: 'last_seen_at', nullable: true })
   lastSeenAt: Date | null;
 
+  // ───── Extended profile (migration 067) ─────
+  // Every field below is nullable and writable via PATCH /api/users/me.
+  // Fields tagged "PRIVATE" must NEVER be included in public-facing
+  // response payloads (post author cards, follower lists, etc.) —
+  // only GET /api/users/me and the admin profile-extras endpoint.
+
+  /** PRIVATE. Secondary phone number. */
+  @Column({ type: 'text', nullable: true, name: 'phone_secondary' })
+  phoneSecondary: string | null;
+
+  /** PRIVATE. JSONB: { street, street2?, city, state, postalCode, country }. */
+  @Column({ type: 'jsonb', nullable: true })
+  address: any | null;
+
+  @Column({ type: 'text', nullable: true, name: 'preferred_contact_method' })
+  preferredContactMethod: 'email' | 'phone' | 'sms' | 'mail' | null;
+
+  /** PRIVATE. */
+  @Column({ type: 'date', nullable: true, name: 'date_of_birth' })
+  dateOfBirth: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  occupation: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  employer: string | null;
+
+  @Column({ type: 'text', nullable: true, name: 'marital_status' })
+  maritalStatus: 'single' | 'married' | 'engaged' | 'separated' | 'divorced' | 'widowed' | null;
+
+  @Column({ type: 'date', nullable: true })
+  anniversary: string | null;
+
+  @Column({ type: 'text', nullable: true, name: 'spouse_name' })
+  spouseName: string | null;
+
+  @Column({ type: 'boolean', nullable: true, name: 'has_children' })
+  hasChildren: boolean | null;
+
+  /** PRIVATE. JSONB array: [{ name, dateOfBirth?, notes? }, ...]. */
+  @Column({ type: 'jsonb', nullable: true })
+  children: any[] | null;
+
+  /** PRIVATE. JSONB: { name, relationship, phone, email? }. */
+  @Column({ type: 'jsonb', nullable: true, name: 'emergency_contact' })
+  emergencyContact: any | null;
+
+  @Column({ type: 'text', nullable: true, name: 'membership_status' })
+  membershipStatus: string | null;
+
+  @Column({ type: 'date', nullable: true, name: 'member_since' })
+  memberSince: string | null;
+
+  @Column({ type: 'boolean', nullable: true })
+  baptized: boolean | null;
+
+  @Column({ type: 'date', nullable: true, name: 'baptism_date' })
+  baptismDate: string | null;
+
+  @Column({ type: 'text', nullable: true, name: 'baptism_location' })
+  baptismLocation: string | null;
+
+  @Column({ type: 'date', nullable: true, name: 'salvation_date' })
+  salvationDate: string | null;
+
+  @Column({ type: 'text', nullable: true, name: 'previous_church' })
+  previousChurch: string | null;
+
+  @Column({ type: 'text', nullable: true, name: 'how_did_you_hear' })
+  howDidYouHear: string | null;
+
+  @Column({ type: 'text', array: true, nullable: true, name: 'service_interests' })
+  serviceInterests: string[] | null;
+
+  @Column({ type: 'text', array: true, nullable: true })
+  skills: string[] | null;
+
+  @Column({ type: 'text', array: true, nullable: true })
+  languages: string[] | null;
+
+  @Column({ type: 'text', nullable: true, name: 'tshirt_size' })
+  tshirtSize: 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | '3XL' | '4XL' | '5XL' | null;
+
+  /** PRIVATE. */
+  @Column({ type: 'text', array: true, nullable: true, name: 'dietary_restrictions' })
+  dietaryRestrictions: string[] | null;
+
+  @Column({ type: 'boolean', nullable: true, name: 'newsletter_opt_in' })
+  newsletterOptIn: boolean | null;
+
+  @Column({ type: 'boolean', nullable: true, name: 'sms_opt_in' })
+  smsOptIn: boolean | null;
+
+  @Column({ type: 'boolean', nullable: true, name: 'photo_release_consent' })
+  photoReleaseConsent: boolean | null;
+
+  @Column({ type: 'boolean', nullable: true, name: 'birthday_visible' })
+  birthdayVisible: boolean | null;
+
+  @Column({ type: 'boolean', nullable: true, name: 'anniversary_visible' })
+  anniversaryVisible: boolean | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }

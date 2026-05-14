@@ -101,6 +101,24 @@ export class MembershipsController {
     return this.membershipsService.getMembers(tenantId, query.cursor, query.limit);
   }
 
+  @Get('tenants/:tenantId/members/:userId/profile-extras')
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @UseInterceptors(RlsContextInterceptor)
+  @ApiOperation({
+    summary: "Get a member's full extended profile (admin/pastor only)",
+    description: 'Returns every profile field including the ones excluded from public-profile responses (address, dateOfBirth, phone, emergencyContact, dietaryRestrictions, children). RLS + role guard restrict to tenant admins and pastors.',
+  })
+  @ApiResponse({ status: 200, description: 'Full member profile-extras shape' })
+  @ApiResponse({ status: 404, description: 'Member not found in this tenant' })
+  getProfileExtras(
+    @Param('tenantId', ParseUUIDPipe) tenantId: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    return this.membershipsService.getProfileExtras(tenantId, userId, user);
+  }
+
   @Patch('tenants/:tenantId/members/:userId/role')
   @UseInterceptors(RlsContextInterceptor)
   @ApiOperation({ summary: 'Update a member role (admin only)' })

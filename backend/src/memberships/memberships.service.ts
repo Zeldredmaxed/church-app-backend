@@ -37,6 +37,94 @@ export class MembershipsService {
   }
 
   /**
+   * Admin-only: returns the target member's complete profile, including
+   * the privacy-protected fields (address, dateOfBirth, phone,
+   * emergencyContact, dietaryRestrictions, children) that public-facing
+   * responses must never expose.
+   *
+   * Route is guarded by @RequiresRole('admin', 'pastor') against the
+   * requester's JWT current_tenant_id. We additionally pin the path
+   * tenantId to the JWT tenantId so an admin of tenant A can't read
+   * profile data for users in tenant B.
+   */
+  async getProfileExtras(tenantId: string, userId: string, user: SupabaseJwtPayload) {
+    const jwtTenantId = user.app_metadata?.current_tenant_id;
+    if (!jwtTenantId || jwtTenantId !== tenantId) {
+      throw new ForbiddenException('You do not have permission to view this profile');
+    }
+
+    const [row] = await this.dataSource.query(
+      `SELECT
+         u.id, u.email, u.full_name, u.avatar_url, u.gender,
+         u.phone, u.phone_secondary, u.address, u.preferred_contact_method,
+         u.date_of_birth, u.occupation, u.employer,
+         u.marital_status, u.anniversary, u.spouse_name,
+         u.has_children, u.children, u.emergency_contact,
+         u.membership_status, u.member_since,
+         u.baptized, u.baptism_date, u.baptism_location, u.salvation_date,
+         u.previous_church, u.how_did_you_hear,
+         u.service_interests, u.skills, u.languages,
+         u.tshirt_size, u.dietary_restrictions,
+         u.newsletter_opt_in, u.sms_opt_in, u.photo_release_consent,
+         u.birthday_visible, u.anniversary_visible,
+         u.created_at,
+         tm.role, tm.permissions, tm.created_at AS joined_at
+       FROM public.tenant_memberships tm
+       JOIN public.users u ON u.id = tm.user_id
+       WHERE tm.tenant_id = $1 AND tm.user_id = $2`,
+      [tenantId, userId],
+    );
+
+    if (!row) {
+      throw new NotFoundException('Member not found in this tenant');
+    }
+
+    return {
+      id: row.id,
+      email: row.email,
+      fullName: row.full_name,
+      avatarUrl: row.avatar_url,
+      gender: row.gender,
+      phone: row.phone,
+      phoneSecondary: row.phone_secondary,
+      address: row.address,
+      preferredContactMethod: row.preferred_contact_method,
+      dateOfBirth: row.date_of_birth,
+      occupation: row.occupation,
+      employer: row.employer,
+      maritalStatus: row.marital_status,
+      anniversary: row.anniversary,
+      spouseName: row.spouse_name,
+      hasChildren: row.has_children,
+      children: row.children,
+      emergencyContact: row.emergency_contact,
+      membershipStatus: row.membership_status,
+      memberSince: row.member_since,
+      baptized: row.baptized,
+      baptismDate: row.baptism_date,
+      baptismLocation: row.baptism_location,
+      salvationDate: row.salvation_date,
+      previousChurch: row.previous_church,
+      howDidYouHear: row.how_did_you_hear,
+      serviceInterests: row.service_interests,
+      skills: row.skills,
+      languages: row.languages,
+      tshirtSize: row.tshirt_size,
+      dietaryRestrictions: row.dietary_restrictions,
+      newsletterOptIn: row.newsletter_opt_in,
+      smsOptIn: row.sms_opt_in,
+      photoReleaseConsent: row.photo_release_consent,
+      birthdayVisible: row.birthday_visible,
+      anniversaryVisible: row.anniversary_visible,
+      createdAt: row.created_at,
+      // Tenant-specific context bundled for the admin UI.
+      role: row.role,
+      permissions: row.permissions,
+      joinedAt: row.joined_at,
+    };
+  }
+
+  /**
    * Returns all tenants the authenticated user belongs to, across every church.
    *
    * INTENTIONAL SERVICE-ROLE BYPASS:
