@@ -6,6 +6,7 @@ import { NotificationsProcessor } from './notifications.processor';
 import { ExpoPushService } from './expo-push.service';
 import { OneSignalService } from './onesignal.service';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { RlsContextInterceptor } from '../common/interceptors/rls-context.interc
         removeOnFail: { age: 604800 }, // keep failed 7 days
       },
     }),
+    AuditModule,
   ],
   controllers: [NotificationsController],
   providers: [

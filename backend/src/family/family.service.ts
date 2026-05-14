@@ -8,6 +8,7 @@ import {
   resolveLabel,
 } from './family-types';
 import { ExpoPushService } from '../notifications/expo-push.service';
+import { AuditService } from '../audit/audit.service';
 
 /** Grouped relationship types for the mobile picker */
 const RELATIONSHIP_TYPES = [
@@ -58,6 +59,7 @@ export class FamilyService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly expoPushService: ExpoPushService,
+    private readonly audit: AuditService,
   ) {}
 
   // ────────────────────────────────────────────────────────

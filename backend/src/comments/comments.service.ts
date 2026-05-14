@@ -14,6 +14,7 @@ import { Post } from '../posts/entities/post.entity';
 import { CreateCommentDto } from './dto/create-comment.dto';
 import { GetCommentsDto } from './dto/get-comments.dto';
 import { NotificationType, NotificationJobData } from '../notifications/notifications.types';
+import { AuditService } from '../audit/audit.service';
 
 export interface PaginatedComments {
   comments: Comment[];
@@ -28,6 +29,7 @@ export class CommentsService {
 
   constructor(
     @InjectQueue('notifications') private readonly notificationsQueue: Queue<NotificationJobData>,
+    private readonly audit: AuditService,
   ) {}
 
   /**
@@ -164,7 +166,7 @@ export class CommentsService {
    * or an admin — SELECT returns the row but DELETE affects 0 rows).
    */
   async deleteComment(postId: string, commentId: string): Promise<{ deleted: true }> {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, userId } = this.getRlsContext();
 
     const existing = await queryRunner.manager.findOne(Comment, {
       where: { id: commentId, postId },
@@ -179,6 +181,25 @@ export class CommentsService {
     );
     if (!result.length) {
       throw new ForbiddenException('You can only delete your own comments');
+    }
+
+    // Audit only when an admin deletes someone else's comment (moderation).
+    // Self-deletes don't need to clutter the log.
+    if (existing.authorId !== userId) {
+      const [actor] = await queryRunner.query(`SELECT full_name FROM public.users WHERE id = $1`, [userId]);
+      const [author] = await queryRunner.query(`SELECT full_name FROM public.users WHERE id = $1`, [existing.authorId]);
+      await this.audit.log({
+        action: 'comment.deleted',
+        resourceType: 'comment',
+        resourceId: commentId,
+        targetUserId: existing.authorId,
+        summary: `${actor?.full_name ?? 'Admin'} deleted a comment by ${author?.full_name ?? 'unknown'}`,
+        metadata: {
+          postId,
+          authorId: existing.authorId,
+          contentPreview: (existing.content ?? '').slice(0, 200),
+        },
+      });
     }
 
     return { deleted: true };

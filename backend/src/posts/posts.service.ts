@@ -15,6 +15,7 @@ import { GetPostsDto } from './dto/get-posts.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
 import { NotificationType, NotificationJobData } from '../notifications/notifications.types';
 import { GlobalPostJob } from '../feed/social-fanout.processor';
+import { AuditService } from '../audit/audit.service';
 
 export interface PostWithMeta {
   id: string;
@@ -49,6 +50,7 @@ export class PostsService {
     @InjectQueue('notifications') private readonly notificationsQueue: Queue<NotificationJobData>,
     @InjectQueue('social-fanout') private readonly socialFanoutQueue: Queue<GlobalPostJob>,
     private readonly dataSource: DataSource,
+    private readonly audit: AuditService,
   ) {}
 
   /**
@@ -362,12 +364,38 @@ export class PostsService {
    * lacks the required role.
    */
   async deletePost(postId: string): Promise<void> {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, userId } = this.getRlsContext();
+
+    // Snapshot the post BEFORE deleting so we can audit who the author was,
+    // distinguish self-delete from admin moderation, and capture the content
+    // preview for the summary.
+    const before = await queryRunner.manager.findOne(Post, { where: { id: postId } });
+    if (!before) {
+      throw new NotFoundException('Post not found or you do not have permission to delete it');
+    }
 
     const result = await queryRunner.manager.delete(Post, { id: postId });
-
     if (result.affected === 0) {
       throw new NotFoundException('Post not found or you do not have permission to delete it');
+    }
+
+    // Only audit when an admin removes someone else's post — author
+    // self-deletes are not admin actions and don't need to clutter the log.
+    if (before.authorId !== userId) {
+      const [actor] = await queryRunner.query(`SELECT full_name FROM public.users WHERE id = $1`, [userId]);
+      const [author] = await queryRunner.query(`SELECT full_name FROM public.users WHERE id = $1`, [before.authorId]);
+      await this.audit.log({
+        action: 'post.deleted',
+        resourceType: 'post',
+        resourceId: postId,
+        targetUserId: before.authorId,
+        summary: `${actor?.full_name ?? 'Admin'} deleted a post by ${author?.full_name ?? 'unknown'}`,
+        metadata: {
+          authorId: before.authorId,
+          contentPreview: (before.content ?? '').slice(0, 200),
+          mediaType: before.mediaType,
+        },
+      });
     }
 
     this.logger.log(`Post deleted: ${postId}`);
@@ -497,15 +525,31 @@ export class PostsService {
    * exists.
    */
   private async setArchived(postId: string, isArchived: boolean): Promise<{ archived: boolean }> {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, userId } = this.getRlsContext();
     const result = await queryRunner.query(
       `UPDATE public.posts SET is_archived = $1, updated_at = now()
-       WHERE id = $2 RETURNING id`,
+       WHERE id = $2 RETURNING id, author_id, content`,
       [isArchived, postId],
     );
     if (!result.length) {
       throw new NotFoundException('Post not found');
     }
+
+    // RLS UPDATE policy restricts to author_id = auth.uid(), so this is
+    // always a self-archive — author archiving their own content. We
+    // still log it for completeness; it's not a high-priority audit
+    // signal but useful for "did I archive this?" questions later.
+    const [actor] = await queryRunner.query(`SELECT full_name FROM public.users WHERE id = $1`, [userId]);
+    await this.audit.log({
+      action: isArchived ? 'post.archived' : 'post.unarchived',
+      resourceType: 'post',
+      resourceId: postId,
+      summary: `${actor?.full_name ?? 'Someone'} ${isArchived ? 'archived' : 'unarchived'} their post`,
+      metadata: {
+        contentPreview: (result[0].content ?? '').slice(0, 200),
+      },
+    });
+
     return { archived: isArchived };
   }
 

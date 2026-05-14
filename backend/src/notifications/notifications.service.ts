@@ -14,6 +14,7 @@ import { NotificationPreference } from './entities/notification-preference.entit
 import { GetNotificationsDto } from './dto/get-notifications.dto';
 import { ExpoPushService } from './expo-push.service';
 import { IsNull } from 'typeorm';
+import { AuditService } from '../audit/audit.service';
 
 export interface PaginatedNotifications {
   notifications: any[];
@@ -29,6 +30,7 @@ export class NotificationsService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly expo: ExpoPushService,
+    private readonly audit: AuditService,
   ) {}
 
   // ── Device Registration ──
@@ -280,6 +282,23 @@ export class NotificationsService {
       title,
       body,
       data: { screen: 'Announcements' },
+    });
+
+    const [actor] = await this.dataSource.query(
+      `SELECT full_name FROM public.users WHERE id = $1`,
+      [senderId],
+    );
+    await this.audit.log({
+      action: 'notification.broadcast_sent',
+      resourceType: 'notification',
+      summary: `${actor?.full_name ?? 'Admin'} sent broadcast "${title}" to ${recipientIds.length} recipient(s)`,
+      metadata: {
+        title,
+        body,
+        audienceSize: recipientIds.length,
+        scope: tenantId ? 'tenant' : 'platform',
+        channels: ['push'],
+      },
     });
 
     return { sent: recipientIds.length };

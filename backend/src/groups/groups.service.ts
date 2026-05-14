@@ -8,13 +8,25 @@ import { CreateGroupDto } from './dto/create-group.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
 import { SendGroupMessageDto } from './dto/send-group-message.dto';
 import { JoinRequestDto, DenyRequestDto } from './dto/join-request.dto';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class GroupsService {
+  constructor(private readonly audit: AuditService) {}
+
   private getRlsContext() {
     const ctx = rlsStorage.getStore();
     if (!ctx) throw new InternalServerErrorException('RLS context unavailable');
     return ctx;
+  }
+
+  private async resolveName(userId: string): Promise<string> {
+    const { queryRunner } = this.getRlsContext();
+    const [r] = await queryRunner.query(
+      `SELECT full_name FROM public.users WHERE id = $1`,
+      [userId],
+    );
+    return r?.full_name ?? 'Someone';
   }
 
   private async assertMember(groupId: string, userId: string) {
@@ -118,6 +130,15 @@ export class GroupsService {
       [saved.id, userId],
     );
 
+    const actorName = await this.resolveName(userId);
+    await this.audit.log({
+      action: 'group.created',
+      resourceType: 'group',
+      resourceId: saved.id,
+      summary: `${actorName} created group "${saved.name}"`,
+      metadata: { name: saved.name, hasDescription: !!saved.description },
+    });
+
     return saved;
   }
 
@@ -195,6 +216,18 @@ export class GroupsService {
       [groupId, targetUserId, callerId],
     );
 
+    const [group] = await queryRunner.query(`SELECT name FROM public.groups WHERE id = $1`, [groupId]);
+    const actorName = await this.resolveName(callerId);
+    const targetName = await this.resolveName(targetUserId);
+    await this.audit.log({
+      action: 'group.member_added_by_admin',
+      resourceType: 'group',
+      resourceId: groupId,
+      targetUserId,
+      summary: `${actorName} added ${targetName} to group "${group?.name ?? ''}"`,
+      metadata: { groupName: group?.name },
+    });
+
     return { added: true };
   }
 
@@ -207,6 +240,19 @@ export class GroupsService {
       [groupId, targetUserId],
     );
     if (!rows.length) throw new NotFoundException('User is not a member of this group');
+
+    const [group] = await queryRunner.query(`SELECT name FROM public.groups WHERE id = $1`, [groupId]);
+    const actorName = await this.resolveName(callerId);
+    const targetName = await this.resolveName(targetUserId);
+    await this.audit.log({
+      action: 'group.member_removed_by_admin',
+      resourceType: 'group',
+      resourceId: groupId,
+      targetUserId,
+      summary: `${actorName} removed ${targetName} from group "${group?.name ?? ''}"`,
+      metadata: { groupName: group?.name },
+    });
+
     return { removed: true };
   }
 
@@ -306,6 +352,18 @@ export class GroupsService {
       [groupId, request.user_id],
     );
 
+    const [group] = await queryRunner.query(`SELECT name FROM public.groups WHERE id = $1`, [groupId]);
+    const actorName = await this.resolveName(callerId);
+    const targetName = await this.resolveName(request.user_id);
+    await this.audit.log({
+      action: 'group.join_request_approved',
+      resourceType: 'group',
+      resourceId: groupId,
+      targetUserId: request.user_id,
+      summary: `${actorName} approved ${targetName}'s request to join "${group?.name ?? ''}"`,
+      metadata: { groupName: group?.name, requestId },
+    });
+
     return { approved: true, userId: request.user_id };
   }
 
@@ -328,12 +386,29 @@ export class GroupsService {
       throw new ConflictException(`Request is already ${request.status}`);
     }
 
+    const [reqRow] = await queryRunner.query(
+      `SELECT user_id FROM public.group_join_requests WHERE id = $1`,
+      [requestId],
+    );
+
     await queryRunner.query(
       `UPDATE public.group_join_requests
        SET status = 'denied', reviewed_at = now(), reviewed_by = $1, denied_reason = $2
        WHERE id = $3`,
       [callerId, dto.reason ?? null, requestId],
     );
+
+    const [group] = await queryRunner.query(`SELECT name FROM public.groups WHERE id = $1`, [groupId]);
+    const actorName = await this.resolveName(callerId);
+    const targetName = reqRow ? await this.resolveName(reqRow.user_id) : 'unknown';
+    await this.audit.log({
+      action: 'group.join_request_denied',
+      resourceType: 'group',
+      resourceId: groupId,
+      targetUserId: reqRow?.user_id ?? null,
+      summary: `${actorName} denied ${targetName}'s request to join "${group?.name ?? ''}"`,
+      metadata: { groupName: group?.name, requestId, reason: dto.reason ?? null },
+    });
 
     return { denied: true };
   }
@@ -409,16 +484,40 @@ export class GroupsService {
       params,
     );
     if (!rows.length) throw new NotFoundException('Group not found');
+
+    const { userId } = this.getRlsContext();
+    const actorName = await this.resolveName(userId);
+    await this.audit.log({
+      action: 'group.updated',
+      resourceType: 'group',
+      resourceId: groupId,
+      summary: `${actorName} updated group "${rows[0].name}"`,
+      metadata: { changedFields: Object.keys(dto), name: rows[0].name },
+    });
+
     return this.mapGroup(rows[0]);
   }
 
   async deleteGroup(groupId: string) {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, userId } = this.getRlsContext();
+
+    const [before] = await queryRunner.query(`SELECT name FROM public.groups WHERE id = $1`, [groupId]);
+
     const rows = await queryRunner.query(
       `DELETE FROM public.groups WHERE id = $1 RETURNING id`,
       [groupId],
     );
     if (!rows.length) throw new NotFoundException('Group not found');
+
+    const actorName = await this.resolveName(userId);
+    await this.audit.log({
+      action: 'group.deleted',
+      resourceType: 'group',
+      resourceId: groupId,
+      summary: `${actorName} deleted group "${before?.name ?? '(unknown)'}"`,
+      metadata: { name: before?.name },
+    });
+
     return { deleted: true };
   }
 

@@ -9,9 +9,11 @@ import {
   Query,
   ParseUUIDPipe,
   UseGuards,
+  UseInterceptors,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
+import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsOptional, IsBoolean, IsUUID, IsIn } from 'class-validator';
 import { NotificationsService } from './notifications.service';
@@ -195,6 +197,9 @@ export class NotificationsController {
   @Post('broadcast')
   @UseGuards(RoleGuard)
   @RequiresRole('admin')
+  // RlsContextInterceptor populates rlsStorage so AuditService.log() inside
+  // the service can read actor + request context.
+  @UseInterceptors(RlsContextInterceptor)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Send a push broadcast to all church members or all users (admin only)' })
   broadcast(
