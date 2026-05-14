@@ -3,12 +3,21 @@ import { DataSource } from 'typeorm';
 import { CreateCareCaseDto } from './dto/create-care-case.dto';
 import { UpdateCareCaseDto } from './dto/update-care-case.dto';
 import { CreateCareNoteDto } from './dto/create-care-note.dto';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class CareCasesService {
   private readonly logger = new Logger(CareCasesService.name);
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly audit: AuditService,
+  ) {}
+
+  private async safeAudit(params: Parameters<AuditService['log']>[0]) {
+    try { await this.audit.log(params); }
+    catch (err: any) { this.logger.warn(`care audit failed (non-blocking): ${err.message}`); }
+  }
 
   async getCases(
     tenantId: string,
@@ -68,6 +77,16 @@ export class CareCasesService {
       ],
     );
 
+    const [actor] = await this.dataSource.query(`SELECT full_name FROM public.users WHERE id = $1`, [userId]);
+    await this.safeAudit({
+      action: 'care.case_created',
+      resourceType: 'user',
+      resourceId: row.id,
+      targetUserId: dto.memberId,
+      summary: `${actor?.full_name ?? 'Admin'} opened care case "${row.title}"`,
+      metadata: { title: row.title, priority: row.priority, assignedTo: row.assigned_to },
+    });
+
     return this.mapCase(row);
   }
 
@@ -115,6 +134,19 @@ export class CareCasesService {
     );
 
     if (!row) throw new NotFoundException('Care case not found');
+
+    // Resolution is the audit-worthy transition. Other field updates are
+    // routine and would clutter the log.
+    if (dto.status === 'resolved') {
+      await this.safeAudit({
+        action: 'care.case_closed',
+        resourceType: 'user',
+        resourceId: row.id,
+        targetUserId: row.member_id,
+        summary: `Care case "${row.title}" closed`,
+        metadata: { title: row.title, finalStatus: row.status },
+      });
+    }
     return this.mapCase(row);
   }
 

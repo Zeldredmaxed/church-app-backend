@@ -1,12 +1,23 @@
-import { Injectable, InternalServerErrorException, BadRequestException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, BadRequestException, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { rlsStorage } from '../common/storage/rls.storage';
 import { CheckIn } from './entities/check-in.entity';
 import { AddVisitorDto } from './dto/add-visitor.dto';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class CheckinService {
-  constructor(private readonly dataSource: DataSource) {}
+  private readonly logger = new Logger(CheckinService.name);
+
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly audit: AuditService,
+  ) {}
+
+  private async safeAudit(params: Parameters<AuditService['log']>[0]) {
+    try { await this.audit.log(params); }
+    catch (err: any) { this.logger.warn(`checkin audit failed (non-blocking): ${err.message}`); }
+  }
 
   private getRlsContext() {
     const ctx = rlsStorage.getStore();
@@ -307,6 +318,18 @@ export class CheckinService {
       [tenantId, userId, dto.alertType, dto.description, dto.severity ?? 'medium', createdBy],
     );
 
+    // High-sensitivity write — child safety domain. Audit with target so
+    // "what's been done to this person?" surfaces it.
+    const [actor] = await this.dataSource.query(`SELECT full_name FROM public.users WHERE id = $1`, [createdBy]);
+    await this.safeAudit({
+      action: 'child_pickup.medical_alert_added',
+      resourceType: 'user',
+      resourceId: row.id,
+      targetUserId: userId,
+      summary: `${actor?.full_name ?? 'Admin'} added a ${row.severity} medical alert (${row.alert_type})`,
+      metadata: { alertType: row.alert_type, severity: row.severity, description: row.description },
+    });
+
     return {
       id: row.id,
       type: row.alert_type,
@@ -320,10 +343,25 @@ export class CheckinService {
    * Delete a medical alert.
    */
   async deleteMedicalAlert(tenantId: string, alertId: string) {
+    const [before] = await this.dataSource.query(
+      `SELECT user_id, alert_type, severity, description FROM public.member_medical_alerts WHERE id = $1 AND tenant_id = $2`,
+      [alertId, tenantId],
+    );
     const rows = await this.dataSource.query(
       `DELETE FROM public.member_medical_alerts WHERE id = $1 AND tenant_id = $2 RETURNING id`,
       [alertId, tenantId],
     );
     if (rows.length === 0) throw new BadRequestException('Alert not found');
+
+    if (before) {
+      await this.safeAudit({
+        action: 'child_pickup.medical_alert_removed',
+        resourceType: 'user',
+        resourceId: alertId,
+        targetUserId: before.user_id,
+        summary: `Medical alert (${before.alert_type}) removed`,
+        metadata: { alertType: before.alert_type, severity: before.severity },
+      });
+    }
   }
 }

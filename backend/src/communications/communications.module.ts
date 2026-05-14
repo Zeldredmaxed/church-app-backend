@@ -5,8 +5,10 @@ import { EmailService } from './email.service';
 import { SmsService } from './sms.service';
 import { OneSignalService } from '../notifications/onesignal.service';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
+  imports: [AuditModule],
   controllers: [CommunicationsController],
   providers: [
     CommunicationsService,

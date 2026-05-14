@@ -3,6 +3,7 @@ import { StripeService } from './stripe.service';
 import { StripeConnectController } from './stripe-connect.controller';
 import { StripeWebhookController } from './stripe-webhook.controller';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
+import { AuditModule } from '../audit/audit.module';
 
 /**
  * StripeModule — Stripe Connect onboarding + webhook handler.
@@ -11,6 +12,7 @@ import { RlsContextInterceptor } from '../common/interceptors/rls-context.interc
  * for creating PaymentIntents.
  */
 @Module({
+  imports: [AuditModule],
   controllers: [StripeConnectController, StripeWebhookController],
   providers: [StripeService, RlsContextInterceptor],
   exports: [StripeService],

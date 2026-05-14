@@ -2,9 +2,12 @@ import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { rlsStorage } from '../common/storage/rls.storage';
 import { Announcement } from './entities/announcement.entity';
 import { CreateAnnouncementDto } from './dto/create-announcement.dto';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class AnnouncementsService {
+  constructor(private readonly audit: AuditService) {}
+
   private getRlsContext() {
     const ctx = rlsStorage.getStore();
     if (!ctx) throw new InternalServerErrorException('RLS context unavailable');
@@ -67,6 +70,16 @@ export class AnnouncementsService {
       body: dto.body,
       priority: dto.priority ?? 'general',
     });
-    return queryRunner.manager.save(Announcement, announcement);
+    const saved = await queryRunner.manager.save(Announcement, announcement);
+
+    const [actor] = await queryRunner.query(`SELECT full_name FROM public.users WHERE id = $1`, [userId]);
+    await this.audit.log({
+      action: 'announcement.created',
+      resourceType: 'notification',
+      resourceId: saved.id,
+      summary: `${actor?.full_name ?? 'Admin'} posted announcement "${saved.title}"`,
+      metadata: { title: saved.title, priority: saved.priority },
+    });
+    return saved;
   }
 }

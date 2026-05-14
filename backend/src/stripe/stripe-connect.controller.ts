@@ -19,6 +19,7 @@ import { RlsContextInterceptor } from '../common/interceptors/rls-context.interc
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 import { rlsStorage } from '../common/storage/rls.storage';
+import { AuditService } from '../audit/audit.service';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { User } from '../users/entities/user.entity';
 import { TenantMembership } from '../memberships/entities/tenant-membership.entity';
@@ -34,6 +35,7 @@ export class StripeConnectController {
   constructor(
     private readonly stripeService: StripeService,
     private readonly dataSource: DataSource,
+    private readonly audit: AuditService,
   ) {}
 
   @Post('onboard')
@@ -59,10 +61,12 @@ export class StripeConnectController {
     }
 
     let stripeAccountId = tenant.stripeAccountId;
+    let createdAccount = false;
 
     if (!stripeAccountId) {
       const account = await this.stripeService.createConnectAccount(tenant.name);
       stripeAccountId = account.id;
+      createdAccount = true;
 
       await queryRunner.manager.update(Tenant, { id: currentTenantId }, {
         stripeAccountId: account.id,
@@ -75,6 +79,19 @@ export class StripeConnectController {
       dto.refreshUrl,
       dto.returnUrl,
     );
+
+    // Only audit the moment of Stripe account creation — not every onboard
+    // link refresh. The audit row marks "this church connected Stripe."
+    if (createdAccount) {
+      const [actor] = await queryRunner.query(`SELECT full_name FROM public.users WHERE id = $1`, [userId]);
+      await this.audit.log({
+        action: 'finance.stripe_connected',
+        resourceType: 'church',
+        resourceId: currentTenantId,
+        summary: `${actor?.full_name ?? 'Admin'} initiated Stripe Connect onboarding for "${tenant.name}"`,
+        metadata: { stripeAccountId, churchName: tenant.name },
+      });
+    }
 
     return {
       url: accountLink.url,

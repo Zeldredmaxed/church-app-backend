@@ -3,13 +3,22 @@ import { rlsStorage } from '../common/storage/rls.storage';
 import { Sermon } from './entities/sermon.entity';
 import { CreateSermonDto } from './dto/create-sermon.dto';
 import { UpdateSermonDto } from './dto/update-sermon.dto';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class SermonsService {
+  constructor(private readonly audit: AuditService) {}
+
   private getRlsContext() {
     const ctx = rlsStorage.getStore();
     if (!ctx) throw new InternalServerErrorException('RLS context unavailable');
     return ctx;
+  }
+
+  private async actorName(userId: string): Promise<string> {
+    const { queryRunner } = this.getRlsContext();
+    const [r] = await queryRunner.query(`SELECT full_name FROM public.users WHERE id = $1`, [userId]);
+    return r?.full_name ?? 'Admin';
   }
 
   async getSermons(filter: 'all' | 'recent' | 'series' | 'topics', limit: number, cursor?: string) {
@@ -61,7 +70,7 @@ export class SermonsService {
   }
 
   async createSermon(dto: CreateSermonDto, tenantId: string) {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, userId } = this.getRlsContext();
     const sermon = queryRunner.manager.create(Sermon, {
       tenantId,
       title: dto.title,
@@ -73,7 +82,15 @@ export class SermonsService {
       seriesName: dto.seriesName ?? null,
       notes: dto.notes ?? null,
     });
-    return queryRunner.manager.save(Sermon, sermon);
+    const saved = await queryRunner.manager.save(Sermon, sermon);
+    await this.audit.log({
+      action: 'sermon.published',
+      resourceType: 'sermon',
+      resourceId: saved.id,
+      summary: `${await this.actorName(userId)} published sermon "${saved.title}" by ${saved.speaker}`,
+      metadata: { title: saved.title, speaker: saved.speaker, seriesName: saved.seriesName },
+    });
+    return saved;
   }
 
   async updateSermon(tenantId: string, id: string, dto: UpdateSermonDto) {
@@ -113,12 +130,20 @@ export class SermonsService {
   }
 
   async deleteSermon(tenantId: string, id: string) {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, userId } = this.getRlsContext();
+    const [before] = await queryRunner.query(`SELECT title, speaker FROM public.sermons WHERE id = $1`, [id]);
     const rows = await queryRunner.query(
       `DELETE FROM public.sermons WHERE id = $1 AND tenant_id = $2 RETURNING id`,
       [id, tenantId],
     );
     if (rows.length === 0) throw new NotFoundException('Sermon not found');
+    await this.audit.log({
+      action: 'sermon.deleted',
+      resourceType: 'sermon',
+      resourceId: id,
+      summary: `${await this.actorName(userId)} deleted sermon "${before?.title ?? '(unknown)'}"`,
+      metadata: { title: before?.title, speaker: before?.speaker },
+    });
   }
 
   async getFeatured(tenantId: string) {

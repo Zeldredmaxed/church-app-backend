@@ -17,12 +17,24 @@ import { UpdateRoleDto } from './dto/update-role.dto';
 import { UpdatePermissionsDto } from './dto/update-permissions.dto';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 import { getTierFeatures, TIER_DISPLAY_NAMES, TierName } from '../common/config/tier-features.config';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class MembershipsService {
   private readonly logger = new Logger(MembershipsService.name);
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly audit: AuditService,
+  ) {}
+
+  private async resolveName(userId: string): Promise<string> {
+    const [r] = await this.dataSource.query(
+      `SELECT full_name FROM public.users WHERE id = $1`,
+      [userId],
+    );
+    return r?.full_name ?? 'Someone';
+  }
 
   /**
    * Returns all tenants the authenticated user belongs to, across every church.
@@ -304,7 +316,14 @@ export class MembershipsService {
     targetUserId: string,
     dto: UpdateRoleDto,
   ): Promise<TenantMemberDetail> {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, userId: actorId } = this.getRlsContext();
+
+    // Capture prior role for the audit diff.
+    const [priorRow] = await queryRunner.query(
+      `SELECT role FROM public.tenant_memberships WHERE tenant_id = $1 AND user_id = $2`,
+      [tenantId, targetUserId],
+    );
+    const priorRole: string | null = priorRow?.role ?? null;
 
     const result = await queryRunner.manager.update(
       TenantMembership,
@@ -316,6 +335,19 @@ export class MembershipsService {
       throw new NotFoundException(
         'Membership not found or you do not have permission to update it',
       );
+    }
+
+    if (priorRole !== dto.role) {
+      const actorName = await this.resolveName(actorId);
+      const targetName = await this.resolveName(targetUserId);
+      await this.audit.log({
+        action: 'member.role_changed',
+        resourceType: 'user',
+        resourceId: targetUserId,
+        targetUserId,
+        summary: `${actorName} changed ${targetName}'s role from ${priorRole ?? 'unknown'} to ${dto.role}`,
+        metadata: { from: priorRole, to: dto.role, via: 'direct' },
+      });
     }
 
     // Fetch updated membership with user details
@@ -361,7 +393,7 @@ export class MembershipsService {
    * Returns 404 if the membership doesn't exist or the RLS policy blocks the delete.
    */
   async removeMember(tenantId: string, targetUserId: string): Promise<void> {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, userId: actorId } = this.getRlsContext();
 
     const result = await queryRunner.manager.delete(TenantMembership, {
       userId: targetUserId,
@@ -372,6 +404,21 @@ export class MembershipsService {
       throw new NotFoundException(
         'Membership not found or you do not have permission to remove it',
       );
+    }
+
+    // Self-removals are members leaving voluntarily — not an admin action.
+    // Only audit when an admin removed someone else.
+    if (targetUserId !== actorId) {
+      const actorName = await this.resolveName(actorId);
+      const targetName = await this.resolveName(targetUserId);
+      await this.audit.log({
+        action: 'member.removed_from_tenant',
+        resourceType: 'user',
+        resourceId: targetUserId,
+        targetUserId,
+        summary: `${actorName} removed ${targetName} from the church`,
+        metadata: {},
+      });
     }
 
     this.logger.log(`Member ${targetUserId} removed from tenant ${tenantId}`);
@@ -418,6 +465,20 @@ export class MembershipsService {
       throw new NotFoundException(
         'Membership not found or you do not have permission to update it',
       );
+    }
+
+    {
+      const { userId: actorId } = this.getRlsContext();
+      const actorName = await this.resolveName(actorId);
+      const targetName = await this.resolveName(targetUserId);
+      await this.audit.log({
+        action: 'member.permissions_changed',
+        resourceType: 'user',
+        resourceId: targetUserId,
+        targetUserId,
+        summary: `${actorName} updated ${targetName}'s permissions`,
+        metadata: { permissions: dto.permissions },
+      });
     }
 
     // Fetch updated membership with user details

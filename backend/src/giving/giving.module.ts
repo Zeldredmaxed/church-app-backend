@@ -5,8 +5,10 @@ import { GivingService } from './giving.service';
 import { CacheService } from '../common/services/cache.service';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 
+import { AuditModule } from '../audit/audit.module';
+
 @Module({
-  imports: [StripeModule],
+  imports: [StripeModule, AuditModule],
   controllers: [GivingController],
   providers: [GivingService, CacheService, RlsContextInterceptor],
 })

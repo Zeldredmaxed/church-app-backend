@@ -4,10 +4,21 @@ import { rlsStorage } from '../common/storage/rls.storage';
 import { Event } from './entities/event.entity';
 import { EventRsvp } from './entities/event-rsvp.entity';
 import { CreateEventDto } from './dto/create-event.dto';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class EventsService {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly audit: AuditService,
+  ) {}
+
+  private async actorName(userId: string): Promise<string> {
+    const [r] = await this.dataSource.query(
+      `SELECT full_name FROM public.users WHERE id = $1`, [userId],
+    );
+    return r?.full_name ?? 'Admin';
+  }
 
   private getRlsContext() {
     const ctx = rlsStorage.getStore();
@@ -77,11 +88,19 @@ export class EventsService {
       isFeatured: dto.isFeatured ?? false,
       createdBy: userId,
     });
-    return queryRunner.manager.save(Event, event);
+    const saved = await queryRunner.manager.save(Event, event);
+    await this.audit.log({
+      action: 'event.created',
+      resourceType: 'event',
+      resourceId: saved.id,
+      summary: `${await this.actorName(userId)} created event "${saved.title}"`,
+      metadata: { title: saved.title, startAt: saved.startAt, location: saved.location },
+    });
+    return saved;
   }
 
   async updateEvent(id: string, dto: Partial<CreateEventDto>) {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, userId } = this.getRlsContext();
     const updates: any = {};
     if (dto.title !== undefined) updates.title = dto.title;
     if (dto.description !== undefined) updates.description = dto.description;
@@ -93,13 +112,29 @@ export class EventsService {
 
     const result = await queryRunner.manager.update(Event, { id }, updates);
     if (result.affected === 0) throw new NotFoundException('Event not found');
-    return queryRunner.manager.findOneOrFail(Event, { where: { id } });
+    const after = await queryRunner.manager.findOneOrFail(Event, { where: { id } });
+    await this.audit.log({
+      action: 'event.updated',
+      resourceType: 'event',
+      resourceId: id,
+      summary: `${await this.actorName(userId)} updated event "${after.title}"`,
+      metadata: { changedFields: Object.keys(dto), title: after.title },
+    });
+    return after;
   }
 
   async deleteEvent(id: string) {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, userId } = this.getRlsContext();
+    const before = await queryRunner.manager.findOne(Event, { where: { id } });
     const result = await queryRunner.manager.delete(Event, { id });
     if (result.affected === 0) throw new NotFoundException('Event not found');
+    await this.audit.log({
+      action: 'event.deleted',
+      resourceType: 'event',
+      resourceId: id,
+      summary: `${await this.actorName(userId)} deleted event "${before?.title ?? '(unknown)'}"`,
+      metadata: { title: before?.title, startAt: before?.startAt },
+    });
   }
 
   async rsvp(eventId: string, userId: string, status: string) {

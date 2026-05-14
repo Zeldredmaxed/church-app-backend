@@ -1,8 +1,11 @@
 import { Injectable, NotFoundException, InternalServerErrorException } from '@nestjs/common';
 import { rlsStorage } from '../common/storage/rls.storage';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class ModerationService {
+  constructor(private readonly audit: AuditService) {}
+
   private getRlsContext() {
     const ctx = rlsStorage.getStore();
     if (!ctx) throw new InternalServerErrorException('RLS context unavailable');
@@ -63,24 +66,37 @@ export class ModerationService {
   async approveReport(id: string, reviewerId: string) {
     const { queryRunner } = this.getRlsContext();
     const rows = await queryRunner.query(
-      `UPDATE public.post_reports SET status = 'reviewed', reviewed_by = $2 WHERE id = $1 RETURNING id`,
+      `UPDATE public.post_reports SET status = 'reviewed', reviewed_by = $2 WHERE id = $1 RETURNING id, post_id`,
       [id, reviewerId],
     );
     if (rows.length === 0) throw new NotFoundException('Report not found');
+
+    const [actor] = await queryRunner.query(`SELECT full_name FROM public.users WHERE id = $1`, [reviewerId]);
+    await this.audit.log({
+      action: 'report.dismissed',
+      resourceType: 'post',
+      resourceId: rows[0].post_id,
+      summary: `${actor?.full_name ?? 'Admin'} dismissed report ${id} (post left in place)`,
+      metadata: { reportId: id, decision: 'dismiss', postId: rows[0].post_id },
+    });
+
     return { message: 'Report approved' };
   }
 
   async removeReport(id: string, reviewerId: string) {
     const { queryRunner } = this.getRlsContext();
 
-    // Get the post_id first
+    // Get the post_id (plus author for audit) before we start mutating.
     const rows = await queryRunner.query(
-      `SELECT post_id FROM public.post_reports WHERE id = $1`,
+      `SELECT pr.post_id, p.author_id, p.content
+       FROM public.post_reports pr
+       LEFT JOIN public.posts p ON p.id = pr.post_id
+       WHERE pr.id = $1`,
       [id],
     );
     if (!rows.length) throw new NotFoundException('Report not found');
 
-    const postId = rows[0].post_id;
+    const { post_id: postId, author_id: authorId, content: postContent } = rows[0];
 
     // Update report status
     await queryRunner.query(
@@ -93,6 +109,31 @@ export class ModerationService {
       `DELETE FROM public.posts WHERE id = $1`,
       [postId],
     );
+
+    const [actor] = await queryRunner.query(`SELECT full_name FROM public.users WHERE id = $1`, [reviewerId]);
+    await this.audit.log({
+      action: 'report.actioned',
+      resourceType: 'post',
+      resourceId: postId,
+      targetUserId: authorId ?? null,
+      summary: `${actor?.full_name ?? 'Admin'} actioned report ${id} — removed reported post`,
+      metadata: {
+        reportId: id,
+        decision: 'remove_post',
+        postId,
+        authorId,
+        contentPreview: (postContent ?? '').slice(0, 200),
+      },
+    });
+    // Also emit the post.deleted entry so the post-history search picks it up.
+    await this.audit.log({
+      action: 'post.deleted',
+      resourceType: 'post',
+      resourceId: postId,
+      targetUserId: authorId ?? null,
+      summary: `${actor?.full_name ?? 'Admin'} deleted reported post`,
+      metadata: { authorId, via: 'report_action', reportId: id, contentPreview: (postContent ?? '').slice(0, 200) },
+    });
 
     return { message: 'Report resolved and post removed' };
   }

@@ -14,6 +14,7 @@ import { CreateFundDto } from './dto/create-fund.dto';
 import { CreateBatchDto } from './dto/create-batch.dto';
 import { getTierFeatures } from '../common/config/tier-features.config';
 import { CacheService } from '../common/services/cache.service';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class GivingService {
@@ -23,6 +24,7 @@ export class GivingService {
     private readonly stripeService: StripeService,
     private readonly dataSource: DataSource,
     private readonly cache: CacheService,
+    private readonly audit: AuditService,
   ) {}
 
   /**
@@ -250,6 +252,25 @@ export class GivingService {
     );
 
     const r = rows[0];
+
+    // Audit the fund creation. Note: createFund only fires from /giving/funds
+    // which is gated to admin via the controller's role check.
+    try {
+      await this.audit.log({
+        action: 'finance.fund_created',
+        resourceType: 'fund',
+        resourceId: r.id,
+        summary: `Admin created giving fund "${r.name}"`,
+        metadata: { name: r.name, description: r.description },
+      });
+    } catch (err: any) {
+      // If RlsContextInterceptor isn't wrapping this route, audit will throw
+      // ("no active RLS context"). Don't fail the fund creation on that.
+      // Surface it as a warning — the fund still exists; audit needs a route
+      // refactor to wrap with RlsContextInterceptor.
+      this.logger.warn(`finance.fund_created audit failed (non-blocking): ${err.message}`);
+    }
+
     return {
       id: r.id,
       tenantId: r.tenant_id,

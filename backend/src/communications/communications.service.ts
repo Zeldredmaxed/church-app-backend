@@ -7,6 +7,7 @@ import { CreateSegmentDto } from './dto/create-segment.dto';
 import { CreateTemplateDto } from './dto/create-template.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import { ScheduleMessageDto } from './dto/schedule-message.dto';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class CommunicationsService {
@@ -17,6 +18,7 @@ export class CommunicationsService {
     private readonly emailService: EmailService,
     private readonly smsService: SmsService,
     private readonly oneSignalService: OneSignalService,
+    private readonly audit: AuditService,
   ) {}
 
   /* ───── Audience Segments ───── */
@@ -65,6 +67,18 @@ export class CommunicationsService {
        RETURNING *`,
       [tenantId, dto.name, dto.subject ?? null, dto.body, dto.channel, userId],
     );
+    try {
+      const [actor] = await this.dataSource.query(`SELECT full_name FROM public.users WHERE id = $1`, [userId]);
+      await this.audit.log({
+        action: 'notification.template_created',
+        resourceType: 'notification',
+        resourceId: row.id,
+        summary: `${actor?.full_name ?? 'Admin'} created message template "${row.name}" (${row.channel})`,
+        metadata: { name: row.name, channel: row.channel, hasSubject: !!row.subject },
+      });
+    } catch (err: any) {
+      this.logger.warn(`notification.template_created audit failed (non-blocking): ${err.message}`);
+    }
     return this.mapTemplate(row);
   }
 
