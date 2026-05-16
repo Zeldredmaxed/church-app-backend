@@ -38,19 +38,42 @@ export class TenantsService {
    * No auth required — used by the Join/signup church picker.
    * Optional search query filters by name (case-insensitive).
    */
+  /**
+   * Public church chooser list used during signup and from the "Change
+   * Church" screen in settings. The No Church Home guest tenant is always
+   * returned first (when it matches the filter) so the mobile can render
+   * it as a pinned top option without extra client-side sorting.
+   *
+   * Branch info: each row carries parentTenantId + campusName so the
+   * frontend can group sibling campuses under their parent organization
+   * — same shape as the membership list, so the renderers can stay in
+   * sync.
+   */
   async getPublicChurches(q?: string) {
     const params: any[] = [];
-    let sql = `SELECT id, name, slug FROM public.tenants`;
+    let sql = `
+      SELECT id, name, slug, brand_color, is_guest,
+             parent_tenant_id, campus_name
+      FROM public.tenants`;
 
     if (q && q.trim()) {
       params.push(`%${q.trim()}%`);
       sql += ` WHERE name ILIKE $1`;
     }
 
-    sql += ` ORDER BY name ASC LIMIT 100`;
+    // Guest tenant pinned to position 0; everything else alphabetical.
+    sql += ` ORDER BY is_guest DESC, name ASC LIMIT 200`;
 
     const rows = await this.dataSource.query(sql, params);
-    return rows.map((r: any) => ({ id: r.id, name: r.name, slug: r.slug }));
+    return rows.map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      slug: r.slug,
+      brandColor: r.brand_color,
+      isGuest: r.is_guest,
+      parentTenantId: r.parent_tenant_id,
+      campusName: r.campus_name,
+    }));
   }
 
   /**

@@ -20,6 +20,7 @@ import { CreateMembershipDto } from './dto/create-membership.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { UpdatePermissionsDto } from './dto/update-permissions.dto';
 import { GetMembersDto } from './dto/get-members.dto';
+import { SelfJoinDto, SwitchChurchDto } from './dto/self-join.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { TierGuard } from '../common/guards/tier.guard';
 import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
@@ -45,6 +46,51 @@ export class MembershipsController {
       user.sub,
       user.app_metadata?.current_tenant_id ?? null,
     );
+  }
+
+  @Post('memberships/me/join')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Self-join a tenant (signup church picker or settings change church)',
+    description:
+      'Adds the authenticated user to the given tenant as a member. Idempotent — returns the existing membership if already joined. Auto-assigns the tenant\'s Guest tag (creating it if missing). Pair with POST /api/auth/switch-tenant + /auth/refresh to make this tenant the active context.',
+  })
+  @ApiResponse({ status: 201, description: '{ membership, tenant }' })
+  @ApiResponse({ status: 404, description: 'Tenant not found' })
+  selfJoin(
+    @CurrentUser() user: SupabaseJwtPayload,
+    @Body() dto: SelfJoinDto,
+  ) {
+    return this.membershipsService.selfJoin(user.sub, dto.tenantId);
+  }
+
+  @Post('memberships/me/switch-church')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Atomic leave-current + join-new (settings → change church / change branch)',
+    description:
+      'Performs both operations in a single transaction so a failure can\'t strand the user with two memberships. Also updates last_accessed_tenant_id; client must call /api/auth/refresh afterwards to get the new JWT context.',
+  })
+  @ApiResponse({ status: 200, description: '{ membership, tenant, message }' })
+  @ApiResponse({ status: 400, description: 'leaveTenantId equals joinTenantId' })
+  @ApiResponse({ status: 404, description: 'Target tenant not found' })
+  switchChurch(
+    @CurrentUser() user: SupabaseJwtPayload,
+    @Body() dto: SwitchChurchDto,
+  ) {
+    return this.membershipsService.switchChurch(user.sub, dto.leaveTenantId, dto.joinTenantId);
+  }
+
+  @Get('tenants/:tenantId/branches')
+  @ApiOperation({
+    summary: 'List sibling campuses for a tenant (Change Branch UI)',
+    description:
+      'Returns the parent organization + all of its campus tenants. Works whether the passed id is the parent or any of its children. Each row carries isParent so the UI can highlight the main church.',
+  })
+  @ApiResponse({ status: 200, description: 'Array of { id, name, brandColor, campusName, isParent, ... }' })
+  @ApiResponse({ status: 404, description: 'Tenant not found' })
+  getBranches(@Param('tenantId', ParseUUIDPipe) tenantId: string) {
+    return this.membershipsService.getBranches(tenantId);
   }
 
   @Post('memberships')

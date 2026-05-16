@@ -28,6 +28,188 @@ export class MembershipsService {
     private readonly audit: AuditService,
   ) {}
 
+  /**
+   * Self-service join: the authenticated user adds themselves to a tenant
+   * as 'member'. Used during signup (mobile picks a church from the public
+   * directory) and from the "Change Church" / "Change Branch" settings
+   * flow.
+   *
+   * Service-role intentionally — at signup time the user has no tenant
+   * context yet, so RLS would reject the membership INSERT. The auth
+   * layer guarantees user.sub; the only thing we infer from the request
+   * is the user's own identity, which is authenticated.
+   *
+   * Auto-tags the new member with the tenant's "Guest" tag (creating it
+   * if missing). For the No Church Home tenant this gives every guest
+   * user the Guest tag the mobile uses to gate church-only UI; for real
+   * churches it doubles as the existing "new attendee" marker that admins
+   * already rely on.
+   */
+  async selfJoin(userId: string, tenantId: string) {
+    const tenant = await this.dataSource.manager.findOne(Tenant, {
+      where: { id: tenantId },
+    });
+    if (!tenant) throw new NotFoundException('Tenant not found');
+
+    return this.dataSource.transaction(async manager => {
+      // Idempotent — if the user is already a member, return that
+      // membership rather than throwing.
+      const existing = await manager.findOne(TenantMembership, {
+        where: { userId, tenantId },
+      });
+      if (existing) {
+        await this.ensureGuestTag(manager, tenantId, userId);
+        return this.buildJoinResponse(tenant, existing);
+      }
+
+      const membership = await manager.save(
+        TenantMembership,
+        manager.create(TenantMembership, { userId, tenantId, role: 'member' }),
+      );
+      await this.ensureGuestTag(manager, tenantId, userId);
+      this.logger.log(`Self-join: ${userId} → tenant ${tenantId}`);
+      return this.buildJoinResponse(tenant, membership);
+    });
+  }
+
+  /**
+   * Atomic leave-old + join-new for the "Change Church" and "Change
+   * Branch" flows. The frontend POSTs both tenant ids; we do the swap
+   * inside a single transaction so a partial failure can't strand the
+   * user with two (or zero) memberships.
+   *
+   * Also updates users.last_accessed_tenant_id so the next
+   * /api/auth/refresh returns a JWT scoped to the new tenant.
+   */
+  async switchChurch(userId: string, leaveTenantId: string, joinTenantId: string) {
+    if (leaveTenantId === joinTenantId) {
+      throw new BadRequestException('leaveTenantId and joinTenantId must differ');
+    }
+    const target = await this.dataSource.manager.findOne(Tenant, {
+      where: { id: joinTenantId },
+    });
+    if (!target) throw new NotFoundException('Target tenant not found');
+
+    return this.dataSource.transaction(async manager => {
+      // Leave old (no-op if the user wasn't a member, e.g. they're
+      // switching from a stale local tenantId).
+      await manager.delete(TenantMembership, { userId, tenantId: leaveTenantId });
+
+      // Join new (idempotent).
+      let membership = await manager.findOne(TenantMembership, {
+        where: { userId, tenantId: joinTenantId },
+      });
+      if (!membership) {
+        membership = await manager.save(
+          TenantMembership,
+          manager.create(TenantMembership, {
+            userId,
+            tenantId: joinTenantId,
+            role: 'member',
+          }),
+        );
+      }
+
+      await this.ensureGuestTag(manager, joinTenantId, userId);
+
+      // Switch active tenant — fires the handle_tenant_context_switch
+      // trigger which propagates current_tenant_id into auth metadata.
+      await manager.update(User, { id: userId }, {
+        lastAccessedTenantId: joinTenantId,
+      });
+
+      this.logger.log(
+        `Switch church: ${userId} left ${leaveTenantId}, joined ${joinTenantId}`,
+      );
+
+      return {
+        ...this.buildJoinResponse(target, membership),
+        message:
+          'Switched. Call POST /api/auth/refresh to get a JWT scoped to the new tenant.',
+      };
+    });
+  }
+
+  /**
+   * Lists "branches" for a given tenant — all sibling campuses that share
+   * the same parent organization, including the parent itself. If the
+   * given tenant is standalone (no parent + no children) the response is
+   * a single-element list.
+   *
+   * Used by the "Change Branch" UI in settings.
+   */
+  async getBranches(tenantId: string) {
+    const tenant = await this.dataSource.manager.findOne(Tenant, {
+      where: { id: tenantId },
+    });
+    if (!tenant) throw new NotFoundException('Tenant not found');
+
+    const rootId = tenant.parentTenantId ?? tenant.id;
+    const rows = await this.dataSource.query(
+      `SELECT id, name, slug, brand_color, is_guest,
+              parent_tenant_id, campus_name
+       FROM public.tenants
+       WHERE id = $1 OR parent_tenant_id = $1
+       ORDER BY parent_tenant_id NULLS FIRST, campus_name ASC, name ASC`,
+      [rootId],
+    );
+    return rows.map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      slug: r.slug,
+      brandColor: r.brand_color,
+      isGuest: r.is_guest,
+      parentTenantId: r.parent_tenant_id,
+      campusName: r.campus_name,
+      isParent: r.parent_tenant_id === null,
+    }));
+  }
+
+  private async ensureGuestTag(manager: any, tenantId: string, userId: string) {
+    // Re-uses the existing Guest-tag convention from the signup flow:
+    // every member of a tenant carries the Guest tag on first arrival
+    // (admins promote/replace later). For the no-church-home tenant the
+    // Guest tag IS the long-term marker.
+    const [existing] = await manager.query(
+      `SELECT id FROM public.tags WHERE tenant_id = $1 AND name = 'Guest'`,
+      [tenantId],
+    );
+    let tagId = existing?.id;
+    if (!tagId) {
+      const [created] = await manager.query(
+        `INSERT INTO public.tags (tenant_id, name, color)
+         VALUES ($1, 'Guest', '#9CA3AF') RETURNING id`,
+        [tenantId],
+      );
+      tagId = created.id;
+    }
+    await manager.query(
+      `INSERT INTO public.member_tags (tag_id, user_id, assigned_by)
+       VALUES ($1, $2, $2) ON CONFLICT DO NOTHING`,
+      [tagId, userId],
+    );
+  }
+
+  private buildJoinResponse(tenant: Tenant, membership: TenantMembership) {
+    return {
+      membership: {
+        userId: membership.userId,
+        tenantId: membership.tenantId,
+        role: membership.role,
+      },
+      tenant: {
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        tier: tenant.tier,
+        brandColor: tenant.brandColor,
+        isGuest: tenant.isGuest,
+        campusName: tenant.campusName,
+        parentTenantId: tenant.parentTenantId,
+      },
+    };
+  }
+
   private async resolveName(userId: string): Promise<string> {
     const [r] = await this.dataSource.query(
       `SELECT full_name FROM public.users WHERE id = $1`,
