@@ -322,17 +322,53 @@ export class BadgesService {
     }));
   }
 
-  async checkAndAwardAutoBadges(tenantId: string, userId: string): Promise<Array<{ badgeId: string; name: string }>> {
+  async checkAndAwardAutoBadges(
+    tenantId: string,
+    userId: string,
+  ): Promise<
+    Array<{
+      id: string;
+      badgeId: string;
+      earnedAt: string;
+      badge: {
+        id: string;
+        name: string;
+        description: string | null;
+        icon: string;
+        tier: string;
+        category: string;
+        color: string;
+      };
+    }>
+  > {
     const { queryRunner } = this.getRlsContext();
 
-    // 1. Load all active badges with auto_award_rules for this tenant
+    // 1. Load all active badges with auto_award_rules for this tenant.
+    // Pulls every field the mobile AchievementModal renders so the response
+    // payload is self-contained and the client doesn't need a follow-up
+    // GET /api/badges/:id for each badge in the celebration queue.
     const badges = await queryRunner.query(
-      `SELECT id, name, auto_award_rule FROM public.badges
+      `SELECT id, name, description, icon, tier, category, color,
+              auto_award_rule, rarity_tier
+       FROM public.badges
        WHERE tenant_id = $1 AND is_active = true AND auto_award_rule IS NOT NULL`,
       [tenantId],
     );
 
-    const newlyAwarded: Array<{ badgeId: string; name: string }> = [];
+    const newlyAwarded: Array<{
+      id: string;
+      badgeId: string;
+      earnedAt: string;
+      badge: {
+        id: string;
+        name: string;
+        description: string | null;
+        icon: string;
+        tier: string;
+        category: string;
+        color: string;
+      };
+    }> = [];
 
     // Batch-fetch all badges this user already has (eliminates N per-badge existence queries)
     const existingAwards = await queryRunner.query(
@@ -562,13 +598,33 @@ export class BadgesService {
       }
 
       if (qualified) {
-        await queryRunner.query(
+        // RETURNING the row gives us the user-badge UUID + awarded_at for
+        // the mobile AchievementModal. ON CONFLICT DO NOTHING returns zero
+        // rows in the race-condition case (we already de-duped via
+        // earnedSet, but two parallel /badges/check calls could both pass
+        // that filter); skip the celebration push for the loser.
+        const [awarded] = await queryRunner.query(
           `INSERT INTO public.member_badges (badge_id, user_id, tenant_id, awarded_reason)
            VALUES ($1, $2, $3, $4)
-           ON CONFLICT (badge_id, user_id) DO NOTHING`,
+           ON CONFLICT (badge_id, user_id) DO NOTHING
+           RETURNING id, awarded_at`,
           [badge.id, userId, tenantId, `Auto-awarded: ${rule.type}`],
         );
-        newlyAwarded.push({ badgeId: badge.id, name: badge.name });
+        if (!awarded) continue;
+        newlyAwarded.push({
+          id: awarded.id,
+          badgeId: badge.id,
+          earnedAt: new Date(awarded.awarded_at).toISOString(),
+          badge: {
+            id: badge.id,
+            name: badge.name,
+            description: badge.description,
+            icon: badge.icon,
+            tier: badge.tier,
+            category: badge.category,
+            color: badge.color,
+          },
+        });
 
         // Fire super-rare broadcast if this is a diamond/platinum badge with < 5 earners
         const tier = badge.auto_award_rule?.tier ?? badge.tier;
