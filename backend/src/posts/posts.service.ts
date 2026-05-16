@@ -25,6 +25,7 @@ export interface PostWithMeta {
   mediaType: string;
   mediaUrl: string | null;
   videoMuxPlaybackId: string | null;
+  videoCropRect: { x: number; y: number; width: number; height: number; aspectRatio?: number } | null;
   visibility: 'public' | 'private';
   createdAt: Date;
   updatedAt: Date;
@@ -70,17 +71,54 @@ export class PostsService {
       );
     }
 
+    // If the mobile uploaded via Mux Direct Upload, the playback ID
+    // probably isn't ready yet — Mux's webhook will fill it in. We may,
+    // however, get lucky if the upload finished processing before the
+    // create-post call lands; cover both by reading the pending row.
+    let resolvedPlaybackId: string | null = dto.videoMuxPlaybackId ?? null;
+    let pendingUploadRowId: string | null = null;
+    if (dto.videoMuxUploadId && !resolvedPlaybackId) {
+      const [pending] = await queryRunner.query(
+        `SELECT id, mux_playback_id FROM public.pending_video_uploads
+         WHERE mux_upload_id = $1 AND user_id = $2`,
+        [dto.videoMuxUploadId, authorId],
+      );
+      if (!pending) {
+        throw new BadRequestException(
+          'videoMuxUploadId does not match a pending upload owned by you',
+        );
+      }
+      pendingUploadRowId = pending.id;
+      resolvedPlaybackId = pending.mux_playback_id ?? null;
+    }
+
+    const isVideoPost = Boolean(resolvedPlaybackId || dto.videoMuxUploadId);
+
     const post = queryRunner.manager.create(Post, {
       tenantId: currentTenantId,
       authorId,
       content: dto.content,
-      mediaType: dto.mediaType ?? (dto.videoMuxPlaybackId ? 'video' : 'text'),
+      mediaType: dto.mediaType ?? (isVideoPost ? 'video' : 'text'),
       mediaUrl: dto.mediaUrl ?? null,
-      videoMuxPlaybackId: dto.videoMuxPlaybackId ?? null,
+      videoMuxPlaybackId: resolvedPlaybackId,
+      videoCropRect: dto.videoCropRect ?? null,
       visibility: dto.visibility ?? 'public',
     });
 
     const saved = await queryRunner.manager.save(Post, post);
+
+    // Bind the pending upload row to this post so the webhook can finish
+    // the link when Mux is done processing. Also store the crop rect on
+    // the pending row in case a future transcode job picks it up.
+    if (pendingUploadRowId) {
+      await this.dataSource.query(
+        `UPDATE public.pending_video_uploads
+         SET post_id = $1, crop_rect = $2::jsonb
+         WHERE id = $3`,
+        [saved.id, dto.videoCropRect ? JSON.stringify(dto.videoCropRect) : null, pendingUploadRowId],
+      );
+    }
+
     this.logger.log(`Post created: ${saved.id} in tenant ${currentTenantId} by ${authorId}`);
 
     // Re-fetch with author relation so the response includes fullName/avatarUrl
@@ -201,7 +239,7 @@ export class PostsService {
 
     const rows: Array<{
       id: string; tenant_id: string; author_id: string; content: string;
-      media_type: string; media_url: string | null; video_mux_playback_id: string | null;
+      media_type: string; media_url: string | null; video_mux_playback_id: string | null; video_crop_rect: any | null;
       visibility: 'public' | 'private';
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
@@ -210,7 +248,7 @@ export class PostsService {
     }> = await queryRunner.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.visibility,
          p.created_at, p.updated_at,
          u.id         AS u_id,
          u.full_name  AS u_full_name,
@@ -262,6 +300,7 @@ export class PostsService {
       mediaType: r.media_type,
       mediaUrl: r.media_url,
       videoMuxPlaybackId: r.video_mux_playback_id,
+      videoCropRect: r.video_crop_rect ?? null,
       visibility: r.visibility,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
@@ -288,7 +327,7 @@ export class PostsService {
     const rows = await queryRunner.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.visibility,
          p.created_at, p.updated_at,
          u.id         AS u_id,
          u.full_name  AS u_full_name,
@@ -319,6 +358,7 @@ export class PostsService {
       mediaType: r.media_type,
       mediaUrl: r.media_url,
       videoMuxPlaybackId: r.video_mux_playback_id,
+      videoCropRect: r.video_crop_rect ?? null,
       visibility: r.visibility,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
@@ -469,7 +509,7 @@ export class PostsService {
 
     const rows: Array<{
       id: string; tenant_id: string; author_id: string; content: string;
-      media_type: string; media_url: string | null; video_mux_playback_id: string | null;
+      media_type: string; media_url: string | null; video_mux_playback_id: string | null; video_crop_rect: any | null;
       visibility: 'public' | 'private';
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
@@ -478,7 +518,7 @@ export class PostsService {
     }> = await queryRunner.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.visibility,
          p.created_at, p.updated_at,
          u.id         AS u_id,
          u.full_name  AS u_full_name,
@@ -511,6 +551,7 @@ export class PostsService {
       mediaType: r.media_type,
       mediaUrl: r.media_url,
       videoMuxPlaybackId: r.video_mux_playback_id,
+      videoCropRect: r.video_crop_rect ?? null,
       visibility: r.visibility,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
@@ -639,7 +680,7 @@ export class PostsService {
 
     const rows: Array<{
       id: string; tenant_id: string; author_id: string; content: string;
-      media_type: string; media_url: string | null; video_mux_playback_id: string | null;
+      media_type: string; media_url: string | null; video_mux_playback_id: string | null; video_crop_rect: any | null;
       visibility: 'public' | 'private';
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
@@ -648,7 +689,7 @@ export class PostsService {
     }> = await queryRunner.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.visibility,
          p.created_at, p.updated_at,
          u.id AS u_id, u.full_name AS u_full_name, u.avatar_url AS u_avatar_url,
          (SELECT COUNT(*)::int FROM public.post_likes WHERE post_id = p.id) AS like_count,
@@ -677,6 +718,7 @@ export class PostsService {
       mediaType: r.media_type,
       mediaUrl: r.media_url,
       videoMuxPlaybackId: r.video_mux_playback_id,
+      videoCropRect: r.video_crop_rect ?? null,
       visibility: r.visibility,
       createdAt: r.created_at,
       updatedAt: r.updated_at,

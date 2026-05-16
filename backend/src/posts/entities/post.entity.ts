@@ -57,6 +57,15 @@ export class Post {
   videoMuxPlaybackId: string | null;
 
   /**
+   * Normalized pinch-zoom-crop rectangle for video posts.
+   * { x, y, width, height } in [0..1] with optional aspectRatio.
+   * Playback applies it via CSS until a server-side transcode worker
+   * re-encodes the asset with the crop baked in. Null for un-cropped video.
+   */
+  @Column({ type: 'jsonb', nullable: true, name: 'video_crop_rect' })
+  videoCropRect: any | null;
+
+  /**
    * Instagram-style archive flag. When true, the post is hidden from every
    * feed/search/profile view and only appears in the owner's archive list.
    * Toggled via POST/DELETE /api/posts/:id/archive.

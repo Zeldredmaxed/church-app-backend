@@ -100,28 +100,172 @@ export class WebhooksController {
     this.logger.log(`Mux webhook received: ${eventType}`);
     this.logger.debug(`Mux webhook payload: ${JSON.stringify(payload)}`);
 
-    // Process video.asset.ready — update the post's playback ID
-    if (eventType === 'video.asset.ready') {
-      const asset = payload.data;
-      const playbackId = asset?.playback_ids?.[0]?.id;
-      const passthrough = asset?.passthrough; // We store the post ID as passthrough
-
-      if (playbackId && passthrough) {
-        await this.dataSource.manager.update(
-          PostEntity,
-          { id: passthrough },
-          { videoMuxPlaybackId: playbackId },
-        );
-        this.logger.log(
-          `Updated post ${passthrough} with Mux playback ID ${playbackId}`,
-        );
-      } else {
-        this.logger.warn(
-          `video.asset.ready missing playbackId or passthrough: ${JSON.stringify({ playbackId, passthrough })}`,
-        );
-      }
+    // Mux event routing.
+    //
+    // Direct Upload lifecycle:
+    //   video.upload.asset_created → asset_id assigned to the upload, but
+    //                                playback isn't ready yet. We bind
+    //                                asset_id to our pending row.
+    //   video.asset.ready          → playback IDs exist. We copy the
+    //                                playback_id to whatever post or story
+    //                                claimed this upload.
+    //
+    // Older flow (S3 → Mux ingest) used asset.passthrough = post.id; that
+    // path remains supported for backwards compatibility below.
+    if (eventType === 'video.upload.asset_created') {
+      await this.handleUploadAssetCreated(payload.data);
+    } else if (eventType === 'video.asset.ready') {
+      await this.handleAssetReady(payload.data);
+    } else if (eventType === 'video.upload.errored' || eventType === 'video.asset.errored') {
+      await this.handleAssetErrored(payload.data, eventType);
     }
 
     return { received: true };
+  }
+
+  /**
+   * Mux just created an Asset for our Direct Upload. We resolve the
+   * upload's passthrough (the pending_video_uploads row id) and store the
+   * asset_id so the next webhook can find us by asset_id alone (the
+   * asset.ready payload doesn't always echo upload context).
+   */
+  private async handleUploadAssetCreated(data: any) {
+    const uploadId = data?.upload_id ?? data?.id;
+    const assetId = data?.asset_id;
+    const passthrough = data?.new_asset_settings?.passthrough ?? data?.passthrough;
+
+    if (!assetId) {
+      this.logger.warn(`video.upload.asset_created without asset_id: ${JSON.stringify(data)}`);
+      return;
+    }
+
+    // Prefer passthrough (the pending row id we put on the upload); fall
+    // back to mux_upload_id if Mux ever omits passthrough in this event.
+    const where = passthrough ? 'id = $1' : 'mux_upload_id = $1';
+    const key = passthrough ?? uploadId;
+    if (!key) {
+      this.logger.warn(`video.upload.asset_created: no passthrough or upload_id`);
+      return;
+    }
+
+    const result = await this.dataSource.query(
+      `UPDATE public.pending_video_uploads
+       SET mux_asset_id = $2,
+           status = CASE WHEN status = 'awaiting_upload' THEN 'processing' ELSE status END
+       WHERE ${where}
+       RETURNING id, post_id, story_id`,
+      [key, assetId],
+    );
+    if (result.length === 0) {
+      this.logger.warn(`video.upload.asset_created: no pending row for ${key}`);
+    } else {
+      this.logger.log(`Pending upload ${result[0].id} → asset ${assetId}`);
+    }
+  }
+
+  /**
+   * Mux finished transcoding. Two resolution paths:
+   *   1. The asset's passthrough matches a post.id (legacy ingest flow) —
+   *      update the post directly.
+   *   2. Otherwise look up the pending row by mux_asset_id and propagate
+   *      the playback_id to the linked post or story.
+   */
+  private async handleAssetReady(asset: any) {
+    const playbackId = asset?.playback_ids?.[0]?.id;
+    const passthrough = asset?.passthrough;
+    const assetId = asset?.id;
+
+    if (!playbackId) {
+      this.logger.warn(`video.asset.ready missing playbackId: ${JSON.stringify({ assetId, passthrough })}`);
+      return;
+    }
+
+    // Legacy path: passthrough is the post id.
+    if (passthrough) {
+      const updated = await this.dataSource.manager.update(
+        PostEntity,
+        { id: passthrough },
+        { videoMuxPlaybackId: playbackId },
+      );
+      if (updated.affected && updated.affected > 0) {
+        this.logger.log(`Legacy passthrough: updated post ${passthrough} with playback ${playbackId}`);
+        return;
+      }
+      // Not a post — could be the pending-row UUID from the new flow.
+      const rows = await this.dataSource.query(
+        `UPDATE public.pending_video_uploads
+         SET mux_playback_id = $1, status = 'ready', asset_ready_at = now()
+         WHERE id = $2
+         RETURNING post_id, story_id`,
+        [playbackId, passthrough],
+      );
+      if (rows.length > 0) {
+        await this.propagatePlayback(playbackId, rows[0]);
+        return;
+      }
+    }
+
+    // Direct Upload path keyed by asset_id.
+    if (assetId) {
+      const rows = await this.dataSource.query(
+        `UPDATE public.pending_video_uploads
+         SET mux_playback_id = $1, status = 'ready', asset_ready_at = now()
+         WHERE mux_asset_id = $2
+         RETURNING post_id, story_id`,
+        [playbackId, assetId],
+      );
+      if (rows.length > 0) {
+        await this.propagatePlayback(playbackId, rows[0]);
+        return;
+      }
+    }
+
+    this.logger.warn(
+      `video.asset.ready: no destination resolved (passthrough=${passthrough}, assetId=${assetId})`,
+    );
+  }
+
+  private async propagatePlayback(
+    playbackId: string,
+    pending: { post_id: string | null; story_id: string | null },
+  ) {
+    if (pending.post_id) {
+      await this.dataSource.query(
+        `UPDATE public.posts SET video_mux_playback_id = $1, updated_at = now()
+         WHERE id = $2`,
+        [playbackId, pending.post_id],
+      );
+      this.logger.log(`Asset ready: post ${pending.post_id} → playback ${playbackId}`);
+    }
+    if (pending.story_id) {
+      await this.dataSource.query(
+        `UPDATE public.stories SET video_mux_playback_id = $1
+         WHERE id = $2`,
+        [playbackId, pending.story_id],
+      );
+      this.logger.log(`Asset ready: story ${pending.story_id} → playback ${playbackId}`);
+    }
+  }
+
+  private async handleAssetErrored(data: any, eventType: string) {
+    const message = data?.errors?.[0]?.messages?.[0] ?? data?.error?.message ?? eventType;
+    const passthrough = data?.passthrough ?? data?.new_asset_settings?.passthrough;
+    const assetId = data?.id ?? data?.asset_id;
+    const uploadId = data?.upload_id;
+    const key = passthrough ?? uploadId ?? assetId;
+    if (!key) return;
+
+    const where = passthrough
+      ? 'id = $1'
+      : uploadId
+      ? 'mux_upload_id = $1'
+      : 'mux_asset_id = $1';
+    await this.dataSource.query(
+      `UPDATE public.pending_video_uploads
+       SET status = 'errored', error_message = $2
+       WHERE ${where}`,
+      [key, message.slice(0, 500)],
+    );
+    this.logger.warn(`Mux error on ${key}: ${message}`);
   }
 }

@@ -246,7 +246,7 @@ export class MeActivityService {
     const rows = await this.dataSource.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.visibility,
          p.created_at, p.updated_at,
          u.full_name AS author_full_name, u.avatar_url AS author_avatar_url,
          (SELECT COUNT(*)::int FROM public.post_likes WHERE post_id = p.id) AS like_count,
@@ -324,7 +324,7 @@ export class MeActivityService {
     const rows = await this.dataSource.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.visibility,
          p.created_at, p.updated_at,
          u.full_name AS author_full_name, u.avatar_url AS author_avatar_url,
          pl.created_at AS liked_at,
@@ -700,6 +700,7 @@ export class MeActivityService {
       mediaType: r.media_type,
       mediaUrl: r.media_url,
       videoMuxPlaybackId: r.video_mux_playback_id,
+      videoCropRect: r.video_crop_rect ?? null,
       visibility: r.visibility,
       createdAt: r.created_at,
       updatedAt: r.updated_at,

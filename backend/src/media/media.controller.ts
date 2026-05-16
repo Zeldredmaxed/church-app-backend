@@ -8,8 +8,11 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { DataSource } from 'typeorm';
 import { MediaService } from './media.service';
+import { MuxService } from './mux.service';
 import { PresignedUrlDto } from './dto/presigned-url.dto';
+import { MuxUploadDto } from './dto/mux-upload.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -23,8 +26,10 @@ import { StorageService } from '../storage/storage.service';
 export class MediaController {
   constructor(
     private readonly mediaService: MediaService,
+    private readonly muxService: MuxService,
     private readonly tierCheck: TierCheckService,
     private readonly storageService: StorageService,
+    private readonly dataSource: DataSource,
   ) {}
 
   @Post('presigned-url')
@@ -63,5 +68,53 @@ export class MediaController {
     );
 
     return result;
+  }
+
+  @Post('mux-upload')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Create a Mux Direct Upload URL for a video',
+    description:
+      'Returns a signed Mux upload URL the mobile client PUTs raw video bytes to. We allocate a pending_video_uploads row keyed by the returned uploadId; the Mux webhook later fills in asset_id + playback_id. Mobile sends the uploadId (and optional cropRect) when creating the post via POST /api/posts.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '{ uploadId, uploadUrl } — PUT bytes to uploadUrl, then create the post with videoMuxUploadId = uploadId.',
+  })
+  @ApiResponse({ status: 400, description: 'No active tenant context' })
+  @ApiResponse({ status: 403, description: 'Video uploads not allowed on this tier' })
+  async createMuxUpload(
+    @CurrentUser() user: SupabaseJwtPayload,
+    @Body() dto: MuxUploadDto,
+  ) {
+    const tenantId = user.app_metadata?.current_tenant_id;
+    if (!tenantId) throw new BadRequestException('No active tenant context');
+
+    // Tier gate: same as the S3 video path. Direct Upload bypasses our
+    // bandwidth but it's still a feature gate, not a free-for-all.
+    await this.tierCheck.requireFeature(tenantId, 'videoUploads');
+
+    // Allocate our pending row first so the upload row exists before Mux
+    // ingests anything. Passthrough = the pending row's UUID — the webhook
+    // uses it to find the row when video.upload.asset_created arrives.
+    const [pending] = await this.dataSource.query(
+      `INSERT INTO public.pending_video_uploads (tenant_id, user_id, mux_upload_id, status)
+       VALUES ($1, $2, 'pending', 'awaiting_upload')
+       RETURNING id`,
+      [tenantId, user.sub],
+    );
+
+    const { uploadId, uploadUrl } = await this.muxService.createDirectUpload({
+      passthrough: pending.id,
+      corsOrigin: dto.corsOrigin,
+    });
+
+    // Mux returned the actual upload ID — replace the placeholder.
+    await this.dataSource.query(
+      `UPDATE public.pending_video_uploads SET mux_upload_id = $1 WHERE id = $2`,
+      [uploadId, pending.id],
+    );
+
+    return { uploadId, uploadUrl };
   }
 }

@@ -412,7 +412,7 @@ export class CampusService {
     const rows = await this.dataSource.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.visibility,
          p.created_at, p.updated_at,
          u.id AS u_id, u.email AS u_email, u.full_name AS u_full_name, u.avatar_url AS u_avatar_url,
          t.campus_name AS campus_name,
@@ -445,6 +445,7 @@ export class CampusService {
         mediaType: r.media_type,
         mediaUrl: r.media_url,
         videoMuxPlaybackId: r.video_mux_playback_id,
+        videoCropRect: r.video_crop_rect ?? null,
         visibility: r.visibility,
         createdAt: r.created_at,
         updatedAt: r.updated_at,
