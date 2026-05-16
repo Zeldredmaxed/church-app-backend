@@ -322,6 +322,47 @@ export class BadgesService {
     }));
   }
 
+  /** Modal-allowed metallic tiers. Anything else collapses to bronze. */
+  private static readonly MODAL_TIERS = new Set(['bronze', 'silver', 'gold', 'platinum']);
+  /** Modal-allowed categories. Anything else collapses to engagement. */
+  private static readonly MODAL_CATEGORIES = new Set([
+    'attendance', 'giving', 'community', 'prayer', 'volunteer', 'engagement',
+  ]);
+  /**
+   * Best-effort mapping from legacy DB values to the modal's enum so the
+   * scripture pool + tier palette pick sensibly. Any value not in the
+   * MODAL_* sets falls through to the bronze / engagement defaults.
+   */
+  private static readonly TIER_ALIASES: Record<string, string> = {
+    diamond: 'platinum',
+  };
+  private static readonly CATEGORY_ALIASES: Record<string, string> = {
+    spiritual: 'prayer',
+    service: 'volunteer',
+  };
+
+  private coerceTier(raw: string | null | undefined): string {
+    const v = (raw ?? '').toLowerCase();
+    if (BadgesService.MODAL_TIERS.has(v)) return v;
+    return BadgesService.TIER_ALIASES[v] ?? 'bronze';
+  }
+
+  private coerceCategory(raw: string | null | undefined): string {
+    const v = (raw ?? '').toLowerCase();
+    if (BadgesService.MODAL_CATEGORIES.has(v)) return v;
+    return BadgesService.CATEGORY_ALIASES[v] ?? 'engagement';
+  }
+
+  /**
+   * Award newly-qualified badges + return every unseen earn for the user
+   * in earned-time ASC order.
+   *
+   * Idempotency contract: once a member_badges row is included in the
+   * response, its celebration_seen_at is set so future /check calls won't
+   * re-pop the AchievementModal. The mobile can still rely on the
+   * client-side badgeId dedupe to handle network retries within a single
+   * session, but server-side state is the source of truth.
+   */
   async checkAndAwardAutoBadges(
     tenantId: string,
     userId: string,
@@ -355,20 +396,10 @@ export class BadgesService {
       [tenantId],
     );
 
-    const newlyAwarded: Array<{
-      id: string;
-      badgeId: string;
-      earnedAt: string;
-      badge: {
-        id: string;
-        name: string;
-        description: string | null;
-        icon: string;
-        tier: string;
-        category: string;
-        color: string;
-      };
-    }> = [];
+    // We no longer accumulate the response inside the qualification loop —
+    // we award here (INSERT) then SELECT every unseen earn at the end,
+    // which uniformly handles "qualified just now" plus "awarded by a
+    // background job since the user's last /check" in one ordered batch.
 
     // Batch-fetch all badges this user already has (eliminates N per-badge existence queries)
     const existingAwards = await queryRunner.query(
@@ -598,33 +629,16 @@ export class BadgesService {
       }
 
       if (qualified) {
-        // RETURNING the row gives us the user-badge UUID + awarded_at for
-        // the mobile AchievementModal. ON CONFLICT DO NOTHING returns zero
-        // rows in the race-condition case (we already de-duped via
-        // earnedSet, but two parallel /badges/check calls could both pass
-        // that filter); skip the celebration push for the loser.
-        const [awarded] = await queryRunner.query(
+        // Insert with ON CONFLICT for the race case. We do NOT push to the
+        // response here — the final SELECT below picks up every unseen
+        // earn (including ones awarded by other services since the user's
+        // last /check) in awarded_at ASC order.
+        await queryRunner.query(
           `INSERT INTO public.member_badges (badge_id, user_id, tenant_id, awarded_reason)
            VALUES ($1, $2, $3, $4)
-           ON CONFLICT (badge_id, user_id) DO NOTHING
-           RETURNING id, awarded_at`,
+           ON CONFLICT (badge_id, user_id) DO NOTHING`,
           [badge.id, userId, tenantId, `Auto-awarded: ${rule.type}`],
         );
-        if (!awarded) continue;
-        newlyAwarded.push({
-          id: awarded.id,
-          badgeId: badge.id,
-          earnedAt: new Date(awarded.awarded_at).toISOString(),
-          badge: {
-            id: badge.id,
-            name: badge.name,
-            description: badge.description,
-            icon: badge.icon,
-            tier: badge.tier,
-            category: badge.category,
-            color: badge.color,
-          },
-        });
 
         // Fire super-rare broadcast if this is a diamond/platinum badge with < 5 earners
         const tier = badge.auto_award_rule?.tier ?? badge.tier;
@@ -640,7 +654,41 @@ export class BadgesService {
       }
     }
 
-    return newlyAwarded;
+    // Drain the unseen-earn queue. UPDATE … RETURNING lets us mark every
+    // row "celebration seen" and read the badge metadata in a single
+    // round-trip — no chance of returning a row to the modal and then
+    // failing to mark it (which would re-pop next /check).
+    const unseen = await queryRunner.query(
+      `WITH unseen AS (
+         UPDATE public.member_badges mb
+         SET celebration_seen_at = now()
+         WHERE mb.user_id = $1
+           AND mb.tenant_id = $2
+           AND mb.celebration_seen_at IS NULL
+         RETURNING mb.id, mb.badge_id, mb.awarded_at
+       )
+       SELECT u.id, u.badge_id, u.awarded_at,
+              b.name, b.description, b.icon, b.tier, b.category, b.color
+       FROM unseen u
+       JOIN public.badges b ON b.id = u.badge_id
+       ORDER BY u.awarded_at ASC`,
+      [userId, tenantId],
+    );
+
+    return unseen.map((r: any) => ({
+      id: r.id,
+      badgeId: r.badge_id,
+      earnedAt: new Date(r.awarded_at).toISOString(),
+      badge: {
+        id: r.badge_id,
+        name: r.name,
+        description: r.description,
+        icon: r.icon,
+        tier: this.coerceTier(r.tier),
+        category: this.coerceCategory(r.category),
+        color: r.color,
+      },
+    }));
   }
 
   /**

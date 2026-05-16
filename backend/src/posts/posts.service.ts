@@ -26,6 +26,16 @@ export interface PostWithMeta {
   mediaUrl: string | null;
   videoMuxPlaybackId: string | null;
   videoCropRect: { x: number; y: number; width: number; height: number; aspectRatio?: number } | null;
+  /** Badge this post is celebrating ("Share to feed" from AchievementModal). NULL for normal posts. */
+  sharedBadge: {
+    id: string;
+    name: string;
+    description: string | null;
+    icon: string;
+    tier: string;
+    category: string;
+    color: string;
+  } | null;
   visibility: 'public' | 'private';
   createdAt: Date;
   updatedAt: Date;
@@ -100,6 +110,23 @@ export class PostsService {
 
     const isVideoPost = Boolean(resolvedPlaybackId || dto.videoMuxUploadId);
 
+    // "Share to feed" from the AchievementModal. Confirm the caller
+    // actually earned this badge before linking — prevents users from
+    // posting badges they haven't earned, which would let them fake
+    // achievements in the feed.
+    if (dto.sharedBadgeId) {
+      const [owned] = await queryRunner.query(
+        `SELECT 1 FROM public.member_badges
+         WHERE badge_id = $1 AND user_id = $2 AND tenant_id = $3`,
+        [dto.sharedBadgeId, authorId, currentTenantId],
+      );
+      if (!owned) {
+        throw new BadRequestException(
+          'sharedBadgeId is not a badge you have earned in this tenant',
+        );
+      }
+    }
+
     const post = queryRunner.manager.create(Post, {
       tenantId: currentTenantId,
       authorId,
@@ -108,6 +135,7 @@ export class PostsService {
       mediaUrl: dto.mediaUrl ?? null,
       videoMuxPlaybackId: resolvedPlaybackId,
       videoCropRect: dto.videoCropRect ?? null,
+      sharedBadgeId: dto.sharedBadgeId ?? null,
       visibility: dto.visibility ?? 'public',
     });
 
@@ -250,12 +278,14 @@ export class PostsService {
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
       u_church_id: string | null; u_church_name: string | null; u_church_brand_color: string | null;
+      sb_id: string | null; sb_name: string | null; sb_description: string | null;
+      sb_icon: string | null; sb_tier: string | null; sb_category: string | null; sb_color: string | null;
       like_count: string; comment_count: string;
       is_liked_by_me: boolean; is_saved_by_me: boolean;
     }> = await queryRunner.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.shared_badge_id, p.visibility,
          p.created_at, p.updated_at,
          u.id         AS u_id,
          u.full_name  AS u_full_name,
@@ -263,6 +293,13 @@ export class PostsService {
          ut.id        AS u_church_id,
          ut.name      AS u_church_name,
          ut.brand_color AS u_church_brand_color,
+         sb.id        AS sb_id,
+         sb.name      AS sb_name,
+         sb.description AS sb_description,
+         sb.icon      AS sb_icon,
+         sb.tier      AS sb_tier,
+         sb.category  AS sb_category,
+         sb.color     AS sb_color,
          lc.like_count,
          cc.comment_count,
          EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $1) AS is_liked_by_me,
@@ -270,6 +307,7 @@ export class PostsService {
        FROM public.posts p
        LEFT JOIN public.users u ON u.id = p.author_id
        LEFT JOIN public.tenants ut ON ut.id = u.last_accessed_tenant_id
+       LEFT JOIN public.badges sb ON sb.id = p.shared_badge_id
        LEFT JOIN LATERAL (SELECT COUNT(*)::int AS like_count FROM public.post_likes WHERE post_id = p.id) lc ON true
        LEFT JOIN LATERAL (SELECT COUNT(*)::int AS comment_count FROM public.comments WHERE post_id = p.id) cc ON true
        WHERE p.is_archived = false ${authorFilter} ${mediaTypeFilter} ${blockFilter}
@@ -312,6 +350,17 @@ export class PostsService {
       mediaUrl: r.media_url,
       videoMuxPlaybackId: r.video_mux_playback_id,
       videoCropRect: r.video_crop_rect ?? null,
+      sharedBadge: r.sb_id
+        ? {
+            id: r.sb_id,
+            name: r.sb_name!,
+            description: r.sb_description,
+            icon: r.sb_icon!,
+            tier: this.coerceBadgeTier(r.sb_tier),
+            category: this.coerceBadgeCategory(r.sb_category),
+            color: r.sb_color!,
+          }
+        : null,
       visibility: r.visibility,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
@@ -345,7 +394,7 @@ export class PostsService {
     const rows = await queryRunner.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.shared_badge_id, p.visibility,
          p.created_at, p.updated_at,
          u.id         AS u_id,
          u.full_name  AS u_full_name,
@@ -353,6 +402,13 @@ export class PostsService {
          ut.id        AS u_church_id,
          ut.name      AS u_church_name,
          ut.brand_color AS u_church_brand_color,
+         sb.id        AS sb_id,
+         sb.name      AS sb_name,
+         sb.description AS sb_description,
+         sb.icon      AS sb_icon,
+         sb.tier      AS sb_tier,
+         sb.category  AS sb_category,
+         sb.color     AS sb_color,
          lc.like_count,
          cc.comment_count,
          EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $2) AS is_liked_by_me,
@@ -360,6 +416,7 @@ export class PostsService {
        FROM public.posts p
        LEFT JOIN public.users u ON u.id = p.author_id
        LEFT JOIN public.tenants ut ON ut.id = u.last_accessed_tenant_id
+       LEFT JOIN public.badges sb ON sb.id = p.shared_badge_id
        LEFT JOIN LATERAL (SELECT COUNT(*)::int AS like_count FROM public.post_likes WHERE post_id = p.id) lc ON true
        LEFT JOIN LATERAL (SELECT COUNT(*)::int AS comment_count FROM public.comments WHERE post_id = p.id) cc ON true
        WHERE p.id = $1
@@ -381,6 +438,17 @@ export class PostsService {
       mediaUrl: r.media_url,
       videoMuxPlaybackId: r.video_mux_playback_id,
       videoCropRect: r.video_crop_rect ?? null,
+      sharedBadge: r.sb_id
+        ? {
+            id: r.sb_id,
+            name: r.sb_name!,
+            description: r.sb_description,
+            icon: r.sb_icon!,
+            tier: this.coerceBadgeTier(r.sb_tier),
+            category: this.coerceBadgeCategory(r.sb_category),
+            color: r.sb_color!,
+          }
+        : null,
       visibility: r.visibility,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
@@ -543,12 +611,14 @@ export class PostsService {
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
       u_church_id: string | null; u_church_name: string | null; u_church_brand_color: string | null;
+      sb_id: string | null; sb_name: string | null; sb_description: string | null;
+      sb_icon: string | null; sb_tier: string | null; sb_category: string | null; sb_color: string | null;
       like_count: string; comment_count: string;
       is_liked_by_me: boolean;
     }> = await queryRunner.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.shared_badge_id, p.visibility,
          p.created_at, p.updated_at,
          u.id         AS u_id,
          u.full_name  AS u_full_name,
@@ -556,6 +626,13 @@ export class PostsService {
          ut.id        AS u_church_id,
          ut.name      AS u_church_name,
          ut.brand_color AS u_church_brand_color,
+         sb.id        AS sb_id,
+         sb.name      AS sb_name,
+         sb.description AS sb_description,
+         sb.icon      AS sb_icon,
+         sb.tier      AS sb_tier,
+         sb.category  AS sb_category,
+         sb.color     AS sb_color,
          (SELECT COUNT(*)::int FROM public.post_likes WHERE post_id = p.id) AS like_count,
          (SELECT COUNT(*)::int FROM public.comments   WHERE post_id = p.id) AS comment_count,
          EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $1) AS is_liked_by_me
@@ -563,6 +640,7 @@ export class PostsService {
        JOIN public.posts p ON p.id = ps.post_id
        LEFT JOIN public.users u ON u.id = p.author_id
        LEFT JOIN public.tenants ut ON ut.id = u.last_accessed_tenant_id
+       LEFT JOIN public.badges sb ON sb.id = p.shared_badge_id
        WHERE ps.user_id = $1 AND p.is_archived = false
        ORDER BY ps.created_at DESC
        LIMIT $2 OFFSET $3`,
@@ -586,6 +664,17 @@ export class PostsService {
       mediaUrl: r.media_url,
       videoMuxPlaybackId: r.video_mux_playback_id,
       videoCropRect: r.video_crop_rect ?? null,
+      sharedBadge: r.sb_id
+        ? {
+            id: r.sb_id,
+            name: r.sb_name!,
+            description: r.sb_description,
+            icon: r.sb_icon!,
+            tier: this.coerceBadgeTier(r.sb_tier),
+            category: this.coerceBadgeCategory(r.sb_category),
+            color: r.sb_color!,
+          }
+        : null,
       visibility: r.visibility,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
@@ -726,12 +815,14 @@ export class PostsService {
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
       u_church_id: string | null; u_church_name: string | null; u_church_brand_color: string | null;
+      sb_id: string | null; sb_name: string | null; sb_description: string | null;
+      sb_icon: string | null; sb_tier: string | null; sb_category: string | null; sb_color: string | null;
       like_count: string; comment_count: string;
       is_liked_by_me: boolean; is_saved_by_me: boolean;
     }> = await queryRunner.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.shared_badge_id, p.visibility,
          p.created_at, p.updated_at,
          u.id AS u_id, u.full_name AS u_full_name, u.avatar_url AS u_avatar_url,
          ut.id AS u_church_id, ut.name AS u_church_name, ut.brand_color AS u_church_brand_color,
@@ -742,6 +833,7 @@ export class PostsService {
        FROM public.posts p
        LEFT JOIN public.users u ON u.id = p.author_id
        LEFT JOIN public.tenants ut ON ut.id = u.last_accessed_tenant_id
+       LEFT JOIN public.badges sb ON sb.id = p.shared_badge_id
        WHERE p.author_id = $1 AND p.is_archived = true
        ORDER BY p.created_at DESC
        LIMIT $2 OFFSET $3`,
@@ -763,6 +855,17 @@ export class PostsService {
       mediaUrl: r.media_url,
       videoMuxPlaybackId: r.video_mux_playback_id,
       videoCropRect: r.video_crop_rect ?? null,
+      sharedBadge: r.sb_id
+        ? {
+            id: r.sb_id,
+            name: r.sb_name!,
+            description: r.sb_description,
+            icon: r.sb_icon!,
+            tier: this.coerceBadgeTier(r.sb_tier),
+            category: this.coerceBadgeCategory(r.sb_category),
+            color: r.sb_color!,
+          }
+        : null,
       visibility: r.visibility,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
@@ -793,5 +896,31 @@ export class PostsService {
       );
     }
     return context;
+  }
+
+  // Keep the post.sharedBadge shape aligned with what AchievementModal
+  // gets from /api/badges/check — same metallic-tier ladder and
+  // six-category enum. Duplicated here (rather than imported from
+  // BadgesService) to keep posts free of a badges import dependency.
+  private static readonly MODAL_TIERS = new Set(['bronze', 'silver', 'gold', 'platinum']);
+  private static readonly MODAL_CATEGORIES = new Set([
+    'attendance', 'giving', 'community', 'prayer', 'volunteer', 'engagement',
+  ]);
+  private static readonly TIER_ALIASES: Record<string, string> = { diamond: 'platinum' };
+  private static readonly CATEGORY_ALIASES: Record<string, string> = {
+    spiritual: 'prayer',
+    service: 'volunteer',
+  };
+
+  private coerceBadgeTier(raw: string | null | undefined): string {
+    const v = (raw ?? '').toLowerCase();
+    if (PostsService.MODAL_TIERS.has(v)) return v;
+    return PostsService.TIER_ALIASES[v] ?? 'bronze';
+  }
+
+  private coerceBadgeCategory(raw: string | null | undefined): string {
+    const v = (raw ?? '').toLowerCase();
+    if (PostsService.MODAL_CATEGORIES.has(v)) return v;
+    return PostsService.CATEGORY_ALIASES[v] ?? 'engagement';
   }
 }

@@ -66,6 +66,16 @@ export class Post {
   videoCropRect: any | null;
 
   /**
+   * Badge definition this post is celebrating ("Share to feed" from the
+   * mobile AchievementModal). The post's content still carries the user's
+   * caption; the renderer overlays a badge card based on this FK. ON
+   * DELETE SET NULL — if the church deletes the badge later, the post
+   * survives as a normal text post.
+   */
+  @Column({ type: 'uuid', nullable: true, name: 'shared_badge_id' })
+  sharedBadgeId: string | null;
+
+  /**
    * Instagram-style archive flag. When true, the post is hidden from every
    * feed/search/profile view and only appears in the owner's archive list.
    * Toggled via POST/DELETE /api/posts/:id/archive.

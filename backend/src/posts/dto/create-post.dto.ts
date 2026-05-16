@@ -101,4 +101,12 @@ export class CreatePostDto {
   @IsArray()
   @IsUUID('4', { each: true })
   mentions?: string[];
+
+  @ApiPropertyOptional({
+    description:
+      'Badge definition the post is celebrating. Used by the "Share to feed" button on the AchievementModal. Backend verifies the caller actually earned this badge; rejects otherwise.',
+  })
+  @IsOptional()
+  @IsUUID()
+  sharedBadgeId?: string;
 }
