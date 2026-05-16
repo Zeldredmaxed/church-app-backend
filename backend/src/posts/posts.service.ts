@@ -29,7 +29,13 @@ export interface PostWithMeta {
   visibility: 'public' | 'private';
   createdAt: Date;
   updatedAt: Date;
-  author: { id: string; fullName: string | null; avatarUrl: string | null } | null;
+  author: {
+    id: string;
+    fullName: string | null;
+    avatarUrl: string | null;
+    /** Author's home church (their last_accessed_tenant_id resolved). NULL if they have no tenant or are a guest. */
+    church: { id: string; name: string; brandColor: string | null } | null;
+  } | null;
   likeCount: number;
   commentCount: number;
   isLikedByMe: boolean;
@@ -243,6 +249,7 @@ export class PostsService {
       visibility: 'public' | 'private';
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
+      u_church_id: string | null; u_church_name: string | null; u_church_brand_color: string | null;
       like_count: string; comment_count: string;
       is_liked_by_me: boolean; is_saved_by_me: boolean;
     }> = await queryRunner.query(
@@ -253,12 +260,16 @@ export class PostsService {
          u.id         AS u_id,
          u.full_name  AS u_full_name,
          u.avatar_url AS u_avatar_url,
+         ut.id        AS u_church_id,
+         ut.name      AS u_church_name,
+         ut.brand_color AS u_church_brand_color,
          lc.like_count,
          cc.comment_count,
          EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $1) AS is_liked_by_me,
          EXISTS(SELECT 1 FROM public.post_saves WHERE post_id = p.id AND user_id = $1) AS is_saved_by_me
        FROM public.posts p
        LEFT JOIN public.users u ON u.id = p.author_id
+       LEFT JOIN public.tenants ut ON ut.id = u.last_accessed_tenant_id
        LEFT JOIN LATERAL (SELECT COUNT(*)::int AS like_count FROM public.post_likes WHERE post_id = p.id) lc ON true
        LEFT JOIN LATERAL (SELECT COUNT(*)::int AS comment_count FROM public.comments WHERE post_id = p.id) cc ON true
        WHERE p.is_archived = false ${authorFilter} ${mediaTypeFilter} ${blockFilter}
@@ -305,7 +316,14 @@ export class PostsService {
       createdAt: r.created_at,
       updatedAt: r.updated_at,
       author: r.u_id
-        ? { id: r.u_id, fullName: r.u_full_name, avatarUrl: r.u_avatar_url }
+        ? {
+            id: r.u_id,
+            fullName: r.u_full_name,
+            avatarUrl: r.u_avatar_url,
+            church: r.u_church_id
+              ? { id: r.u_church_id, name: r.u_church_name!, brandColor: r.u_church_brand_color }
+              : null,
+          }
         : null,
       likeCount: Number(r.like_count),
       commentCount: Number(r.comment_count),
@@ -332,12 +350,16 @@ export class PostsService {
          u.id         AS u_id,
          u.full_name  AS u_full_name,
          u.avatar_url AS u_avatar_url,
+         ut.id        AS u_church_id,
+         ut.name      AS u_church_name,
+         ut.brand_color AS u_church_brand_color,
          lc.like_count,
          cc.comment_count,
          EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $2) AS is_liked_by_me,
          EXISTS(SELECT 1 FROM public.post_saves WHERE post_id = p.id AND user_id = $2) AS is_saved_by_me
        FROM public.posts p
        LEFT JOIN public.users u ON u.id = p.author_id
+       LEFT JOIN public.tenants ut ON ut.id = u.last_accessed_tenant_id
        LEFT JOIN LATERAL (SELECT COUNT(*)::int AS like_count FROM public.post_likes WHERE post_id = p.id) lc ON true
        LEFT JOIN LATERAL (SELECT COUNT(*)::int AS comment_count FROM public.comments WHERE post_id = p.id) cc ON true
        WHERE p.id = $1
@@ -363,7 +385,14 @@ export class PostsService {
       createdAt: r.created_at,
       updatedAt: r.updated_at,
       author: r.u_id
-        ? { id: r.u_id, fullName: r.u_full_name, avatarUrl: r.u_avatar_url }
+        ? {
+            id: r.u_id,
+            fullName: r.u_full_name,
+            avatarUrl: r.u_avatar_url,
+            church: r.u_church_id
+              ? { id: r.u_church_id, name: r.u_church_name!, brandColor: r.u_church_brand_color }
+              : null,
+          }
         : null,
       likeCount: Number(r.like_count),
       commentCount: Number(r.comment_count),
@@ -513,6 +542,7 @@ export class PostsService {
       visibility: 'public' | 'private';
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
+      u_church_id: string | null; u_church_name: string | null; u_church_brand_color: string | null;
       like_count: string; comment_count: string;
       is_liked_by_me: boolean;
     }> = await queryRunner.query(
@@ -523,12 +553,16 @@ export class PostsService {
          u.id         AS u_id,
          u.full_name  AS u_full_name,
          u.avatar_url AS u_avatar_url,
+         ut.id        AS u_church_id,
+         ut.name      AS u_church_name,
+         ut.brand_color AS u_church_brand_color,
          (SELECT COUNT(*)::int FROM public.post_likes WHERE post_id = p.id) AS like_count,
          (SELECT COUNT(*)::int FROM public.comments   WHERE post_id = p.id) AS comment_count,
          EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $1) AS is_liked_by_me
        FROM public.post_saves ps
        JOIN public.posts p ON p.id = ps.post_id
        LEFT JOIN public.users u ON u.id = p.author_id
+       LEFT JOIN public.tenants ut ON ut.id = u.last_accessed_tenant_id
        WHERE ps.user_id = $1 AND p.is_archived = false
        ORDER BY ps.created_at DESC
        LIMIT $2 OFFSET $3`,
@@ -556,7 +590,14 @@ export class PostsService {
       createdAt: r.created_at,
       updatedAt: r.updated_at,
       author: r.u_id
-        ? { id: r.u_id, fullName: r.u_full_name, avatarUrl: r.u_avatar_url }
+        ? {
+            id: r.u_id,
+            fullName: r.u_full_name,
+            avatarUrl: r.u_avatar_url,
+            church: r.u_church_id
+              ? { id: r.u_church_id, name: r.u_church_name!, brandColor: r.u_church_brand_color }
+              : null,
+          }
         : null,
       likeCount: Number(r.like_count),
       commentCount: Number(r.comment_count),
@@ -684,6 +725,7 @@ export class PostsService {
       visibility: 'public' | 'private';
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
+      u_church_id: string | null; u_church_name: string | null; u_church_brand_color: string | null;
       like_count: string; comment_count: string;
       is_liked_by_me: boolean; is_saved_by_me: boolean;
     }> = await queryRunner.query(
@@ -692,12 +734,14 @@ export class PostsService {
          p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.visibility,
          p.created_at, p.updated_at,
          u.id AS u_id, u.full_name AS u_full_name, u.avatar_url AS u_avatar_url,
+         ut.id AS u_church_id, ut.name AS u_church_name, ut.brand_color AS u_church_brand_color,
          (SELECT COUNT(*)::int FROM public.post_likes WHERE post_id = p.id) AS like_count,
          (SELECT COUNT(*)::int FROM public.comments   WHERE post_id = p.id) AS comment_count,
          EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $1) AS is_liked_by_me,
          EXISTS(SELECT 1 FROM public.post_saves WHERE post_id = p.id AND user_id = $1) AS is_saved_by_me
        FROM public.posts p
        LEFT JOIN public.users u ON u.id = p.author_id
+       LEFT JOIN public.tenants ut ON ut.id = u.last_accessed_tenant_id
        WHERE p.author_id = $1 AND p.is_archived = true
        ORDER BY p.created_at DESC
        LIMIT $2 OFFSET $3`,
@@ -723,7 +767,14 @@ export class PostsService {
       createdAt: r.created_at,
       updatedAt: r.updated_at,
       author: r.u_id
-        ? { id: r.u_id, fullName: r.u_full_name, avatarUrl: r.u_avatar_url }
+        ? {
+            id: r.u_id,
+            fullName: r.u_full_name,
+            avatarUrl: r.u_avatar_url,
+            church: r.u_church_id
+              ? { id: r.u_church_id, name: r.u_church_name!, brandColor: r.u_church_brand_color }
+              : null,
+          }
         : null,
       likeCount: Number(r.like_count),
       commentCount: Number(r.comment_count),

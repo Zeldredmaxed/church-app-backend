@@ -21,6 +21,7 @@ import { DonateDto } from './dto/donate.dto';
 import { CreateFundDto } from './dto/create-fund.dto';
 import { CreateBatchDto } from './dto/create-batch.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { ChurchOnly } from '../common/guards/church-only.guard';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -32,6 +33,7 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 @Controller()
 @UseGuards(JwtAuthGuard)
 @UseInterceptors(RlsContextInterceptor)
+@ChurchOnly()
 export class GivingController {
   constructor(
     private readonly givingService: GivingService,

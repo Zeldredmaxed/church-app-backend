@@ -88,6 +88,51 @@ export class UsersService {
     'birthdayVisible', 'anniversaryVisible',
   ] as const;
 
+  /**
+   * Returns the public-safe profile shape for any user. Used by the mobile
+   * ChurchPill and profile cards rendered for users outside the viewer's
+   * tenant. Service-role: this endpoint is intentionally cross-tenant so a
+   * user in church A can still see "this is a member of church B" when
+   * encountering their post in a cross-tenant feed.
+   *
+   * Excludes every PRIVATE field — only the safe trio (fullName,
+   * avatarUrl, createdAt) plus the resolved home church.
+   */
+  async getPublicProfile(userId: string) {
+    const [row] = await this.dataSource.query(
+      `SELECT u.id, u.full_name, u.avatar_url, u.created_at,
+              t.id AS church_id, t.name AS church_name, t.brand_color AS church_brand_color, t.is_guest AS church_is_guest
+       FROM public.users u
+       LEFT JOIN public.tenants t ON t.id = u.last_accessed_tenant_id
+       WHERE u.id = $1`,
+      [userId],
+    );
+
+    if (!row) {
+      throw new NotFoundException('User not found');
+    }
+
+    // Hide the "no church home" tenant from the public pill. A guest user
+    // shows as having no church rather than as a member of an internal
+    // bookkeeping tenant.
+    const church =
+      row.church_id && !row.church_is_guest
+        ? {
+            id: row.church_id,
+            name: row.church_name,
+            brandColor: row.church_brand_color,
+          }
+        : null;
+
+    return {
+      id: row.id,
+      fullName: row.full_name,
+      avatarUrl: row.avatar_url,
+      church,
+      createdAt: row.created_at,
+    };
+  }
+
   async updateMe(userId: string, dto: UpdateUserDto): Promise<User> {
     const { queryRunner } = this.getRlsContext();
 

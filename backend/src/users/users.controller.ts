@@ -5,6 +5,8 @@ import {
   Patch,
   Delete,
   Body,
+  Param,
+  ParseUUIDPipe,
   UseGuards,
   UseInterceptors,
   HttpCode,
@@ -86,5 +88,21 @@ export class UsersController {
   @ApiResponse({ status: 200, description: 'JSON dump of all user data across all tenants' })
   exportData(@CurrentUser() user: SupabaseJwtPayload) {
     return this.usersService.exportData(user.sub);
+  }
+
+  @Get(':userId/public-profile')
+  @ApiOperation({
+    summary: 'Public profile card for any user (safe fields only)',
+    description:
+      'Returns the user fields safe to display anywhere in the app: id, fullName, avatarUrl, and their home church (id/name/brandColor) for the ChurchPill. Excludes all PRIVATE profile fields (address, phone, dateOfBirth, emergencyContact, dietaryRestrictions, children).',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      '{ id, fullName, avatarUrl, church: { id, name, brandColor } | null, createdAt }',
+  })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  getPublicProfile(@Param('userId', ParseUUIDPipe) userId: string) {
+    return this.usersService.getPublicProfile(userId);
   }
 }

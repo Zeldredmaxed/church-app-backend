@@ -69,6 +69,23 @@ export class Tenant {
   @Column({ type: 'boolean', name: 'feed_isolation', default: false })
   feedIsolation: boolean;
 
+  /**
+   * Single hex color (#RRGGBB) the mobile uses for ChurchPills and any
+   * other brand-accent surfaces. NULL means the church hasn't set one —
+   * frontend falls back to a deterministic name-hash color.
+   */
+  @Column({ type: 'text', nullable: true, name: 'brand_color' })
+  brandColor: string | null;
+
+  /**
+   * Marks the single "no church home" tenant. A signed-up user who hasn't
+   * joined any real church belongs here so the rest of the app's
+   * tenant-required paths still work; church-only routes refuse to serve
+   * sessions with this tenant in their JWT context.
+   */
+  @Column({ type: 'boolean', name: 'is_guest', default: false })
+  isGuest: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }

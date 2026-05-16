@@ -151,6 +151,8 @@ export class MembershipsService {
       tenant_created_at: string;
       campus_name: string | null;
       parent_tenant_id: string | null;
+      brand_color: string | null;
+      is_guest: boolean;
     }> = await this.dataSource.query(
       `SELECT
          tm.user_id,
@@ -161,7 +163,9 @@ export class MembershipsService {
          t.slug             AS tenant_slug,
          t.created_at       AS tenant_created_at,
          t.campus_name      AS campus_name,
-         t.parent_tenant_id AS parent_tenant_id
+         t.parent_tenant_id AS parent_tenant_id,
+         t.brand_color      AS brand_color,
+         t.is_guest         AS is_guest
        FROM public.tenant_memberships tm
        JOIN public.tenants t ON t.id = tm.tenant_id
        WHERE tm.user_id = $1
@@ -182,6 +186,8 @@ export class MembershipsService {
         createdAt: row.tenant_created_at,
         campusName: row.campus_name,
         parentTenantId: row.parent_tenant_id,
+        brandColor: row.brand_color,
+        isGuest: row.is_guest,
       },
     }));
   }

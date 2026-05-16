@@ -415,6 +415,7 @@ export class CampusService {
          p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.visibility,
          p.created_at, p.updated_at,
          u.id AS u_id, u.email AS u_email, u.full_name AS u_full_name, u.avatar_url AS u_avatar_url,
+         ut.id AS u_church_id, ut.name AS u_church_name, ut.brand_color AS u_church_brand_color,
          t.campus_name AS campus_name,
          (SELECT COUNT(*)::int FROM public.post_likes WHERE post_id = p.id) AS like_count,
          (SELECT COUNT(*)::int FROM public.comments WHERE post_id = p.id) AS comment_count,
@@ -422,6 +423,7 @@ export class CampusService {
          EXISTS(SELECT 1 FROM public.post_saves WHERE post_id = p.id AND user_id = $2) AS is_saved_by_me
        FROM public.posts p
        LEFT JOIN public.users u ON u.id = p.author_id
+       LEFT JOIN public.tenants ut ON ut.id = u.last_accessed_tenant_id
        LEFT JOIN public.tenants t ON t.id = p.tenant_id
        WHERE p.tenant_id = ANY($1) AND p.is_archived = false
        ORDER BY p.created_at DESC
@@ -455,6 +457,9 @@ export class CampusService {
           email: r.u_email,
           fullName: r.u_full_name,
           avatarUrl: r.u_avatar_url,
+          church: r.u_church_id
+            ? { id: r.u_church_id, name: r.u_church_name, brandColor: r.u_church_brand_color }
+            : null,
         } : null,
         likeCount: Number(r.like_count),
         commentCount: Number(r.comment_count),

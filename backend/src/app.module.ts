@@ -16,6 +16,7 @@ import { UserAppActivity } from './me-activity/entities/user-app-activity.entity
 import { AuditModule } from './audit/audit.module';
 import { AuditLogEntry } from './audit/entities/audit-log-entry.entity';
 import { LegalModule } from './legal/legal.module';
+import { ChurchOnlyGuard } from './common/guards/church-only.guard';
 import { MembershipsModule } from './memberships/memberships.module';
 import { PostsModule } from './posts/posts.module';
 import { InvitationsModule } from './invitations/invitations.module';
@@ -320,6 +321,13 @@ import { NotificationPreference } from './notifications/entities/notification-pr
     {
       provide: APP_GUARD,
       useClass: CustomThrottlerGuard,
+    },
+    // Global guard — refuses to serve @ChurchOnly() routes when the
+    // caller's tenant is the no-church-home guest tenant. Routes without
+    // the marker decorator pass through untouched.
+    {
+      provide: APP_GUARD,
+      useClass: ChurchOnlyGuard,
     },
     {
       provide: APP_INTERCEPTOR,

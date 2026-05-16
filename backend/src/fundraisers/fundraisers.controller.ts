@@ -18,6 +18,7 @@ import { CreateFundraiserDto } from './dto/create-fundraiser.dto';
 import { UpdateFundraiserDto } from './dto/update-fundraiser.dto';
 import { CreateDonationDto } from './dto/create-donation.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { ChurchOnly } from '../common/guards/church-only.guard';
 import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -28,6 +29,7 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 @Controller('fundraisers')
 @UseGuards(JwtAuthGuard)
 @UseInterceptors(RlsContextInterceptor)
+@ChurchOnly()
 export class FundraisersController {
   constructor(private readonly fundraisersService: FundraisersService) {}
 

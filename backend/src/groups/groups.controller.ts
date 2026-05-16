@@ -7,6 +7,7 @@ import { SendGroupMessageDto } from './dto/send-group-message.dto';
 import { AddMemberDto } from './dto/add-member.dto';
 import { JoinRequestDto, DenyRequestDto } from './dto/join-request.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { ChurchOnly } from '../common/guards/church-only.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -16,6 +17,7 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 @Controller('groups')
 @UseGuards(JwtAuthGuard)
 @UseInterceptors(RlsContextInterceptor)
+@ChurchOnly()
 export class GroupsController {
   constructor(private readonly groupsService: GroupsService) {}
 

@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { GalleryService } from './gallery.service';
 import { CreatePhotoDto } from './dto/create-photo.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { ChurchOnly } from '../common/guards/church-only.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -12,6 +13,7 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 @Controller('gallery')
 @UseGuards(JwtAuthGuard)
 @UseInterceptors(RlsContextInterceptor)
+@ChurchOnly()
 export class GalleryController {
   constructor(private readonly galleryService: GalleryService) {}
 

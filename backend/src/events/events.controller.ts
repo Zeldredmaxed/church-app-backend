@@ -6,6 +6,7 @@ import { CreateEventDto } from './dto/create-event.dto';
 import { RsvpDto } from './dto/rsvp.dto';
 import { CancelEventDto } from './dto/cancel-event.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { ChurchOnly } from '../common/guards/church-only.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -15,6 +16,7 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 @Controller('events')
 @UseGuards(JwtAuthGuard)
 @UseInterceptors(RlsContextInterceptor)
+@ChurchOnly()
 export class EventsController {
   constructor(private readonly eventsService: EventsService) {}
 

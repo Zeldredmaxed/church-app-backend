@@ -4,6 +4,7 @@ import { SermonsService } from './sermons.service';
 import { CreateSermonDto } from './dto/create-sermon.dto';
 import { UpdateSermonDto } from './dto/update-sermon.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { ChurchOnly } from '../common/guards/church-only.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -13,6 +14,7 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 @Controller('sermons')
 @UseGuards(JwtAuthGuard)
 @UseInterceptors(RlsContextInterceptor)
+@ChurchOnly()
 export class SermonsController {
   private readonly logger = new Logger(SermonsController.name);
 
