@@ -8,6 +8,7 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { ReportsService } from './reports.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -15,7 +16,8 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 @ApiTags('Reports')
 @ApiBearerAuth()
 @Controller('reports')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RoleGuard)
+@RequiresRole('admin', 'pastor', 'accountant')
 @UseInterceptors(RlsContextInterceptor)
 export class ReportsController {
   constructor(private readonly reportsService: ReportsService) {}

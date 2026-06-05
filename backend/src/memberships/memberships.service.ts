@@ -819,9 +819,10 @@ export class MembershipsService {
 
   /**
    * Exports all members of a tenant as raw rows (controller converts to CSV).
-   * Uses service-role DataSource.
+   * Uses service-role DataSource; controller is RoleGuard + tenant-clamped.
+   * Audits each export so a leaked spreadsheet has provenance.
    */
-  async exportMembers(tenantId: string) {
+  async exportMembers(tenantId: string, requestingUser: SupabaseJwtPayload) {
     const rows = await this.dataSource.query(
       `SELECT u.email, u.full_name, tm.role, u.created_at
        FROM public.tenant_memberships tm
@@ -830,6 +831,14 @@ export class MembershipsService {
        ORDER BY u.full_name`,
       [tenantId],
     );
+
+    await this.audit.log({
+      action: 'member.directory_exported',
+      resourceType: 'tenant',
+      resourceId: tenantId,
+      summary: `${await this.resolveName(requestingUser.sub)} exported ${rows.length} member rows as CSV`,
+      metadata: { rowCount: rows.length },
+    });
 
     return rows as Array<{ email: string; full_name: string | null; role: string; created_at: string }>;
   }

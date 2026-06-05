@@ -1,8 +1,10 @@
 import { Controller, Get, Post, Delete, Body, Param, ParseUUIDPipe, UseGuards, UseInterceptors, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { RecurringGivingService } from './recurring-giving.service';
 import { CreateRecurringGiftDto } from './dto/create-recurring-gift.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { Permissions } from '../common/decorators/permissions.decorator';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -22,7 +24,11 @@ export class RecurringGivingController {
   }
 
   @Get('all')
-  @ApiOperation({ summary: 'List all recurring gifts for the tenant (admin — includes donor names)' })
+  @UseGuards(PermissionsGuard)
+  @Permissions('manage_finance')
+  @ApiOperation({ summary: 'List all recurring gifts for the tenant (manage_finance — includes donor names)' })
+  @ApiResponse({ status: 200, description: 'Array of recurring gifts with donor names' })
+  @ApiResponse({ status: 403, description: 'manage_finance permission required' })
   getAllRecurringGifts(@CurrentUser() user: SupabaseJwtPayload) {
     const tenantId = user.app_metadata?.current_tenant_id;
     if (!tenantId) throw new BadRequestException('No tenant context');

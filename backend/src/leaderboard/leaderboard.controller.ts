@@ -17,6 +17,7 @@ import { LeaderboardService } from './leaderboard.service';
 import { GeoCheckinDto } from './dto/geo-checkin.dto';
 import { UpdateCheckinConfigDto } from './dto/update-checkin-config.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -40,8 +41,11 @@ export class LeaderboardController {
   }
 
   @Put('status')
-  @ApiOperation({ summary: 'Enable or disable leaderboards for this church (admin only)' })
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @ApiOperation({ summary: 'Enable or disable leaderboards for this church (admin/pastor only)' })
   @ApiResponse({ status: 200, description: '{ enabled: boolean }' })
+  @ApiResponse({ status: 403, description: 'Admin/pastor role required' })
   setStatus(
     @CurrentUser() user: SupabaseJwtPayload,
     @Body() body: { enabled: boolean },

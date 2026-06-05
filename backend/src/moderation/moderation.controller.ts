@@ -2,6 +2,7 @@ import { Controller, Get, Post, Param, Query, ParseUUIDPipe, UseGuards, UseInter
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { ModerationService } from './moderation.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -9,7 +10,8 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 @ApiTags('Moderation')
 @ApiBearerAuth()
 @Controller('admin/moderation')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RoleGuard)
+@RequiresRole('admin', 'pastor')
 @UseInterceptors(RlsContextInterceptor)
 export class ModerationController {
   constructor(private readonly moderationService: ModerationService) {}

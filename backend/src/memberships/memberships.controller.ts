@@ -15,12 +15,14 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { MembershipsService } from './memberships.service';
 import { CreateMembershipDto } from './dto/create-membership.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { UpdatePermissionsDto } from './dto/update-permissions.dto';
 import { GetMembersDto } from './dto/get-members.dto';
 import { SelfJoinDto, SwitchChurchDto } from './dto/self-join.dto';
+import { assertUrlTenantMatchesJwt } from '../common/guards/tenant-clamp.helper';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { TierGuard } from '../common/guards/tier.guard';
 import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
@@ -107,24 +109,35 @@ export class MembershipsController {
   }
 
   @Get('tenants/:tenantId/members/kpis')
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor', 'accountant')
   @UseInterceptors(RlsContextInterceptor)
-  @ApiOperation({ summary: 'Get member KPI metrics for dashboard' })
+  @ApiOperation({ summary: 'Get member KPI metrics for dashboard (admin/pastor/accountant only)' })
   @ApiResponse({ status: 200, description: 'Member KPIs: totalMembers, newThisMonth, activeLast30d' })
+  @ApiResponse({ status: 403, description: 'Not authorized for this tenant' })
   getMemberKpis(
     @Param('tenantId', ParseUUIDPipe) tenantId: string,
+    @CurrentUser() user: SupabaseJwtPayload,
   ) {
+    assertUrlTenantMatchesJwt(tenantId, user);
     return this.membershipsService.getMemberKpis(tenantId);
   }
 
   @Get('tenants/:tenantId/members/export')
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
   @UseInterceptors(RlsContextInterceptor)
-  @ApiOperation({ summary: 'Export tenant members as CSV' })
+  @Throttle({ default: { ttl: 3600000, limit: 5 } })
+  @ApiOperation({ summary: 'Export tenant members as CSV (admin/pastor only, 5/hour)' })
   @ApiResponse({ status: 200, description: 'CSV file download' })
+  @ApiResponse({ status: 403, description: 'Not authorized for this tenant' })
   async exportMembers(
     @Param('tenantId', ParseUUIDPipe) tenantId: string,
+    @CurrentUser() user: SupabaseJwtPayload,
     @Res() res: Response,
   ) {
-    const rows = await this.membershipsService.exportMembers(tenantId);
+    assertUrlTenantMatchesJwt(tenantId, user);
+    const rows = await this.membershipsService.exportMembers(tenantId, user);
     const header = 'email,full_name,role,created_at';
     const csvRows = rows.map(
       (r) =>
@@ -137,13 +150,18 @@ export class MembershipsController {
   }
 
   @Get('tenants/:tenantId/members')
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor', 'accountant')
   @UseInterceptors(RlsContextInterceptor)
-  @ApiOperation({ summary: 'List tenant members with cursor-based pagination' })
+  @ApiOperation({ summary: 'List tenant members with cursor-based pagination (admin/pastor/accountant only)' })
   @ApiResponse({ status: 200, description: 'Paginated member list with nextCursor' })
+  @ApiResponse({ status: 403, description: 'Not authorized for this tenant' })
   getMembers(
     @Param('tenantId', ParseUUIDPipe) tenantId: string,
     @Query() query: GetMembersDto,
+    @CurrentUser() user: SupabaseJwtPayload,
   ) {
+    assertUrlTenantMatchesJwt(tenantId, user);
     return this.membershipsService.getMembers(tenantId, query.cursor, query.limit);
   }
 

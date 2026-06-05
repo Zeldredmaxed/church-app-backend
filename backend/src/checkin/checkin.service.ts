@@ -109,17 +109,28 @@ export class CheckinService {
 
   /**
    * Bulk check-in multiple users for a service.
-   * Avoids duplicates by checking existing check-ins for today.
-   * Uses service-role DataSource.
+   *
+   * Validates that every user_id is actually a member of this tenant
+   * before inserting — without this, an admin could pump leaderboards
+   * for arbitrary user UUIDs from other tenants. The INSERT filters
+   * via an EXISTS subquery so non-members are silently skipped (we
+   * return the skipped count so the admin UI can flag it).
+   *
+   * Avoids duplicate same-day check-ins via NOT EXISTS. Uses service-
+   * role DataSource — controller layer is RoleGuard'd.
    */
   async bulkCheckIn(tenantId: string, userIds: string[], serviceId?: string) {
-    if (userIds.length === 0) return { checkedIn: 0 };
+    if (userIds.length === 0) return { checkedIn: 0, skipped: 0 };
 
     const result = await this.dataSource.query(
       `INSERT INTO public.check_ins (tenant_id, user_id, service_id)
        SELECT $1, uid, $3::uuid
        FROM unnest($2::uuid[]) AS uid
-       WHERE NOT EXISTS (
+       WHERE EXISTS (
+         SELECT 1 FROM public.tenant_memberships tm
+         WHERE tm.tenant_id = $1 AND tm.user_id = uid
+       )
+       AND NOT EXISTS (
          SELECT 1 FROM public.check_ins c
          WHERE c.tenant_id = $1
            AND c.user_id = uid
@@ -130,7 +141,7 @@ export class CheckinService {
       [tenantId, userIds, serviceId ?? null],
     );
 
-    return { checkedIn: result.length };
+    return { checkedIn: result.length, skipped: userIds.length - result.length };
   }
 
   /**

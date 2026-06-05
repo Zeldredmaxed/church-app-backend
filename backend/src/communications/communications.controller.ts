@@ -14,6 +14,7 @@ import { CreateTemplateDto } from './dto/create-template.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import { ScheduleMessageDto } from './dto/schedule-message.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -21,7 +22,8 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 @ApiTags('Communications')
 @ApiBearerAuth()
 @Controller('communications')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RoleGuard)
+@RequiresRole('admin', 'pastor')
 @UseInterceptors(RlsContextInterceptor)
 export class CommunicationsController {
   constructor(private readonly communicationsService: CommunicationsService) {}

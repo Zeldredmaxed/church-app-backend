@@ -55,9 +55,12 @@ export class CheckinController {
   }
 
   @Post('attendance/bulk')
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Bulk check-in multiple users' })
-  @ApiResponse({ status: 201, description: '{ checkedIn: number }' })
+  @ApiOperation({ summary: 'Bulk check-in multiple users (admin/pastor only)' })
+  @ApiResponse({ status: 201, description: '{ checkedIn: number, skipped: number }' })
+  @ApiResponse({ status: 403, description: 'Admin/pastor role required' })
   bulkCheckIn(
     @CurrentUser() user: SupabaseJwtPayload,
     @Body() dto: BulkCheckinDto,
