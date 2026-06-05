@@ -160,11 +160,17 @@ export class TenantsService {
     });
 
     if (authError) {
-      if (authError.message?.includes('already been registered')) {
-        throw new ConflictException('An account with this email already exists');
-      }
-      this.logger.error(`Supabase auth error during registration: ${authError.message}`);
-      throw new InternalServerErrorException('Failed to create user account');
+      // INTENTIONAL: don't leak which emails already exist. A specific
+      // "email already registered" message lets an attacker enumerate
+      // every Shepard account — particularly damaging on a church
+      // platform (clergy, abuse-survivor contacts, etc.). Log the real
+      // reason server-side; return the same generic shape regardless.
+      this.logger.warn(
+        `Registration auth error (returned generic to caller): ${authError.message}`,
+      );
+      throw new BadRequestException(
+        'Registration could not be completed. Verify your details and try again.',
+      );
     }
 
     const userId = authData.user.id;

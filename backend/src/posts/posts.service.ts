@@ -194,14 +194,66 @@ export class PostsService {
    *      from the verified JWT, so impersonation is impossible.
    */
   async createGlobalPost(dto: CreatePostDto, authorId: string): Promise<Post> {
+    // Mirror createPost's ownership checks — hostile users could otherwise
+    // "repost" anyone else's Mux video or claim badges they don't own.
+    let resolvedPlaybackId: string | null = dto.videoMuxPlaybackId ?? null;
+    if (dto.videoMuxUploadId && !resolvedPlaybackId) {
+      const [pending] = await this.dataSource.query(
+        `SELECT mux_playback_id FROM public.pending_video_uploads
+         WHERE mux_upload_id = $1 AND user_id = $2`,
+        [dto.videoMuxUploadId, authorId],
+      );
+      if (!pending) {
+        throw new BadRequestException(
+          'videoMuxUploadId does not match a pending upload owned by you',
+        );
+      }
+      resolvedPlaybackId = pending.mux_playback_id ?? null;
+    } else if (resolvedPlaybackId) {
+      // Direct playback_id on a global post must trace back to a pending
+      // upload this user created — otherwise anyone could reuse another
+      // user's published video.
+      const [owned] = await this.dataSource.query(
+        `SELECT 1 FROM public.pending_video_uploads
+         WHERE mux_playback_id = $1 AND user_id = $2`,
+        [resolvedPlaybackId, authorId],
+      );
+      if (!owned) {
+        throw new BadRequestException(
+          'videoMuxPlaybackId is not a video you uploaded',
+        );
+      }
+    }
+
+    if (dto.sharedBadgeId) {
+      // Global posts can celebrate badges from any tenant the user has
+      // earned them in — no tenant scope on this check.
+      const [owned] = await this.dataSource.query(
+        `SELECT 1 FROM public.member_badges
+         WHERE badge_id = $1 AND user_id = $2`,
+        [dto.sharedBadgeId, authorId],
+      );
+      if (!owned) {
+        throw new BadRequestException(
+          'sharedBadgeId is not a badge you have earned',
+        );
+      }
+    }
+
+    const isVideoPost = Boolean(resolvedPlaybackId || dto.videoMuxUploadId);
+
     const post = this.dataSource.manager.create(Post, {
       tenantId: undefined as any, // NULL — global post
       authorId,
       content: dto.content,
-      mediaType: dto.mediaType ?? (dto.videoMuxPlaybackId ? 'video' : 'text'),
+      mediaType: dto.mediaType ?? (isVideoPost ? 'video' : 'text'),
       mediaUrl: dto.mediaUrl ?? null,
-      videoMuxPlaybackId: dto.videoMuxPlaybackId ?? null,
-      visibility: dto.visibility ?? 'public',
+      videoMuxPlaybackId: resolvedPlaybackId,
+      videoCropRect: dto.videoCropRect ?? null,
+      sharedBadgeId: dto.sharedBadgeId ?? null,
+      // Global posts are always public — private global posts make no
+      // sense (the feed-tag is "everyone's feed"). Force the value.
+      visibility: 'public',
     });
 
     const saved = await this.dataSource.manager.save(Post, post);
@@ -221,13 +273,15 @@ export class PostsService {
 
     this.logger.log(`Fan-out job enqueued for global post ${saved.id}`);
 
-    // Dispatch mention notifications (same as tenant posts)
+    // Dispatch mention notifications (same as tenant posts).
+    // Global posts have no tenant — pass null, not empty string, so
+    // the notifications table reflects "platform-wide" correctly.
     if (dto.mentions?.length) {
       const uniqueMentions = [...new Set(dto.mentions)];
       for (const mentionedUserId of uniqueMentions) {
         await this.notificationsQueue.add('POST_MENTION', {
           type: NotificationType.POST_MENTION,
-          tenantId: '',
+          tenantId: null as any,
           recipientUserId: mentionedUserId,
           actorUserId: authorId,
           postId: saved.id,

@@ -81,14 +81,49 @@ export class MembershipsService {
    * Also updates users.last_accessed_tenant_id so the next
    * /api/auth/refresh returns a JWT scoped to the new tenant.
    */
-  async switchChurch(userId: string, leaveTenantId: string, joinTenantId: string) {
+  async switchChurch(
+    user: SupabaseJwtPayload,
+    leaveTenantId: string,
+    joinTenantId: string,
+  ) {
+    const userId = user.sub;
     if (leaveTenantId === joinTenantId) {
       throw new BadRequestException('leaveTenantId and joinTenantId must differ');
     }
+    // Anti-CSRF: a hostile link with arbitrary leaveTenantId could
+    // silently demote an admin from their real church and wipe their
+    // permissions. Refuse unless leaveTenantId matches the caller's
+    // active JWT tenant.
+    const jwtTenantId = user.app_metadata?.current_tenant_id;
+    if (jwtTenantId && jwtTenantId !== leaveTenantId) {
+      throw new ForbiddenException(
+        'leaveTenantId must match your current active tenant. Switch tenant first or correct the request.',
+      );
+    }
+
     const target = await this.dataSource.manager.findOne(Tenant, {
       where: { id: joinTenantId },
     });
     if (!target) throw new NotFoundException('Target tenant not found');
+
+    // Refuse if leaving would strand the source tenant with no admin.
+    // Pastor and admin both have admin-grade access for this check.
+    const adminGuard = await this.dataSource.query(
+      `SELECT COUNT(*)::int AS admin_count,
+              EXISTS (
+                SELECT 1 FROM public.tenant_memberships
+                WHERE tenant_id = $1 AND user_id = $2 AND role IN ('admin', 'pastor')
+              ) AS caller_is_admin
+       FROM public.tenant_memberships
+       WHERE tenant_id = $1 AND role IN ('admin', 'pastor')`,
+      [leaveTenantId, userId],
+    );
+    const { admin_count, caller_is_admin } = adminGuard[0] ?? {};
+    if (caller_is_admin && Number(admin_count) <= 1) {
+      throw new ForbiddenException(
+        'You are the sole admin/pastor of this church. Promote another admin before leaving.',
+      );
+    }
 
     return this.dataSource.transaction(async manager => {
       // Leave old (no-op if the user wasn't a member, e.g. they're

@@ -80,7 +80,7 @@ export class MembershipsController {
     @CurrentUser() user: SupabaseJwtPayload,
     @Body() dto: SwitchChurchDto,
   ) {
-    return this.membershipsService.switchChurch(user.sub, dto.leaveTenantId, dto.joinTenantId);
+    return this.membershipsService.switchChurch(user, dto.leaveTenantId, dto.joinTenantId);
   }
 
   @Get('tenants/:tenantId/branches')
@@ -184,30 +184,37 @@ export class MembershipsController {
   }
 
   @Patch('tenants/:tenantId/members/:userId/role')
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
   @UseInterceptors(RlsContextInterceptor)
-  @ApiOperation({ summary: 'Update a member role (admin only)' })
+  @ApiOperation({ summary: 'Update a member role (admin/pastor only)' })
   @ApiResponse({ status: 200, description: 'Role updated' })
-  @ApiResponse({ status: 404, description: 'Membership not found or not authorized' })
+  @ApiResponse({ status: 403, description: 'Not authorized for this tenant' })
   updateRole(
     @Param('tenantId', ParseUUIDPipe) tenantId: string,
     @Param('userId', ParseUUIDPipe) userId: string,
     @Body() dto: UpdateRoleDto,
+    @CurrentUser() user: SupabaseJwtPayload,
   ) {
+    assertUrlTenantMatchesJwt(tenantId, user);
     return this.membershipsService.updateRole(tenantId, userId, dto);
   }
 
   @Patch('tenants/:tenantId/members/:userId/permissions')
-  @UseGuards(TierGuard)
+  @UseGuards(RoleGuard, TierGuard)
+  @RequiresRole('admin', 'pastor')
   @RequiresTier('granularRoles')
   @UseInterceptors(RlsContextInterceptor)
-  @ApiOperation({ summary: 'Update member permissions (admin only, Pro+ tier)' })
+  @ApiOperation({ summary: 'Update member permissions (admin/pastor only, Pro+ tier)' })
   @ApiResponse({ status: 200, description: 'Permissions updated' })
-  @ApiResponse({ status: 404, description: 'Membership not found or not authorized' })
+  @ApiResponse({ status: 403, description: 'Not authorized for this tenant' })
   updatePermissions(
     @Param('tenantId', ParseUUIDPipe) tenantId: string,
     @Param('userId', ParseUUIDPipe) userId: string,
     @Body() dto: UpdatePermissionsDto,
+    @CurrentUser() user: SupabaseJwtPayload,
   ) {
+    assertUrlTenantMatchesJwt(tenantId, user);
     return this.membershipsService.updatePermissions(tenantId, userId, dto);
   }
 
@@ -216,11 +223,17 @@ export class MembershipsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Remove a member from tenant (admin or self)' })
   @ApiResponse({ status: 204, description: 'Member removed' })
-  @ApiResponse({ status: 404, description: 'Membership not found or not authorized' })
+  @ApiResponse({ status: 403, description: 'Not authorized for this tenant' })
+  @ApiResponse({ status: 404, description: 'Membership not found' })
   removeMember(
     @Param('tenantId', ParseUUIDPipe) tenantId: string,
     @Param('userId', ParseUUIDPipe) userId: string,
+    @CurrentUser() user: SupabaseJwtPayload,
   ) {
+    // Self-removal is allowed across the user's own tenants; admin-driven
+    // removal must match the JWT's tenant context to prevent cross-tenant
+    // admin from removing arbitrary members elsewhere.
+    if (userId !== user.sub) assertUrlTenantMatchesJwt(tenantId, user);
     return this.membershipsService.removeMember(tenantId, userId);
   }
 
@@ -231,11 +244,13 @@ export class MembershipsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Bulk import members from CSV data (admin only)' })
   @ApiResponse({ status: 200, description: '{ created, skipped, total, errors }' })
+  @ApiResponse({ status: 403, description: 'Not authorized for this tenant' })
   importMembers(
     @Param('tenantId', ParseUUIDPipe) tenantId: string,
     @Body() body: { members: Array<{ email: string; fullName?: string; phone?: string; role?: string }> },
     @CurrentUser() user: SupabaseJwtPayload,
   ) {
+    assertUrlTenantMatchesJwt(tenantId, user);
     return this.membershipsService.importMembers(tenantId, user.sub, body.members);
   }
 }
