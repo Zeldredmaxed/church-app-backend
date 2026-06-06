@@ -73,26 +73,26 @@ export class ReportsService {
     // Pre-aggregate activity counts per user via JOINs instead of N+1 correlated subqueries.
     // Old query ran 3 subqueries PER MEMBER (1000 members = 3000 queries).
     // New query uses LEFT JOINs with pre-aggregated CTEs — always 4 queries total.
-    const [row] = await this.dataSource.query(
-      `WITH member_ids AS (
+    const bucketSql = (windowStart: string, windowEnd: string) => `
+      WITH member_ids AS (
         SELECT user_id FROM public.tenant_memberships WHERE tenant_id = $1
       ),
       post_counts AS (
         SELECT author_id AS user_id, COUNT(*)::int AS cnt
         FROM public.posts
-        WHERE tenant_id = $1 AND created_at >= now() - interval '30 days'
+        WHERE tenant_id = $1 AND created_at >= ${windowStart} AND created_at < ${windowEnd}
         GROUP BY author_id
       ),
       comment_counts AS (
         SELECT author_id AS user_id, COUNT(*)::int AS cnt
         FROM public.comments
-        WHERE tenant_id = $1 AND created_at >= now() - interval '30 days'
+        WHERE tenant_id = $1 AND created_at >= ${windowStart} AND created_at < ${windowEnd}
         GROUP BY author_id
       ),
       checkin_counts AS (
         SELECT user_id, COUNT(*)::int AS cnt
         FROM public.check_ins
-        WHERE tenant_id = $1 AND checked_in_at >= now() - interval '30 days'
+        WHERE tenant_id = $1 AND checked_in_at >= ${windowStart} AND checked_in_at < ${windowEnd}
         GROUP BY user_id
       ),
       scores AS (
@@ -108,15 +108,60 @@ export class ReportsService {
         COUNT(CASE WHEN score BETWEEN 1 AND 2 THEN 1 END)::int AS low,
         COUNT(CASE WHEN score BETWEEN 3 AND 5 THEN 1 END)::int AS medium,
         COUNT(CASE WHEN score >= 6 THEN 1 END)::int AS high
-      FROM scores`,
-      [tenantId],
-    );
+      FROM scores`;
+
+    const [currentRows, prevRows, trendRows] = await Promise.all([
+      this.dataSource.query(bucketSql(`now() - interval '30 days'`, `now()`), [tenantId]),
+      // prev = the 30-day window from 60 days ago to 30 days ago — lets
+      // mobile show "vs last month" deltas on each engagement tier.
+      this.dataSource.query(bucketSql(`now() - interval '60 days'`, `now() - interval '30 days'`), [tenantId]),
+      // 6-week unique-active-member trend — distinct user who posted,
+      // commented, or checked-in that week. Always 6 padded rows.
+      this.dataSource.query(
+        `WITH weeks AS (
+           SELECT generate_series(
+             date_trunc('week', now()) - interval '5 weeks',
+             date_trunc('week', now()),
+             '1 week'::interval
+           )::date AS week_start
+         ),
+         activity AS (
+           SELECT author_id AS user_id, created_at FROM public.posts WHERE tenant_id = $1
+             AND created_at >= date_trunc('week', now()) - interval '5 weeks'
+           UNION ALL
+           SELECT author_id, created_at FROM public.comments WHERE tenant_id = $1
+             AND created_at >= date_trunc('week', now()) - interval '5 weeks'
+           UNION ALL
+           SELECT user_id, checked_in_at FROM public.check_ins WHERE tenant_id = $1
+             AND checked_in_at >= date_trunc('week', now()) - interval '5 weeks'
+         )
+         SELECT w.week_start,
+           COUNT(DISTINCT a.user_id)::int AS active
+         FROM weeks w
+         LEFT JOIN activity a
+           ON a.created_at >= w.week_start
+           AND a.created_at < w.week_start + interval '1 week'
+         GROUP BY w.week_start ORDER BY w.week_start ASC`,
+        [tenantId],
+      ),
+    ]);
+
+    const current = currentRows[0] ?? { inactive: 0, low: 0, medium: 0, high: 0 };
+    const prev = prevRows[0] ?? { inactive: 0, low: 0, medium: 0, high: 0 };
 
     return {
-      inactive: row.inactive,
-      low: row.low,
-      medium: row.medium,
-      high: row.high,
+      inactive: current.inactive ?? 0,
+      low: current.low ?? 0,
+      medium: current.medium ?? 0,
+      high: current.high ?? 0,
+      prev: {
+        high: prev.high ?? 0,
+        medium: prev.medium ?? 0,
+        low: prev.low ?? 0,
+      },
+      // Mobile sparkline expects bare number[] of active-member counts
+      // over the last 6 weeks; labels are inferred client-side.
+      trend: (trendRows ?? []).map((r: any) => Number(r.active) || 0),
     };
   }
 
@@ -148,19 +193,71 @@ export class ReportsService {
   }
 
   private async _getReportKpis(tenantId: string) {
-    const [row] = await this.dataSource.query(
-      `SELECT
-         COALESCE(SUM(CASE WHEN status = 'succeeded' AND created_at >= date_trunc('year', now()) THEN amount END), 0)::float AS ytd_giving,
-         (SELECT COUNT(*)::int FROM public.tenant_memberships WHERE tenant_id = $1) AS total_members,
-         (SELECT COUNT(DISTINCT user_id)::int FROM public.check_ins WHERE tenant_id = $1 AND checked_in_at >= now() - interval '30 days') AS avg_monthly_attendance
-       FROM public.transactions WHERE tenant_id = $1`,
-      [tenantId],
-    );
+    const [[row], attendanceTrend, growthTrend] = await Promise.all([
+      this.dataSource.query(
+        `SELECT
+           COALESCE(SUM(CASE WHEN status = 'succeeded' AND created_at >= date_trunc('year', now()) THEN amount END), 0)::float AS ytd_giving,
+           COALESCE(SUM(CASE WHEN status = 'succeeded' AND created_at >= date_trunc('year', now()) - interval '1 year' AND created_at < date_trunc('year', now()) THEN amount END), 0)::float AS ytd_giving_prev,
+           (SELECT COUNT(*)::int FROM public.tenant_memberships WHERE tenant_id = $1) AS total_members,
+           (SELECT COUNT(DISTINCT user_id)::int FROM public.check_ins WHERE tenant_id = $1 AND checked_in_at >= now() - interval '30 days') AS avg_monthly_attendance,
+           (SELECT COUNT(DISTINCT user_id)::int FROM public.check_ins WHERE tenant_id = $1 AND checked_in_at >= now() - interval '60 days' AND checked_in_at < now() - interval '30 days') AS avg_monthly_attendance_prev,
+           (SELECT COUNT(*)::int FROM public.tenant_memberships WHERE tenant_id = $1 AND created_at >= date_trunc('month', now())) AS new_members_this_month,
+           (SELECT COUNT(*)::int FROM public.tenant_memberships WHERE tenant_id = $1 AND created_at >= date_trunc('month', now()) - interval '1 month' AND created_at < date_trunc('month', now())) AS new_members_prev
+         FROM public.transactions WHERE tenant_id = $1`,
+        [tenantId],
+      ),
+      // 6-week attendance trend — bucketed by week_start. Always 6 rows
+      // (zeros padded) so the mobile bar chart has a stable shape.
+      this.dataSource.query(
+        `WITH weeks AS (
+           SELECT generate_series(
+             date_trunc('week', now()) - interval '5 weeks',
+             date_trunc('week', now()),
+             '1 week'::interval
+           )::date AS week_start
+         )
+         SELECT w.week_start,
+           COALESCE((SELECT COUNT(*)::int FROM public.check_ins ci
+                     WHERE ci.tenant_id = $1
+                       AND ci.checked_in_at >= w.week_start
+                       AND ci.checked_in_at <  w.week_start + interval '1 week'), 0) AS count
+         FROM weeks w ORDER BY w.week_start ASC`,
+        [tenantId],
+      ),
+      // 6-week new-membership trend — same shape so the mobile can pair
+      // them on a single chart.
+      this.dataSource.query(
+        `WITH weeks AS (
+           SELECT generate_series(
+             date_trunc('week', now()) - interval '5 weeks',
+             date_trunc('week', now()),
+             '1 week'::interval
+           )::date AS week_start
+         )
+         SELECT w.week_start,
+           COALESCE((SELECT COUNT(*)::int FROM public.tenant_memberships tm
+                     WHERE tm.tenant_id = $1
+                       AND tm.created_at >= w.week_start
+                       AND tm.created_at <  w.week_start + interval '1 week'), 0) AS count
+         FROM weeks w ORDER BY w.week_start ASC`,
+        [tenantId],
+      ),
+    ]);
 
     return {
-      ytdGiving: row.ytd_giving,
-      totalMembers: row.total_members,
-      avgMonthlyAttendance: row.avg_monthly_attendance,
+      ytdGiving: row?.ytd_giving ?? 0,
+      ytdGivingPrev: row?.ytd_giving_prev ?? 0,
+      totalMembers: row?.total_members ?? 0,
+      avgMonthlyAttendance: row?.avg_monthly_attendance ?? 0,
+      avgMonthlyAttendancePrev: row?.avg_monthly_attendance_prev ?? 0,
+      newMembersThisMonth: row?.new_members_this_month ?? 0,
+      newMembersPrev: row?.new_members_prev ?? 0,
+      // Mobile expects bare number[] for sparkline rendering (per the
+      // contract documented in the mock-data round-up). The week-start
+      // labels are derivable client-side from "the last 6 weeks ending
+      // today" so we don't ship them.
+      attendanceTrend: (attendanceTrend ?? []).map((r: any) => Number(r.count) || 0),
+      growthTrend: (growthTrend ?? []).map((r: any) => Number(r.count) || 0),
     };
   }
 

@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import type { QueryRunner } from 'typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { rlsStorage } from '../common/storage/rls.storage';
@@ -14,6 +15,35 @@ export class ChatService {
   constructor(
     @InjectQueue('notifications') private readonly notificationsQueue: Queue,
   ) {}
+
+  /**
+   * Refuses to proceed when the user has an unexpired mute row in
+   * chat_user_mutes for this tenant. Called before any chat_messages
+   * INSERT so a muted user can't post via either /channels/:id/messages
+   * or /messages/conversations/:id/messages.
+   *
+   * Reads via the request's queryRunner — the chat_user_mutes
+   * `chat_user_mutes_select_self` RLS policy covers the user's own row,
+   * but we need to read mutes set by an admin too. The admin path uses
+   * service_role so the row is visible to it; here we go through the
+   * authenticated role's queryRunner. We explicitly pin tenant_id and
+   * user_id so the policy decision is irrelevant — a row that exists is
+   * authoritative.
+   */
+  private async assertNotMuted(queryRunner: QueryRunner, tenantId: string, userId: string) {
+    const rows = await queryRunner.query(
+      `SELECT expires_at FROM public.chat_user_mutes
+        WHERE tenant_id = $1 AND user_id = $2 AND expires_at > now()
+        ORDER BY expires_at DESC
+        LIMIT 1`,
+      [tenantId, userId],
+    );
+    if (rows.length > 0) {
+      throw new ForbiddenException(
+        `You are muted from chat until ${new Date(rows[0].expires_at).toISOString()}`,
+      );
+    }
+  }
 
   /** Returns the RLS context, throwing 400 if no tenant is set in the JWT. */
   private requireTenantContext() {
@@ -142,6 +172,9 @@ export class ChatService {
     userId: string,
   ): Promise<ChatMessage> {
     const { queryRunner, currentTenantId } = this.requireTenantContext();
+
+    // Refuse send if the sender is muted in this tenant.
+    await this.assertNotMuted(queryRunner, currentTenantId!, userId);
 
     // Verify channel exists and is accessible (RLS enforced)
     const channel = await queryRunner.manager.findOne(ChatChannel, {

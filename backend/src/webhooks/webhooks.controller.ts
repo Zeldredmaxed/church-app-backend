@@ -136,9 +136,79 @@ export class WebhooksController {
       await this.handleAssetReady(payload.data);
     } else if (eventType === 'video.upload.errored' || eventType === 'video.asset.errored') {
       await this.handleAssetErrored(payload.data, eventType);
+    } else if (eventType === 'video.live_stream.active') {
+      await this.handleLiveStreamActive(payload.data, payload.created_at);
+    } else if (eventType === 'video.live_stream.idle') {
+      await this.handleLiveStreamIdle(payload.data, payload.created_at);
     }
 
     return { received: true };
+  }
+
+  /**
+   * Mux says a pastor's encoder started pushing — flip the streams row
+   * to is_live=true. Looked up by mux_live_stream_id so we don't need
+   * the tenant in the webhook payload.
+   *
+   * Service-role write (dataSource, not queryRunner) because Mux webhooks
+   * are unauthenticated — no RLS context exists and we'd never want one
+   * here. The mux_live_stream_id lookup is the security boundary: the
+   * Mux signature check upstream guarantees the event is genuine, and
+   * only one row in our DB can carry that opaque id.
+   */
+  private async handleLiveStreamActive(data: any, eventCreatedAt?: string) {
+    const liveStreamId = data?.id;
+    if (!liveStreamId) {
+      this.logger.warn(`video.live_stream.active without id: ${JSON.stringify(data)}`);
+      return;
+    }
+    // Timestamp guard: Mux delivers at-least-once and can deliver events
+    // out of order. If a delayed `active@T1` lands after `idle@T2` we'd
+    // resurrect a dead stream. Only apply if the event is fresher than
+    // the row's current state.
+    const ts = eventCreatedAt ?? new Date().toISOString();
+    const result = await this.dataSource.query(
+      `UPDATE public.streams
+       SET is_live = true, updated_at = now()
+       WHERE mux_live_stream_id = $1 AND updated_at < $2::timestamptz
+       RETURNING id`,
+      [liveStreamId, ts],
+    );
+    if (result.length === 0) {
+      this.logger.log(
+        `video.live_stream.active: no-op for ${liveStreamId} (out-of-order event or no matching row)`,
+      );
+    } else {
+      this.logger.log(`Stream ${result[0].id} is now LIVE (mux id ${liveStreamId})`);
+    }
+  }
+
+  /**
+   * Encoder stopped pushing — flip is_live=false and zero viewer_count
+   * so stale viewers from the previous broadcast don't bleed into the
+   * next session. Same timestamp guard as the active handler.
+   */
+  private async handleLiveStreamIdle(data: any, eventCreatedAt?: string) {
+    const liveStreamId = data?.id;
+    if (!liveStreamId) {
+      this.logger.warn(`video.live_stream.idle without id: ${JSON.stringify(data)}`);
+      return;
+    }
+    const ts = eventCreatedAt ?? new Date().toISOString();
+    const result = await this.dataSource.query(
+      `UPDATE public.streams
+       SET is_live = false, viewer_count = 0, updated_at = now()
+       WHERE mux_live_stream_id = $1 AND updated_at < $2::timestamptz
+       RETURNING id`,
+      [liveStreamId, ts],
+    );
+    if (result.length === 0) {
+      this.logger.log(
+        `video.live_stream.idle: no-op for ${liveStreamId} (out-of-order event or no matching row)`,
+      );
+    } else {
+      this.logger.log(`Stream ${result[0].id} is now IDLE (mux id ${liveStreamId})`);
+    }
   }
 
   /**

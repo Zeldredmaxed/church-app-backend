@@ -20,7 +20,10 @@ export class DashboardService {
   }
 
   private async _getKpis(tenantId: string) {
-    const [r1, r2, r3, r4, r5, r6, r7, r8, r9] = await Promise.all([
+    const [
+      r1, r2, r3, r4, r5, r6, r7, r8, r9,
+      r10, r11, r12, r13, r14,
+    ] = await Promise.all([
       this.dataSource.query(
         `SELECT COUNT(*)::int AS total_members FROM public.tenant_memberships WHERE tenant_id = $1`,
         [tenantId],
@@ -72,18 +75,95 @@ export class DashboardService {
          WHERE tenant_id = $1 AND verified_by IS NULL`,
         [tenantId],
       ),
+      // totalMembersLastMonth — snapshot of how many memberships existed
+      // BEFORE this calendar month started (so the dashboard can show a
+      // month-over-month delta on the membership card).
+      this.dataSource.query(
+        `SELECT COUNT(*)::int AS total_members_last_month
+         FROM public.tenant_memberships
+         WHERE tenant_id = $1 AND created_at < date_trunc('month', now())`,
+        [tenantId],
+      ),
+      // totalGivingLastMonth — sum of giving in the prior calendar month
+      // (between previous-month start and current-month start).
+      this.dataSource.query(
+        `SELECT COALESCE(SUM(amount), 0)::float AS total_giving_last_month
+         FROM public.transactions
+         WHERE tenant_id = $1 AND status = 'succeeded'
+           AND created_at >= date_trunc('month', now()) - interval '1 month'
+           AND created_at <  date_trunc('month', now())`,
+        [tenantId],
+      ),
+      // avgAttendance + avgAttendanceLastMonth — average WEEKLY check-in
+      // count for the current and previous calendar month. Computed as
+      // total check-ins / weeks-in-month (rounded). Returns 0 when there
+      // are no check-ins.
+      this.dataSource.query(
+        `SELECT
+           COALESCE(ROUND(
+             COUNT(*) FILTER (WHERE checked_in_at >= date_trunc('month', now()))::numeric
+             / GREATEST(EXTRACT(epoch FROM (now() - date_trunc('month', now()))) / 604800.0, 1)
+           ), 0)::int AS avg_attendance,
+           COALESCE(ROUND(
+             COUNT(*) FILTER (WHERE checked_in_at >= date_trunc('month', now()) - interval '1 month'
+                                AND checked_in_at <  date_trunc('month', now()))::numeric
+             / 4.345
+           ), 0)::int AS avg_attendance_last_month,
+           COUNT(*) FILTER (WHERE checked_in_at::date = CURRENT_DATE)::int AS attendance_today
+         FROM public.check_ins
+         WHERE tenant_id = $1
+           AND checked_in_at >= date_trunc('month', now()) - interval '1 month'`,
+        [tenantId],
+      ),
+      // serviceCapacity — sum of capacity across active services for the
+      // tenant. NULL when no active service has a capacity set (so the
+      // mobile renders "—" instead of 0%).
+      this.dataSource.query(
+        `SELECT
+           CASE WHEN SUM(CASE WHEN capacity IS NOT NULL THEN 1 ELSE 0 END) = 0
+                THEN NULL
+                ELSE COALESCE(SUM(capacity), 0)::int
+           END AS service_capacity
+         FROM public.services
+         WHERE tenant_id = $1 AND is_active = true`,
+        [tenantId],
+      ),
+      // monthlyGivingGoalCents — admin-configured giving goal for the
+      // month. NULL when not set.
+      this.dataSource.query(
+        `SELECT monthly_giving_goal_cents FROM public.tenants WHERE id = $1`,
+        [tenantId],
+      ),
     ]);
+
+    const totalGivingThisMonth = r3[0]?.total_giving_this_month ?? 0;
+    const totalGivingLastMonth = r11[0]?.total_giving_last_month ?? 0;
+    const goalAmount = r14[0]?.monthly_giving_goal_cents != null
+      ? Number(r14[0].monthly_giving_goal_cents)
+      : null;
+    const growthPct = totalGivingLastMonth > 0
+      ? Math.round(((totalGivingThisMonth - totalGivingLastMonth) / totalGivingLastMonth) * 1000) / 10
+      : null;
 
     return {
       totalMembers: r1[0]?.total_members ?? 0,
       newMembersThisMonth: r2[0]?.new_members_this_month ?? 0,
-      totalGivingThisMonth: r3[0]?.total_giving_this_month ?? 0,
+      totalGivingThisMonth,
       activeGroups: r4[0]?.active_groups ?? 0,
       totalPrayers: r5[0]?.total_prayers ?? 0,
       activeVolunteers: r6[0]?.active_volunteers ?? 0,
       pendingPrayers: r7[0]?.pending_prayers ?? 0,
       workflowFailures24h: r8[0]?.failed ?? 0,
       pendingVolunteerVerifications: r9[0]?.pending ?? 0,
+      // Month-over-month prior-period values for delta indicators
+      totalMembersLastMonth: r10[0]?.total_members_last_month ?? 0,
+      totalGivingLastMonth,
+      avgAttendance: r12[0]?.avg_attendance ?? 0,
+      avgAttendanceLastMonth: r12[0]?.avg_attendance_last_month ?? 0,
+      attendanceToday: r12[0]?.attendance_today ?? 0,
+      serviceCapacity: r13[0]?.service_capacity ?? null,
+      goalAmount,
+      growthPct,
     };
   }
 

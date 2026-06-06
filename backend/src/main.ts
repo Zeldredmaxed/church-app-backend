@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
+import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -24,6 +25,14 @@ async function bootstrap() {
       crossOriginOpenerPolicy: { policy: 'unsafe-none' },
     }),
   );
+
+  // Per-route body-size override for the AI transcribe endpoint. Real
+  // voice notes are 300-700KB raw; base64 inflates ~33%; default
+  // express body-parser cap is 100KB. Without this override, every
+  // transcribe call 413s before the controller runs. The /api/ai/*
+  // namespace is admin-Premium only, so the larger limit is gated.
+  app.use('/api/ai/transcribe', json({ limit: '30mb' }));
+  app.use('/api/ai/transcribe', urlencoded({ limit: '30mb', extended: true }));
 
   // Global route prefix — all routes accessible at /api/*
   app.setGlobalPrefix('api');

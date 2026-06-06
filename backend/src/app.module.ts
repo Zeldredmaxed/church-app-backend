@@ -137,6 +137,17 @@ import { StorageFile } from './storage/entities/storage-file.entity';
 import { FundraisersModule } from './fundraisers/fundraisers.module';
 import { Fundraiser } from './fundraisers/entities/fundraiser.entity';
 import { FundraiserDonation } from './fundraisers/entities/fundraiser-donation.entity';
+import { ShopModule } from './shop/shop.module';
+import { ShopItem } from './shop/entities/shop-item.entity';
+import { ShopItemOption } from './shop/entities/shop-item-option.entity';
+import { ShopOrder } from './shop/entities/shop-order.entity';
+import { StreamsModule } from './streams/streams.module';
+import { Stream } from './streams/entities/stream.entity';
+import { BibleModule } from './bible/bible.module';
+import { AiModule } from './ai/ai.module';
+import { AiConversation } from './ai/entities/ai-conversation.entity';
+import { AiMessage } from './ai/entities/ai-message.entity';
+import { FundraiserUpdate } from './fundraisers/entities/fundraiser-update.entity';
 import { FundraiserBookmark } from './fundraisers/entities/fundraiser-bookmark.entity';
 import { DeviceToken } from './notifications/entities/device-token.entity';
 import { NotificationPreference } from './notifications/entities/notification-preference.entity';
@@ -181,6 +192,13 @@ import { NotificationPreference } from './notifications/entities/notification-pr
           Fundraiser,
           FundraiserDonation,
           FundraiserBookmark,
+          FundraiserUpdate,
+          ShopItem,
+          ShopItemOption,
+          ShopOrder,
+          Stream,
+          AiConversation,
+          AiMessage,
           DeviceToken,
           NotificationPreference,
           UserAppActivity,
@@ -325,6 +343,10 @@ import { NotificationPreference } from './notifications/entities/notification-pr
     FamilyModule,
     StorageModule,
     FundraisersModule,
+    ShopModule,
+    StreamsModule,
+    BibleModule,
+    AiModule,
 
     // GraphQL — Apollo Driver (code-first approach)
     // The FeedModule provides the FeedResolver which registers the globalFeed query.

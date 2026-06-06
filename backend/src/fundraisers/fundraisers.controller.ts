@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Body,
   Param,
   Query,
@@ -17,6 +18,7 @@ import { FundraisersService } from './fundraisers.service';
 import { CreateFundraiserDto } from './dto/create-fundraiser.dto';
 import { UpdateFundraiserDto } from './dto/update-fundraiser.dto';
 import { CreateDonationDto } from './dto/create-donation.dto';
+import { CreateFundraiserUpdateDto } from './dto/create-fundraiser-update.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { ChurchOnly } from '../common/guards/church-only.guard';
 import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
@@ -63,6 +65,34 @@ export class FundraisersController {
     @CurrentUser() user: SupabaseJwtPayload,
   ) {
     return this.fundraisersService.getFundraiser(id, user.sub);
+  }
+
+  @Get(':id/updates')
+  @ApiOperation({ summary: 'List update posts on a fundraiser (paginated)' })
+  @ApiResponse({ status: 200, description: 'Paginated update list' })
+  listUpdates(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.fundraisersService.listUpdates(
+      id,
+      parseInt(page ?? '1', 10) || 1,
+      Math.min(parseInt(limit ?? '20', 10) || 20, 100),
+    );
+  }
+
+  @Post(':id/updates')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Post an update on a fundraiser (creator or admin/pastor)' })
+  @ApiResponse({ status: 201, description: 'Update created' })
+  @ApiResponse({ status: 403, description: 'Only the creator or an admin can post updates' })
+  createUpdate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateFundraiserUpdateDto,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    return this.fundraisersService.createUpdate(id, dto, user.sub);
   }
 
   @Get(':id/backers')
@@ -129,5 +159,32 @@ export class FundraisersController {
     @Body() dto: UpdateFundraiserDto,
   ) {
     return this.fundraisersService.updateFundraiser(id, dto);
+  }
+
+  @Post(':id/close')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @ApiOperation({ summary: 'Close a fundraiser early (admin/pastor only) — sets status=completed' })
+  @ApiResponse({ status: 200, description: '{ id, status: "completed" }' })
+  closeFundraiser(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    return this.fundraisersService.closeFundraiser(id, user.sub);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @ApiOperation({ summary: 'Cancel a fundraiser (admin/pastor only) — soft-delete via status=cancelled' })
+  @ApiResponse({ status: 200, description: '{ id, status: "cancelled" }' })
+  @ApiResponse({ status: 404, description: 'Fundraiser not found' })
+  deleteFundraiser(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    return this.fundraisersService.deleteFundraiser(id, user.sub);
   }
 }

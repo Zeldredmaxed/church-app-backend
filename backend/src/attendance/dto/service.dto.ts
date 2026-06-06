@@ -5,6 +5,8 @@ import {
   IsInt,
   IsBoolean,
   IsNumber,
+  IsArray,
+  ArrayMaxSize,
   Min,
   Max,
   MaxLength,
@@ -106,6 +108,33 @@ export class CreateServiceDto {
   @IsString()
   @MaxLength(500)
   endPushMessage?: string;
+
+  @ApiPropertyOptional({ maxLength: 120, description: 'Pastor / speaker leading this service.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  pastor?: string;
+
+  @ApiPropertyOptional({ maxLength: 120, description: 'Location label (e.g. "Main Sanctuary").' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  location?: string;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 100000, description: 'Seat capacity. NULL = uncapped/unknown.' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(100000)
+  capacity?: number;
+
+  @ApiPropertyOptional({ type: [String], description: 'Free-form tags. Max 20 tags, each up to 50 chars.' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @MaxLength(50, { each: true })
+  tags?: string[];
 }
 
 export class UpdateServiceDto extends CreateServiceDto {

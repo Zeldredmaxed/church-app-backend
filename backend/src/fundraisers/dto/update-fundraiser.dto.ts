@@ -36,6 +36,12 @@ export class UpdateFundraiserDto {
   @MaxLength(2048)
   imageUrl?: string;
 
+  @ApiPropertyOptional({ description: 'Optional Ionicon name.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  icon?: string;
+
   @ApiPropertyOptional({ enum: ['draft', 'active', 'paused', 'completed', 'cancelled'] })
   @IsOptional()
   @IsIn(['draft', 'active', 'paused', 'completed', 'cancelled'])

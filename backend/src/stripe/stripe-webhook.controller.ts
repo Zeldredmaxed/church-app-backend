@@ -83,18 +83,39 @@ export class StripeWebhookController {
       case 'payment_intent.succeeded': {
         const pi = event.data.object as Stripe.PaymentIntent;
         this.logger.log(`PaymentIntent succeeded: ${pi.id}`);
-        // Update giving transactions
         await this.dataSource.manager.update(
           Transaction,
           { stripePaymentIntentId: pi.id },
           { status: 'succeeded' },
         );
-        // Update fundraiser donations (trigger auto-updates fundraiser totals)
         await this.dataSource.manager.update(
           FundraiserDonation,
           { paymentIntentId: pi.id },
           { paymentStatus: 'succeeded' },
         );
+        // Shop orders: flip pending → paid and decrement stock in a
+        // single transaction. The conditional UPDATE on shop_items
+        // races safely — concurrent webhooks for two different orders
+        // each get an authoritative row-count from RETURNING.
+        await this.dataSource.transaction(async (tx) => {
+          const orderRows = await tx.query(
+            `UPDATE public.shop_orders
+             SET status = 'paid', paid_at = now()
+             WHERE stripe_payment_intent_id = $1 AND status = 'pending'
+             RETURNING item_id, quantity`,
+            [pi.id],
+          );
+          if (orderRows.length > 0) {
+            const { item_id, quantity } = orderRows[0];
+            await tx.query(
+              `UPDATE public.shop_items
+               SET stock = stock - $2
+               WHERE id = $1 AND stock IS NOT NULL AND stock >= $2`,
+              [item_id, quantity],
+            );
+            this.logger.log(`Shop order for PI ${pi.id} settled (item ${item_id} -${quantity})`);
+          }
+        });
         break;
       }
 
@@ -111,6 +132,29 @@ export class StripeWebhookController {
           { paymentIntentId: pi.id },
           { paymentStatus: 'failed' },
         );
+        // Restock the order's units in the same tx that flips the
+        // order to 'failed'. Stock was reserved at purchase-time before
+        // we created the PI (shop.service line 311); a charge failure
+        // means we owe the units back. RETURNING gates the restock on
+        // an actual row transition so a duplicate webhook can't
+        // double-restock.
+        await this.dataSource.transaction(async (tx) => {
+          const orderRows = await tx.query(
+            `UPDATE public.shop_orders SET status = 'failed'
+             WHERE stripe_payment_intent_id = $1 AND status = 'pending'
+             RETURNING item_id, quantity`,
+            [pi.id],
+          );
+          if (orderRows.length > 0) {
+            const { item_id, quantity } = orderRows[0];
+            await tx.query(
+              `UPDATE public.shop_items
+               SET stock = stock + $2, in_stock = true, updated_at = now()
+               WHERE id = $1 AND stock IS NOT NULL`,
+              [item_id, quantity],
+            );
+          }
+        });
         break;
       }
 

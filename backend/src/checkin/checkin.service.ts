@@ -158,7 +158,24 @@ export class CheckinService {
       `SELECT
         (SELECT COUNT(*)::int FROM public.check_ins WHERE tenant_id = $1 AND checked_in_at::date = CURRENT_DATE) AS today_count,
         (SELECT COUNT(*)::int FROM public.check_ins WHERE tenant_id = $1 AND is_visitor = true AND checked_in_at >= date_trunc('week', now())) AS visitors_this_week,
-        (SELECT COUNT(DISTINCT user_id)::int FROM public.check_ins WHERE tenant_id = $1 AND checked_in_at >= now() - interval '7 days') AS unique_last_7d`,
+        (SELECT COUNT(DISTINCT user_id)::int FROM public.check_ins WHERE tenant_id = $1 AND checked_in_at >= now() - interval '7 days') AS unique_last_7d,
+        -- adultsToday = today's check-ins that don't have a guardian_id
+        -- (guardian_id is non-null on child check-ins only).
+        (SELECT COUNT(*)::int FROM public.check_ins
+          WHERE tenant_id = $1 AND checked_in_at::date = CURRENT_DATE
+            AND guardian_id IS NULL) AS adults_today,
+        -- childrenToday = today's check-ins with a guardian (child safety
+        -- flow always sets guardian_id).
+        (SELECT COUNT(*)::int FROM public.check_ins
+          WHERE tenant_id = $1 AND checked_in_at::date = CURRENT_DATE
+            AND guardian_id IS NOT NULL) AS children_today,
+        -- serviceCapacity = sum of capacity across active services.
+        -- NULL when no active service has a capacity set so the mobile
+        -- can render "—" instead of dividing by 0.
+        (SELECT CASE WHEN SUM(CASE WHEN capacity IS NOT NULL THEN 1 ELSE 0 END) = 0
+                     THEN NULL ELSE COALESCE(SUM(capacity), 0)::int END
+           FROM public.services
+          WHERE tenant_id = $1 AND is_active = true) AS service_capacity`,
       [tenantId],
     );
 
@@ -167,6 +184,12 @@ export class CheckinService {
       todayCount: row.today_count ?? 0,
       visitorsThisWeek: row.visitors_this_week ?? 0,
       uniqueLast7d: row.unique_last_7d ?? 0,
+      adultsToday: row.adults_today ?? 0,
+      childrenToday: row.children_today ?? 0,
+      // Youth tracking has no dedicated flag yet; report 0 so the mobile
+      // shape stays stable until a youth ministry column lands.
+      youthToday: 0,
+      serviceCapacity: row.service_capacity ?? null,
     };
   }
 

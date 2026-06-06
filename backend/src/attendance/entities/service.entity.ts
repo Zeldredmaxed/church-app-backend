@@ -75,6 +75,25 @@ export class Service {
   @Column({ type: 'text', nullable: true, name: 'end_push_message' })
   endPushMessage: string | null;
 
+  /** Pastor / speaker leading this service. Free text. */
+  @Column({ type: 'text', nullable: true })
+  pastor: string | null;
+
+  /** Location label (e.g. "Main Sanctuary"). Free text — distinct from
+   *  the geofence lat/lng which is the GPS anchor. */
+  @Column({ type: 'text', nullable: true })
+  location: string | null;
+
+  /** Seat capacity, used by the dashboard to compute a capacity-utilization
+   *  percentage on the attendance card. NULL means "uncapped/unknown". */
+  @Column({ type: 'integer', nullable: true })
+  capacity: number | null;
+
+  /** Free-form tags ("worship", "kids", "spanish"). Stored as a text array
+   *  (default empty so legacy rows are safe). */
+  @Column({ type: 'text', array: true, default: () => "'{}'" })
+  tags: string[];
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

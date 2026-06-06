@@ -99,6 +99,44 @@ export class StripeService {
   }
 
   /**
+   * Off-session one-off charge against a saved PaymentMethod.
+   *
+   * Used by the shop purchase flow: the buyer already saved a card via
+   * SetupIntent, so we create + confirm a PaymentIntent server-side with
+   * the saved PM. Funds route to the church's Connect account minus the
+   * platform fee, mirroring createPaymentIntent's transfer_data shape.
+   *
+   * If Stripe needs further auth (3DS, etc.) the returned PI's status will
+   * be 'requires_action' — the caller should surface that to mobile so it
+   * can re-confirm with handleNextAction.
+   */
+  async createAndConfirmPaymentIntent(params: {
+    amountCents: number;
+    currency: string;
+    customerId: string;
+    paymentMethodId: string;
+    destinationAccountId: string;
+    platformFeeCents: number;
+    metadata?: Record<string, string>;
+    idempotencyKey?: string;
+  }): Promise<Stripe.PaymentIntent> {
+    return this.ensureStripe().paymentIntents.create(
+      {
+        amount: params.amountCents,
+        currency: params.currency,
+        customer: params.customerId,
+        payment_method: params.paymentMethodId,
+        confirm: true,
+        off_session: true,
+        application_fee_amount: params.platformFeeCents,
+        transfer_data: { destination: params.destinationAccountId },
+        metadata: params.metadata ?? {},
+      },
+      params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : undefined,
+    );
+  }
+
+  /**
    * Retrieves an existing PaymentIntent. Used by the fundraiser-donate
    * retry path: if we still have a pending donation in our DB whose PI
    * Stripe still considers reusable (requires_payment_method / _confirmation
@@ -230,6 +268,42 @@ export class StripeService {
 
   async retrievePaymentMethod(paymentMethodId: string): Promise<Stripe.PaymentMethod> {
     return this.ensureStripe().paymentMethods.retrieve(paymentMethodId);
+  }
+
+  /**
+   * Lists card PaymentMethods attached to a Customer. Used by the mobile
+   * "saved cards" screen so users can manage their stored cards.
+   */
+  async listPaymentMethods(customerId: string): Promise<Stripe.ApiList<Stripe.PaymentMethod>> {
+    return this.ensureStripe().paymentMethods.list({ customer: customerId, type: 'card' });
+  }
+
+  /**
+   * Detaches a PaymentMethod from its Customer. Caller MUST verify
+   * ownership (pm.customer === user.stripe_customer_id) before invoking,
+   * otherwise a user could detach another user's card by guessing the id.
+   */
+  async detachPaymentMethod(pmId: string): Promise<Stripe.PaymentMethod> {
+    return this.ensureStripe().paymentMethods.detach(pmId);
+  }
+
+  /**
+   * Sets a PaymentMethod as the Customer's default for invoices /
+   * subscriptions. Caller MUST verify the PM is attached to this
+   * customer first.
+   */
+  async setDefaultPaymentMethod(customerId: string, pmId: string): Promise<Stripe.Customer> {
+    return this.ensureStripe().customers.update(customerId, {
+      invoice_settings: { default_payment_method: pmId },
+    }) as Promise<Stripe.Customer>;
+  }
+
+  /**
+   * Retrieves a Customer. Used to read invoice_settings.default_payment_method
+   * when listing saved cards so the UI can mark which one is default.
+   */
+  async retrieveCustomer(customerId: string): Promise<Stripe.Customer | Stripe.DeletedCustomer> {
+    return this.ensureStripe().customers.retrieve(customerId);
   }
 
   /** Attaches a PaymentMethod to a Customer (idempotent if already attached). */

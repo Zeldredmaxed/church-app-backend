@@ -14,9 +14,12 @@ import { StripeService } from '../stripe/stripe.service';
 import { Fundraiser } from './entities/fundraiser.entity';
 import { FundraiserDonation } from './entities/fundraiser-donation.entity';
 import { FundraiserBookmark } from './entities/fundraiser-bookmark.entity';
+import { FundraiserUpdate } from './entities/fundraiser-update.entity';
 import { CreateFundraiserDto } from './dto/create-fundraiser.dto';
 import { UpdateFundraiserDto } from './dto/update-fundraiser.dto';
 import { CreateDonationDto } from './dto/create-donation.dto';
+import { CreateFundraiserUpdateDto } from './dto/create-fundraiser-update.dto';
+import { AuditService } from '../audit/audit.service';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { getTierFeatures } from '../common/config/tier-features.config';
 import { NotificationType, NotificationJobData } from '../notifications/notifications.types';
@@ -28,6 +31,7 @@ export class FundraisersService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly stripeService: StripeService,
+    private readonly auditService: AuditService,
     @InjectQueue('notifications') private readonly notificationsQueue: Queue<NotificationJobData>,
   ) {}
 
@@ -139,6 +143,18 @@ export class FundraisersService {
       [id],
     );
 
+    // Recent updates (most recent 20)
+    const updates = await queryRunner.query(
+      `SELECT fu.id, fu.content, fu.created_at, fu.posted_by,
+              u.full_name AS author_name, u.avatar_url AS author_avatar
+       FROM public.fundraiser_updates fu
+       LEFT JOIN public.users u ON u.id = fu.posted_by
+       WHERE fu.fundraiser_id = $1
+       ORDER BY fu.created_at DESC
+       LIMIT 20`,
+      [id],
+    );
+
     return {
       ...this.mapFundraiserDetail(r),
       createdBy: {
@@ -146,8 +162,162 @@ export class FundraisersService {
         fullName: r.creator_name,
         avatarUrl: r.creator_avatar,
       },
+      backers: recentBackers.map((b: any) => this.mapBacker(b)),
       recentBackers: recentBackers.map((b: any) => this.mapBacker(b)),
+      updates: updates.map((u: any) => this.mapUpdate(u)),
     };
+  }
+
+  // ── Delete Fundraiser (Admin, soft-delete via status='cancelled') ──
+
+  async deleteFundraiser(id: string, userId: string) {
+    const { queryRunner, currentTenantId } = this.getRlsContext();
+    if (!currentTenantId) throw new BadRequestException('No active tenant context.');
+
+    await this.verifyPremiumTier(currentTenantId);
+
+    const existing = await queryRunner.manager.findOne(Fundraiser, { where: { id } });
+    if (!existing) throw new NotFoundException('Fundraiser not found');
+
+    if (existing.status === 'cancelled') {
+      return { id, status: 'cancelled' };
+    }
+
+    await queryRunner.manager.update(
+      Fundraiser,
+      { id },
+      { status: 'cancelled' },
+    );
+
+    await this.auditService.log({
+      action: 'fundraiser.cancelled',
+      resourceType: 'fund',
+      resourceId: id,
+      summary: `Cancelled fundraiser "${existing.title}"`,
+      metadata: { fundraiserId: id, previousStatus: existing.status },
+    });
+
+    this.logger.log(`Fundraiser ${id} cancelled by ${userId}`);
+    return { id, status: 'cancelled' };
+  }
+
+  // ── Close Fundraiser (Admin) — mark as completed ──
+
+  async closeFundraiser(id: string, userId: string) {
+    const { queryRunner, currentTenantId } = this.getRlsContext();
+    if (!currentTenantId) throw new BadRequestException('No active tenant context.');
+
+    await this.verifyPremiumTier(currentTenantId);
+
+    const existing = await queryRunner.manager.findOne(Fundraiser, { where: { id } });
+    if (!existing) throw new NotFoundException('Fundraiser not found');
+
+    if (existing.status === 'completed') {
+      return { id, status: 'completed' };
+    }
+    if (existing.status === 'cancelled') {
+      throw new BadRequestException('Cancelled fundraisers cannot be closed.');
+    }
+
+    await queryRunner.manager.update(
+      Fundraiser,
+      { id },
+      { status: 'completed' },
+    );
+
+    await this.auditService.log({
+      action: 'fundraiser.closed',
+      resourceType: 'fund',
+      resourceId: id,
+      summary: `Closed fundraiser "${existing.title}"`,
+      metadata: { fundraiserId: id, previousStatus: existing.status },
+    });
+
+    this.logger.log(`Fundraiser ${id} closed by ${userId}`);
+    return { id, status: 'completed' };
+  }
+
+  // ── Fundraiser Updates ──
+
+  async listUpdates(fundraiserId: string, page = 1, limit = 20) {
+    const { queryRunner } = this.getRlsContext();
+    const offset = (page - 1) * limit;
+
+    // Confirm fundraiser visible to the caller via RLS.
+    const fr = await queryRunner.manager.findOne(Fundraiser, { where: { id: fundraiserId } });
+    if (!fr) throw new NotFoundException('Fundraiser not found');
+
+    const rows = await queryRunner.query(
+      `SELECT fu.id, fu.content, fu.created_at, fu.posted_by,
+              u.full_name AS author_name, u.avatar_url AS author_avatar
+       FROM public.fundraiser_updates fu
+       LEFT JOIN public.users u ON u.id = fu.posted_by
+       WHERE fu.fundraiser_id = $1
+       ORDER BY fu.created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [fundraiserId, limit, offset],
+    );
+
+    const [{ total }] = await queryRunner.query(
+      `SELECT COUNT(*)::int AS total FROM public.fundraiser_updates WHERE fundraiser_id = $1`,
+      [fundraiserId],
+    );
+
+    return {
+      data: rows.map((u: any) => this.mapUpdate(u)),
+      total: Number(total),
+      page,
+    };
+  }
+
+  async createUpdate(
+    fundraiserId: string,
+    dto: CreateFundraiserUpdateDto,
+    userId: string,
+  ) {
+    const { queryRunner, currentTenantId } = this.getRlsContext();
+    if (!currentTenantId) throw new BadRequestException('No active tenant context.');
+
+    const fundraiser = await queryRunner.manager.findOne(Fundraiser, { where: { id: fundraiserId } });
+    if (!fundraiser) throw new NotFoundException('Fundraiser not found');
+
+    const isAuthor = fundraiser.createdBy === userId;
+    let isAdmin = false;
+    if (!isAuthor) {
+      const membership = await this.dataSource.query(
+        `SELECT role FROM public.tenant_memberships WHERE user_id = $1 AND tenant_id = $2`,
+        [userId, currentTenantId],
+      );
+      isAdmin = membership[0]?.role === 'admin' || membership[0]?.role === 'pastor';
+    }
+    if (!isAuthor && !isAdmin) {
+      throw new ForbiddenException('Only the fundraiser creator or an admin can post updates.');
+    }
+
+    const update = queryRunner.manager.create(FundraiserUpdate, {
+      fundraiserId,
+      tenantId: currentTenantId,
+      postedBy: userId,
+      content: dto.content,
+    });
+    const saved = await queryRunner.manager.save(FundraiserUpdate, update);
+
+    await this.auditService.log({
+      action: 'fundraiser.update_posted',
+      resourceType: 'fund',
+      resourceId: fundraiserId,
+      summary: `Posted update on "${fundraiser.title}"`,
+      metadata: { updateId: saved.id },
+    });
+
+    return this.mapUpdate({
+      id: saved.id,
+      content: saved.content,
+      created_at: saved.createdAt,
+      posted_by: saved.postedBy,
+      author_name: null,
+      author_avatar: null,
+    });
   }
 
   // ── Get Backers ──
@@ -317,6 +487,7 @@ export class FundraisersService {
       targetAmount: dto.targetAmount,
       currency: 'USD',
       imageUrl: dto.imageUrl ?? null,
+      icon: dto.icon ?? null,
       status: dto.status ?? 'active',
       startsAt: new Date(),
       endsAt: new Date(dto.endsAt),
@@ -344,6 +515,7 @@ export class FundraisersService {
     if (dto.category !== undefined) updates.category = dto.category;
     if (dto.targetAmount !== undefined) updates.targetAmount = dto.targetAmount;
     if (dto.imageUrl !== undefined) updates.imageUrl = dto.imageUrl;
+    if (dto.icon !== undefined) updates.icon = dto.icon;
     if (dto.status !== undefined) updates.status = dto.status as Fundraiser['status'];
     if (dto.endsAt !== undefined) {
       if (new Date(dto.endsAt) <= new Date()) {
@@ -403,32 +575,54 @@ export class FundraisersService {
     }
   }
 
+  /** Days left until ends_at; null once ended. Rounds up so a 12hr remainder still reads as "1 day". */
+  private computeDaysLeft(endsAt: Date | string): number | null {
+    const end = new Date(endsAt).getTime();
+    const now = Date.now();
+    if (end <= now) return null;
+    return Math.ceil((end - now) / (1000 * 60 * 60 * 24));
+  }
+
+  private isClosed(status: string): boolean {
+    return status === 'completed' || status === 'cancelled';
+  }
+
   private mapFundraiserListItem(r: any) {
-    const now = new Date();
-    const endsAt = new Date(r.ends_at);
-    const daysLeft = Math.max(0, Math.ceil((endsAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+    const targetCents = Number(r.target_amount);
+    const raisedCents = Number(r.raised_amount);
+    const daysLeft = this.computeDaysLeft(r.ends_at);
 
     return {
       id: r.id,
       title: r.title,
       organization: r.org_name,
       category: r.category,
-      targetAmount: Number(r.target_amount),
-      raisedAmount: Number(r.raised_amount),
+      // Both shapes shipped — legacy callers read cents, mobile reads dollars.
+      targetAmount: targetCents,
+      raisedAmount: raisedCents,
+      targetCents,
+      raisedCents,
+      target: targetCents / 100,
+      raised: raisedCents / 100,
+      targetDollars: targetCents / 100,
+      raisedDollars: raisedCents / 100,
       backerCount: Number(r.backer_count),
       imageUrl: r.image_url,
+      coverImageUrl: r.image_url,
+      icon: r.icon ?? null,
       daysLeft,
       endsAt: r.ends_at,
       status: r.status,
+      isClosed: this.isClosed(r.status),
       isBookmarked: r.is_bookmarked ?? false,
       createdAt: r.created_at,
     };
   }
 
   private mapFundraiserDetail(r: any) {
-    const now = new Date();
-    const endsAt = new Date(r.ends_at);
-    const daysLeft = Math.max(0, Math.ceil((endsAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+    const targetCents = Number(r.target_amount);
+    const raisedCents = Number(r.raised_amount);
+    const daysLeft = this.computeDaysLeft(r.ends_at);
 
     return {
       id: r.id,
@@ -437,18 +631,40 @@ export class FundraisersService {
       overview: r.overview,
       organization: r.org_name,
       category: r.category,
-      targetAmount: Number(r.target_amount),
-      raisedAmount: Number(r.raised_amount),
+      targetAmount: targetCents,
+      raisedAmount: raisedCents,
+      targetCents,
+      raisedCents,
+      target: targetCents / 100,
+      raised: raisedCents / 100,
+      targetDollars: targetCents / 100,
+      raisedDollars: raisedCents / 100,
       currency: r.currency,
       backerCount: Number(r.backer_count),
       imageUrl: r.image_url,
+      coverImageUrl: r.image_url,
+      icon: r.icon ?? null,
       status: r.status,
+      isClosed: this.isClosed(r.status),
       daysLeft,
       startsAt: r.starts_at,
       endsAt: r.ends_at,
       isBookmarked: r.is_bookmarked ?? false,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
+    };
+  }
+
+  private mapUpdate(u: any) {
+    return {
+      id: u.id,
+      content: u.content,
+      createdAt: u.created_at,
+      postedBy: {
+        id: u.posted_by,
+        fullName: u.author_name,
+        avatarUrl: u.author_avatar,
+      },
     };
   }
 

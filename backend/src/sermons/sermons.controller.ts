@@ -49,6 +49,12 @@ export class SermonsController {
     return this.sermonsService.getSeries(this.getTenantId(user));
   }
 
+  @Get('stats')
+  @ApiOperation({ summary: 'Aggregate sermon stats (totalViews, avgWatchSeconds, sermonsThisMonth, seriesActive)' })
+  getStats(@CurrentUser() user: SupabaseJwtPayload) {
+    return this.sermonsService.getStats(this.getTenantId(user));
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get a single sermon' })
   getSermon(@Param('id', ParseUUIDPipe) id: string) {

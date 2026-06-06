@@ -246,10 +246,24 @@ export class CommunicationsService {
       [tenantId],
     );
 
+    const totalSent = row?.total_sent ?? 0;
+
+    // We don't yet capture open/click events server-side (no
+    // sent_message_events table). Surface zeros so the mobile shape
+    // matches { totalSent, totalOpened, totalClicked, openRate, clickRate }
+    // and can render the analytics screen without optional-chaining
+    // on every metric.
+    const totalOpened = 0;
+    const totalClicked = 0;
+
     return {
-      totalSent: row.total_sent,
-      sentThisMonth: row.sent_this_month,
-      avgRecipients: parseFloat(row.avg_recipients) || 0,
+      totalSent,
+      sentThisMonth: row?.sent_this_month ?? 0,
+      avgRecipients: parseFloat(row?.avg_recipients) || 0,
+      totalOpened,
+      totalClicked,
+      openRate: totalSent > 0 ? Math.round((totalOpened / totalSent) * 1000) / 10 : 0,
+      clickRate: totalSent > 0 ? Math.round((totalClicked / totalSent) * 1000) / 10 : 0,
     };
   }
 

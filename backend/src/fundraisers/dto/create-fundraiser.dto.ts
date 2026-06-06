@@ -33,6 +33,12 @@ export class CreateFundraiserDto {
   @MaxLength(2048)
   imageUrl?: string;
 
+  @ApiPropertyOptional({ description: 'Optional Ionicon name. If null, mobile picks default per category.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  icon?: string;
+
   @ApiPropertyOptional({ enum: ['draft', 'active'], default: 'active' })
   @IsOptional()
   @IsIn(['draft', 'active'])

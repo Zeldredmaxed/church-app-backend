@@ -1,13 +1,14 @@
 import {
   Injectable,
   NotFoundException,
+  ForbiddenException,
   BadRequestException,
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { DataSource } from 'typeorm';
+import { DataSource, QueryRunner } from 'typeorm';
 import { rlsStorage } from '../common/storage/rls.storage';
 import { ChatChannel } from './entities/chat-channel.entity';
 import { ChannelMember } from './entities/channel-member.entity';
@@ -31,6 +32,22 @@ export class ConversationService {
       throw new BadRequestException('No tenant context. Call POST /api/auth/switch-tenant first.');
     }
     return ctx;
+  }
+
+  /** Same mute check as ChatService — duplicated here so DM sends respect mutes too. */
+  private async assertNotMuted(queryRunner: QueryRunner, tenantId: string, userId: string) {
+    const rows = await queryRunner.query(
+      `SELECT expires_at FROM public.chat_user_mutes
+        WHERE tenant_id = $1 AND user_id = $2 AND expires_at > now()
+        ORDER BY expires_at DESC
+        LIMIT 1`,
+      [tenantId, userId],
+    );
+    if (rows.length > 0) {
+      throw new ForbiddenException(
+        `You are muted from chat until ${new Date(rows[0].expires_at).toISOString()}`,
+      );
+    }
   }
 
   /**
@@ -209,6 +226,9 @@ export class ConversationService {
    */
   async sendMessage(conversationId: string, dto: SendMessageDto, userId: string) {
     const { queryRunner, currentTenantId } = this.getRlsContext();
+
+    // Refuse send if the sender is muted in this tenant.
+    await this.assertNotMuted(queryRunner, currentTenantId!, userId);
 
     // Verify channel exists and user is a member
     const channel = await queryRunner.manager.findOne(ChatChannel, {

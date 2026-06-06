@@ -4,7 +4,11 @@ import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
 import { ConversationController } from './conversation.controller';
 import { ConversationService } from './conversation.service';
-import { AdminChatController } from './admin-chat.controller';
+import {
+  AdminChatController,
+  AdminChatModerationController,
+  ChatMessageFlagController,
+} from './admin-chat.controller';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { AuditModule } from '../audit/audit.module';
 
@@ -13,7 +17,13 @@ import { AuditModule } from '../audit/audit.module';
     BullModule.registerQueue({ name: 'notifications' }),
     AuditModule,
   ],
-  controllers: [ChatController, ConversationController, AdminChatController],
+  controllers: [
+    ChatController,
+    ConversationController,
+    AdminChatController,
+    AdminChatModerationController,
+    ChatMessageFlagController,
+  ],
   providers: [ChatService, ConversationService, RlsContextInterceptor],
 })
 export class ChatModule {}

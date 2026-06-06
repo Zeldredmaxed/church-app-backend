@@ -57,8 +57,10 @@ export class AttendanceService {
           latitude, longitude, radius_meters,
           late_threshold_minutes, early_leave_threshold_minutes,
           is_active, auto_push_enabled, push_message,
-          start_push_lead_minutes, end_push_lead_minutes, end_push_message)
-       VALUES ($1, $2, $3, $4::time, $5::time, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+          start_push_lead_minutes, end_push_lead_minutes, end_push_message,
+          pastor, location, capacity, tags)
+       VALUES ($1, $2, $3, $4::time, $5::time, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+               $17, $18, $19, $20)
        RETURNING *`,
       [
         tenantId,
@@ -77,6 +79,10 @@ export class AttendanceService {
         dto.startPushLeadMinutes ?? 0,
         dto.endPushLeadMinutes ?? 3,
         dto.endPushMessage ?? null,
+        dto.pastor ?? null,
+        dto.location ?? null,
+        dto.capacity ?? null,
+        dto.tags ?? [],
       ],
     );
 
@@ -110,6 +116,10 @@ export class AttendanceService {
       ['startPushLeadMinutes', 'start_push_lead_minutes'],
       ['endPushLeadMinutes', 'end_push_lead_minutes'],
       ['endPushMessage', 'end_push_message'],
+      ['pastor', 'pastor'],
+      ['location', 'location'],
+      ['capacity', 'capacity'],
+      ['tags', 'tags'],
     ];
     for (const [dtoKey, col, cast] of map) {
       if ((dto as any)[dtoKey] !== undefined) {
@@ -760,6 +770,10 @@ export class AttendanceService {
       startPushLeadMinutes: r.start_push_lead_minutes,
       endPushLeadMinutes: r.end_push_lead_minutes,
       endPushMessage: r.end_push_message,
+      pastor: r.pastor ?? null,
+      location: r.location ?? null,
+      capacity: r.capacity ?? null,
+      tags: Array.isArray(r.tags) ? r.tags : [],
       upcomingOccurrenceCount: r.upcoming_occurrence_count,
       createdAt: r.created_at,
       updatedAt: r.updated_at,

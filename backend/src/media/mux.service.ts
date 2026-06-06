@@ -73,4 +73,52 @@ export class MuxService {
 
     return { uploadId: upload.id, uploadUrl: upload.url };
   }
+
+  /**
+   * Provisions a Mux Live Stream — the pastor pastes the returned
+   * streamKey into OBS (or similar), points the encoder at Mux's RTMP
+   * ingest, and viewers play back via HLS using the playbackId.
+   *
+   * `new_asset_settings.playback_policies = ['public']` means each VOD
+   * recording Mux generates from the live session is also publicly
+   * playable. If a tenant later requests signed playback, we can switch
+   * both policies to `signed`.
+   */
+  async createLiveStream(): Promise<{
+    liveStreamId: string;
+    streamKey: string;
+    playbackId: string;
+  }> {
+    const mux = this.getClient();
+
+    const liveStream = await mux.video.liveStreams.create({
+      playback_policy: ['public'],
+      new_asset_settings: {
+        playback_policy: ['public'],
+      },
+    });
+
+    const playbackId = liveStream.playback_ids?.[0]?.id;
+    if (!liveStream.id || !liveStream.stream_key || !playbackId) {
+      this.logger.error(
+        `Mux live stream returned without id/stream_key/playback_id: ${JSON.stringify(liveStream)}`,
+      );
+      throw new InternalServerErrorException('Mux did not return a valid live stream');
+    }
+
+    return {
+      liveStreamId: liveStream.id,
+      streamKey: liveStream.stream_key,
+      playbackId,
+    };
+  }
+
+  /**
+   * Tears down a Mux Live Stream so it stops accepting RTMP and stops
+   * billing. Best-effort — caller catches errors to log without
+   * blocking the local row deletion or compensating-transaction path.
+   */
+  async deleteLiveStream(liveStreamId: string): Promise<void> {
+    await this.getClient().video.liveStreams.delete(liveStreamId);
+  }
 }

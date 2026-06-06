@@ -196,6 +196,56 @@ export class SermonsService {
     return this.mapSermon(rows[0]);
   }
 
+  /**
+   * Aggregate sermon stats for the admin dashboard tile.
+   *   totalViews        — SUM(view_count) across all sermons in the tenant
+   *   avgWatchSeconds   — AVG(watch_seconds) from sermon_views if the table
+   *                       exists; null when we don't yet capture per-view
+   *                       watch time (no sermon_views table in current schema).
+   *   sermonsThisMonth  — count created since date_trunc('month', now())
+   *   seriesActive      — distinct non-empty series_name values
+   */
+  async getStats(tenantId: string) {
+    const { queryRunner } = this.getRlsContext();
+
+    const [[base], hasViewsTable] = await Promise.all([
+      queryRunner.query(
+        `SELECT
+           COALESCE(SUM(view_count), 0)::int AS total_views,
+           COUNT(*) FILTER (WHERE created_at >= date_trunc('month', now()))::int AS sermons_this_month,
+           COUNT(DISTINCT NULLIF(series_name, ''))::int AS series_active
+         FROM public.sermons WHERE tenant_id = $1`,
+        [tenantId],
+      ),
+      queryRunner.query(
+        `SELECT to_regclass('public.sermon_views') AS reg`,
+      ),
+    ]);
+
+    let avgWatchSeconds: number | null = null;
+    if (hasViewsTable[0]?.reg) {
+      try {
+        const [avgRow] = await queryRunner.query(
+          `SELECT AVG(watch_seconds)::float AS avg_watch
+           FROM public.sermon_views WHERE tenant_id = $1`,
+          [tenantId],
+        );
+        avgWatchSeconds = avgRow?.avg_watch != null ? Math.round(Number(avgRow.avg_watch)) : null;
+      } catch {
+        // watch_seconds column might not exist on a partial sermon_views
+        // implementation — stay null instead of crashing the tile.
+        avgWatchSeconds = null;
+      }
+    }
+
+    return {
+      totalViews: base?.total_views ?? 0,
+      avgWatchSeconds,
+      sermonsThisMonth: base?.sermons_this_month ?? 0,
+      seriesActive: base?.series_active ?? 0,
+    };
+  }
+
   async getSeries(tenantId: string) {
     const { queryRunner } = this.getRlsContext();
     const rows = await queryRunner.query(

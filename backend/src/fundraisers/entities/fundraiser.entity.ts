@@ -34,6 +34,9 @@ export class Fundraiser {
   @Column({ type: 'text', nullable: true, name: 'image_url' })
   imageUrl: string | null;
 
+  @Column({ type: 'text', nullable: true })
+  icon: string | null;
+
   @Column({ type: 'text', default: 'active' })
   status: 'draft' | 'active' | 'paused' | 'completed' | 'cancelled';
 
