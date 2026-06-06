@@ -64,8 +64,13 @@ export class NotificationsService {
 
   // ── Notification List ──
 
-  async getNotifications(userId: string, page = 1, limit = 30, unreadOnly = false) {
-    const offset = (page - 1) * limit;
+  /**
+   * Offset-paginated. Returns the standard PaginatedOffset envelope plus
+   * the unreadCount (still needed for the bell-badge — saves an extra
+   * round-trip to /api/notifications/unread-count when rendering the
+   * inbox).
+   */
+  async getNotifications(userId: string, offset = 0, limit = 20, unreadOnly = false) {
     const unreadFilter = unreadOnly ? `AND n.read_at IS NULL` : '';
 
     const rows = await this.dataSource.query(
@@ -90,24 +95,29 @@ export class NotificationsService {
       [userId],
     );
 
+    const data = rows.map((r: any) => ({
+      id: r.id,
+      type: r.type,
+      title: r.title,
+      body: r.body,
+      data: r.data,
+      sender: r.sender_id ? {
+        id: r.sender_id,
+        fullName: r.sender_name,
+        avatarUrl: r.sender_avatar,
+      } : null,
+      isRead: r.read_at !== null,
+      createdAt: r.created_at,
+    }));
+
     return {
-      notifications: rows.map((r: any) => ({
-        id: r.id,
-        type: r.type,
-        title: r.title,
-        body: r.body,
-        data: r.data,
-        sender: r.sender_id ? {
-          id: r.sender_id,
-          fullName: r.sender_name,
-          avatarUrl: r.sender_avatar,
-        } : null,
-        isRead: r.read_at !== null,
-        createdAt: r.created_at,
-      })),
-      unreadCount: Number(unreadCount),
+      data,
       total: Number(total),
-      page,
+      limit,
+      offset,
+      unreadCount: Number(unreadCount),
+      // Legacy field — keep for one release while mobile migrates off it.
+      notifications: data,
     };
   }
 

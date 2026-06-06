@@ -18,6 +18,8 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { IsString, IsOptional, IsBoolean, IsUUID, IsIn } from 'class-validator';
 import { NotificationsService } from './notifications.service';
 import { DeleteNotificationsDto } from './dto/delete-notifications.dto';
+import { GetNotificationsDto } from './dto/get-notifications.dto';
+import { NOTIFICATION_CATEGORIES, NOTIFICATION_TYPE_KEYS } from './notifications.types';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -38,6 +40,7 @@ class UnregisterDeviceDto {
 
 class UpdatePreferenceDto {
   @IsString()
+  @IsIn(NOTIFICATION_TYPE_KEYS as string[])
   type: string;
 
   @IsOptional()
@@ -97,19 +100,19 @@ export class NotificationsController {
   // ── Notification List ──
 
   @Get()
-  @ApiOperation({ summary: 'List notifications for the authenticated user' })
+  @ApiOperation({ summary: 'List notifications for the authenticated user (offset-paginated)' })
   @ApiResponse({ status: 200, description: 'Paginated notifications with unread count' })
   getNotifications(
     @CurrentUser() user: SupabaseJwtPayload,
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-    @Query('unreadOnly') unreadOnly?: string,
+    @Query() query: GetNotificationsDto,
   ) {
+    const limit = query.limit ?? 20;
+    const offset = query.offset ?? 0;
     return this.notificationsService.getNotifications(
       user.sub,
-      parseInt(page ?? '1', 10) || 1,
-      Math.min(parseInt(limit ?? '30', 10) || 30, 100),
-      unreadOnly === 'true',
+      offset,
+      limit,
+      query.unreadOnly === true,
     );
   }
 
@@ -122,6 +125,21 @@ export class NotificationsController {
   }
 
   // ── Preferences ──
+
+  @Get('categories')
+  @ApiOperation({
+    summary: 'Notification type catalog for the preferences screen',
+    description:
+      'Returns the canonical list of notification types with labels, grouping, and channel defaults. The mobile preferences UI should render from this list (do NOT hardcode types client-side).',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      '{ categories: [{ key, label, description, group, defaultPush, defaultEmail, defaultSms }] }',
+  })
+  getCategories() {
+    return { categories: NOTIFICATION_CATEGORIES };
+  }
 
   @Get('preferences')
   @ApiOperation({ summary: 'Get notification preferences for all types' })

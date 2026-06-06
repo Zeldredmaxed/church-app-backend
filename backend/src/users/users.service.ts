@@ -101,6 +101,8 @@ export class UsersService {
   async getPublicProfile(userId: string) {
     const [row] = await this.dataSource.query(
       `SELECT u.id, u.full_name, u.avatar_url, u.created_at,
+              u.date_of_birth, u.birthday_visible,
+              u.anniversary, u.anniversary_visible,
               t.id AS church_id, t.name AS church_name, t.brand_color AS church_brand_color, t.is_guest AS church_is_guest
        FROM public.users u
        LEFT JOIN public.tenants t ON t.id = u.last_accessed_tenant_id
@@ -124,12 +126,21 @@ export class UsersService {
           }
         : null;
 
+    // Birthday/anniversary surfaced ONLY when the member opted in
+    // (migration 067 added the visibility flags). We strip the year on
+    // both — public surfaces don't need to know how old someone is —
+    // because the use case is "happy birthday today!" not "they turn 47".
+    const monthDay = (d: string | null) =>
+      d ? d.slice(5) : null; // YYYY-MM-DD → MM-DD
+
     return {
       id: row.id,
       fullName: row.full_name,
       avatarUrl: row.avatar_url,
       church,
       createdAt: row.created_at,
+      birthday: row.birthday_visible === true ? monthDay(row.date_of_birth) : null,
+      anniversary: row.anniversary_visible === true ? monthDay(row.anniversary) : null,
     };
   }
 
