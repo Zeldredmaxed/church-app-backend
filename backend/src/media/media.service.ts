@@ -15,7 +15,14 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { PresignedUrlDto } from './dto/presigned-url.dto';
-import sharp from 'sharp';
+// sharp's CJS export is the function itself with static methods (.cache,
+// .concurrency, etc.) — no `default` property. Our tsconfig has
+// allowSyntheticDefaultImports but NOT esModuleInterop, so a default
+// import would compile to `sharp_1.default.cache(...)` and crash at
+// runtime (sharp.default is undefined). The TS-equals-require syntax
+// compiles to a plain `const sharp = require('sharp')` and works for
+// any CJS module shape.
+import sharp = require('sharp');
 
 // Module-init sharp caps. Without these a single 12MP photo (~60-80MB
 // decompressed RGBA) on Render's 512MB Starter OOMs at ~4 concurrent.
