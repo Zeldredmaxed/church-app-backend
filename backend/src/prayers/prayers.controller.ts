@@ -17,6 +17,16 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 export class PrayersController {
   constructor(private readonly prayersService: PrayersService) {}
 
+  @Get('kpis')
+  @ApiOperation({
+    summary: 'Prayer-wall KPI counts for the Care dashboard',
+    description:
+      'Returns { activeCount, answeredThisMonth, prayingMembersLast7d }. Active = is_answered=false. Active and answered counts are tenant-scoped via the RLS QueryRunner.',
+  })
+  getPrayerKpis(@CurrentUser() user: SupabaseJwtPayload) {
+    return this.prayersService.getPrayerKpis(user.app_metadata?.current_tenant_id!);
+  }
+
   @Get()
   @ApiOperation({ summary: 'List prayer requests (cursor-paginated)' })
   getPrayers(

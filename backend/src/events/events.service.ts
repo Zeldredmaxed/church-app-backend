@@ -274,6 +274,50 @@ export class EventsService {
    * Generate an iCal feed for all upcoming events in a tenant.
    * Public — no auth required (used for calendar subscription URLs).
    */
+  /**
+   * Generate or rotate the tenant's iCal subscription token. Returns
+   * the new URL clients can hand to Google Calendar / Apple Calendar
+   * / Outlook. Rotation invalidates the previous URL — useful if it
+   * leaks.
+   */
+  async regenerateIcalToken(tenantId: string): Promise<{ token: string; url: string }> {
+    const token = require('crypto').randomBytes(32).toString('base64url');
+    await this.dataSource.query(
+      `UPDATE public.tenants SET ical_token = $1 WHERE id = $2`,
+      [token, tenantId],
+    );
+    const baseUrl = process.env.RENDER_EXTERNAL_URL ?? 'https://church-app-backend-27hc.onrender.com';
+    return {
+      token,
+      url: `${baseUrl}/api/events/ical-public/${tenantId}?token=${token}`,
+    };
+  }
+
+  /**
+   * Token-authenticated public iCal feed. Bearer auth bypassed (handled
+   * by the separate PublicICalController). Verifies token via
+   * constant-time compare to thwart token enumeration via timing.
+   */
+  async getPublicICalFeed(tenantId: string, providedToken: string | undefined): Promise<string> {
+    if (!providedToken || providedToken.length > 200) {
+      throw new (require('@nestjs/common').UnauthorizedException)('Invalid token');
+    }
+    const [row] = await this.dataSource.query(
+      `SELECT ical_token FROM public.tenants WHERE id = $1`,
+      [tenantId],
+    );
+    const stored: string | null = row?.ical_token ?? null;
+    if (!stored) {
+      throw new (require('@nestjs/common').UnauthorizedException)('iCal feed not enabled for this tenant');
+    }
+    const a = Buffer.from(stored);
+    const b = Buffer.from(providedToken);
+    if (a.length !== b.length || !require('crypto').timingSafeEqual(a, b)) {
+      throw new (require('@nestjs/common').UnauthorizedException)('Invalid token');
+    }
+    return this.getICalFeed(tenantId);
+  }
+
   async getICalFeed(tenantId: string): Promise<string> {
     const [tenant] = await this.dataSource.query(
       `SELECT name FROM public.tenants WHERE id = $1`, [tenantId],

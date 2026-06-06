@@ -165,8 +165,15 @@ export class NotificationsController {
   // ── Mark Read ──
 
   @Put('read-all')
-  @ApiOperation({ summary: 'Mark all notifications as read' })
-  markAllAsRead(@CurrentUser() user: SupabaseJwtPayload) {
+  @ApiOperation({ summary: 'Mark all notifications as read (PUT)' })
+  markAllAsReadPut(@CurrentUser() user: SupabaseJwtPayload) {
+    return this.notificationsService.markAllAsRead(user.sub);
+  }
+
+  @Post('read-all')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Mark all notifications as read (POST alias)' })
+  markAllAsReadPost(@CurrentUser() user: SupabaseJwtPayload) {
     return this.notificationsService.markAllAsRead(user.sub);
   }
 

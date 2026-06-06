@@ -20,7 +20,7 @@ export class DashboardService {
   }
 
   private async _getKpis(tenantId: string) {
-    const [r1, r2, r3, r4, r5, r6, r7] = await Promise.all([
+    const [r1, r2, r3, r4, r5, r6, r7, r8, r9] = await Promise.all([
       this.dataSource.query(
         `SELECT COUNT(*)::int AS total_members FROM public.tenant_memberships WHERE tenant_id = $1`,
         [tenantId],
@@ -57,6 +57,21 @@ export class DashboardService {
          FROM public.prayers WHERE tenant_id = $1 AND is_answered = false`,
         [tenantId],
       ),
+      // workflowFailures24h — feeds the "Workflows failing today" tile
+      this.dataSource.query(
+        `SELECT COUNT(*)::int AS failed
+         FROM public.workflow_executions we
+         WHERE we.tenant_id = $1 AND we.status = 'failed'
+           AND we.started_at >= now() - interval '24 hours'`,
+        [tenantId],
+      ),
+      // pendingVerificationCount — feeds the volunteer-hours verification queue tile
+      this.dataSource.query(
+        `SELECT COUNT(*)::int AS pending
+         FROM public.volunteer_hours
+         WHERE tenant_id = $1 AND verified_by IS NULL`,
+        [tenantId],
+      ),
     ]);
 
     return {
@@ -67,6 +82,8 @@ export class DashboardService {
       totalPrayers: r5[0]?.total_prayers ?? 0,
       activeVolunteers: r6[0]?.active_volunteers ?? 0,
       pendingPrayers: r7[0]?.pending_prayers ?? 0,
+      workflowFailures24h: r8[0]?.failed ?? 0,
+      pendingVolunteerVerifications: r9[0]?.pending ?? 0,
     };
   }
 

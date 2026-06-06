@@ -581,6 +581,7 @@ export class MembershipsService {
     tenantId: string,
     cursor?: string,
     limit: number = 20,
+    missingTagIds?: string[],
   ): Promise<{ members: TenantMemberDetail[]; nextCursor: string | null }> {
     const { queryRunner } = this.getRlsContext();
 
@@ -599,6 +600,19 @@ export class MembershipsService {
       WHERE tm.tenant_id = $1
     `;
     const params: any[] = [tenantId];
+
+    // ?missingTagIds=… — "newcomers not yet welcomed" filter. NOT EXISTS
+    // sub-select per tag id; capped at 20 to keep the planner happy.
+    if (missingTagIds && missingTagIds.length > 0) {
+      const capped = missingTagIds.slice(0, 20);
+      params.push(capped);
+      query += `
+        AND NOT EXISTS (
+          SELECT 1 FROM public.member_tags mt
+          WHERE mt.user_id = tm.user_id
+            AND mt.tag_id = ANY($${params.length}::uuid[])
+        )`;
+    }
 
     if (cursor) {
       // Cursor: fetch the cursor user's sort key, then paginate after it

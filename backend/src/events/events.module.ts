@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
-import { EventsController } from './events.controller';
+import { EventsController, PublicICalController } from './events.controller';
 import { EventsService } from './events.service';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { AuditModule } from '../audit/audit.module';
@@ -10,7 +10,7 @@ import { AuditModule } from '../audit/audit.module';
     BullModule.registerQueue({ name: 'notifications' }),
     AuditModule,
   ],
-  controllers: [EventsController],
+  controllers: [EventsController, PublicICalController],
   providers: [EventsService, RlsContextInterceptor],
 })
 export class EventsModule {}

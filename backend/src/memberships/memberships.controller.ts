@@ -162,7 +162,7 @@ export class MembershipsController {
     @CurrentUser() user: SupabaseJwtPayload,
   ) {
     assertUrlTenantMatchesJwt(tenantId, user);
-    return this.membershipsService.getMembers(tenantId, query.cursor, query.limit);
+    return this.membershipsService.getMembers(tenantId, query.cursor, query.limit, query.missingTagIds);
   }
 
   @Get('tenants/:tenantId/members/:userId/profile-extras')

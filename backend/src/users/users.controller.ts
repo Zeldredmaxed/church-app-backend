@@ -21,6 +21,7 @@ import { ProfileCompletenessService, RequirementSet } from './profile-completene
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -34,6 +35,25 @@ export class UsersController {
     private readonly usersService: UsersService,
     private readonly completeness: ProfileCompletenessService,
   ) {}
+
+  @Get('admin/account-deletions')
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @ApiOperation({
+    summary: 'GDPR Art. 30: list account-deletion records for the current tenant (admin/pastor)',
+    description:
+      'Returns deletion log rows where tenant_ids[] contains the caller\'s current_tenant_id. ' +
+      'Capped at 500 rows, newest first.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '{ data: [{ id, userId, email, fullName, tenantIds, deletedAt, ipAddress }] }',
+  })
+  getAccountDeletions(
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    return this.usersService.listAccountDeletions(user.app_metadata?.current_tenant_id!);
+  }
 
   @Get('me/profile-completeness')
   @ApiOperation({

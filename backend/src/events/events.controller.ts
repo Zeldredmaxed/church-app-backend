@@ -82,16 +82,50 @@ export class EventsController {
     return this.eventsService.getAttendees(id, Math.min(parseInt(limit ?? '20', 10) || 20, 100), cursor);
   }
 
-  @Get('ical/:tenantId')
-  @ApiOperation({ summary: 'Public iCal feed for calendar subscription (no auth)' })
-  async getICalFeed(
+  @Post('ical/regenerate-token')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Generate or rotate the public iCal token for this tenant',
+    description:
+      'Returns { token, url } — admin uses the url to give Google/Apple/Outlook a subscribe link. Calling again rotates the token and invalidates the previous URL.',
+  })
+  async regenerateIcalToken(@CurrentUser() user: SupabaseJwtPayload) {
+    return this.eventsService.regenerateIcalToken(user.app_metadata?.current_tenant_id!);
+  }
+}
+
+/**
+ * Public iCal feed controller. Separate from EventsController so the
+ * JwtAuthGuard at the class level doesn't 401 external calendar
+ * subscribers (Google/Apple/Outlook can't carry a bearer token).
+ *
+ * Auth is via a per-tenant rotatable token in the query string.
+ */
+import { Controller as PublicController } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
+
+@ApiTags('Events — Public iCal')
+@PublicController('events/ical-public')
+@SkipThrottle()
+export class PublicICalController {
+  constructor(private readonly eventsService: EventsService) {}
+
+  @Get(':tenantId')
+  @ApiOperation({
+    summary: 'Public iCal subscription feed (token-authenticated, no JWT)',
+    description:
+      'External calendars subscribe to this URL. The ?token= must match the tenant\'s ical_token (generate via POST /events/ical/regenerate-token).',
+  })
+  async getPublicICal(
     @Param('tenantId', ParseUUIDPipe) tenantId: string,
+    @Query('token') token: string,
     @Res() res: Response,
   ) {
-    const ical = await this.eventsService.getICalFeed(tenantId);
+    const ical = await this.eventsService.getPublicICalFeed(tenantId, token);
     res.set({
       'Content-Type': 'text/calendar; charset=utf-8',
       'Content-Disposition': 'attachment; filename="events.ics"',
+      'Cache-Control': 'public, max-age=900', // 15 min — calendars poll
     });
     res.send(ical);
   }

@@ -119,12 +119,16 @@ export class CheckinService {
    * Avoids duplicate same-day check-ins via NOT EXISTS. Uses service-
    * role DataSource — controller layer is RoleGuard'd.
    */
-  async bulkCheckIn(tenantId: string, userIds: string[], serviceId?: string) {
+  async bulkCheckIn(tenantId: string, userIds: string[], serviceId?: string, eventId?: string) {
     if (userIds.length === 0) return { checkedIn: 0, skipped: 0 };
 
+    // event_id and service_id are independent — an event can happen in
+    // a service slot, but most events don't. Dedupe keys consider both
+    // so checking in to a Sunday service + the Easter event on the same
+    // day inserts two rows.
     const result = await this.dataSource.query(
-      `INSERT INTO public.check_ins (tenant_id, user_id, service_id)
-       SELECT $1, uid, $3::uuid
+      `INSERT INTO public.check_ins (tenant_id, user_id, service_id, event_id)
+       SELECT $1, uid, $3::uuid, $4::uuid
        FROM unnest($2::uuid[]) AS uid
        WHERE EXISTS (
          SELECT 1 FROM public.tenant_memberships tm
@@ -135,10 +139,11 @@ export class CheckinService {
          WHERE c.tenant_id = $1
            AND c.user_id = uid
            AND c.checked_in_at::date = CURRENT_DATE
-           AND (($3::uuid IS NULL AND c.service_id IS NULL) OR c.service_id = $3::uuid)
+           AND COALESCE(c.service_id::text, '_') = COALESCE($3::text, '_')
+           AND COALESCE(c.event_id::text, '_') = COALESCE($4::text, '_')
        )
        RETURNING id`,
-      [tenantId, userIds, serviceId ?? null],
+      [tenantId, userIds, serviceId ?? null, eventId ?? null],
     );
 
     return { checkedIn: result.length, skipped: userIds.length - result.length };

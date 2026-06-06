@@ -8,8 +8,18 @@ export class BulkCheckinDto {
   @IsUUID('4', { each: true })
   userIds: string[];
 
-  @ApiPropertyOptional({ description: 'Optional service UUID' })
+  @ApiPropertyOptional({
+    description: 'Optional service UUID (recurring service slot from /api/services)',
+  })
   @IsOptional()
   @IsUUID('4')
   serviceId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Optional event UUID (one-off event from /api/events). Either eventId or serviceId may be provided — both is fine but unusual.',
+  })
+  @IsOptional()
+  @IsUUID('4')
+  eventId?: string;
 }

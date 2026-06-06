@@ -67,7 +67,7 @@ export class CheckinController {
   ) {
     const tenantId = user.app_metadata?.current_tenant_id;
     if (!tenantId) throw new BadRequestException('No tenant context');
-    return this.checkinService.bulkCheckIn(tenantId, dto.userIds, dto.serviceId);
+    return this.checkinService.bulkCheckIn(tenantId, dto.userIds, dto.serviceId, dto.eventId);
   }
 
   @Get('attendance/kpis')

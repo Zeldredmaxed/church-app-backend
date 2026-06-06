@@ -124,7 +124,10 @@ export class PrayersService {
       throw new ForbiddenException('Only the author can mark a prayer as answered');
     }
 
-    await queryRunner.manager.update(Prayer, { id: prayerId }, { isAnswered: true });
+    await queryRunner.query(
+      `UPDATE public.prayers SET is_answered = true, answered_at = now() WHERE id = $1`,
+      [prayerId],
+    );
     return { isAnswered: true };
   }
 
@@ -191,6 +194,34 @@ export class PrayersService {
       prayingCount: Number(r.praying_count ?? 0),
       isPrayedByMe: r.is_prayed_by_me === true || r.is_prayed_by_me === 't',
       createdAt: r.created_at,
+    };
+  }
+
+  /**
+   * Care-dashboard KPIs: active prayers (open), answered-this-month,
+   * and how many unique members prayed for someone in the last 7 days.
+   * Service-role — admin dashboard reads this; tenant_id is the trust
+   * boundary (passed from the JWT).
+   */
+  async getPrayerKpis(tenantId: string) {
+    const [row] = await this.dataSource.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM public.prayers
+          WHERE tenant_id = $1 AND is_answered = false) AS active_count,
+         (SELECT COUNT(*)::int FROM public.prayers
+          WHERE tenant_id = $1 AND is_answered = true
+            AND answered_at >= date_trunc('month', now())) AS answered_this_month,
+         (SELECT COUNT(DISTINCT pp.user_id)::int
+          FROM public.prayer_prays pp
+          JOIN public.prayers p ON p.id = pp.prayer_id
+          WHERE p.tenant_id = $1 AND pp.created_at >= now() - interval '7 days')
+          AS praying_members_last_7d`,
+      [tenantId],
+    );
+    return {
+      activeCount: row?.active_count ?? 0,
+      answeredThisMonth: row?.answered_this_month ?? 0,
+      prayingMembersLast7d: row?.praying_members_last_7d ?? 0,
     };
   }
 }

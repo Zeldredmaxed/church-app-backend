@@ -623,6 +623,34 @@ export class UsersService {
     );
   }
 
+  /**
+   * GDPR Art. 30: list account-deletion log rows that include the
+   * given tenant in tenant_ids[]. Returns the safe-to-display fields
+   * (email is intentionally retained — the data subject is gone, the
+   * row is a compliance artifact).
+   */
+  async listAccountDeletions(tenantId: string) {
+    const rows = await this.dataSource.query(
+      `SELECT id, user_id, email, full_name, tenant_ids, ip_address, deleted_at
+       FROM public.account_deletion_log
+       WHERE $1::uuid = ANY(tenant_ids)
+       ORDER BY deleted_at DESC
+       LIMIT 500`,
+      [tenantId],
+    );
+    return {
+      data: rows.map((r: any) => ({
+        id: r.id,
+        userId: r.user_id,
+        email: r.email,
+        fullName: r.full_name,
+        tenantIds: r.tenant_ids,
+        ipAddress: r.ip_address,
+        deletedAt: r.deleted_at,
+      })),
+    };
+  }
+
   private getRlsContext() {
     const context = rlsStorage.getStore();
     if (!context) {

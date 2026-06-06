@@ -1,5 +1,5 @@
-import { IsOptional, IsInt, Min, Max, IsUUID } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsOptional, IsInt, IsArray, Min, Max, IsUUID } from 'class-validator';
+import { Type, Transform } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 /**
@@ -20,4 +20,25 @@ export class GetMembersDto {
   @Min(1)
   @Max(100)
   limit?: number = 20;
+
+  /**
+   * Comma-separated list of tag UUIDs. Returns only members who do NOT
+   * have ANY of these tags. Useful for "find newcomers not yet welcomed"
+   * (?missingTagIds=<Welcomed-tag-id>) or "members missing the Members
+   * Class tag". Up to 20 ids; tags above that suggest the query is
+   * better re-shaped.
+   */
+  @ApiPropertyOptional({
+    description: 'Comma-separated tag UUIDs — return members missing ALL of these tags',
+    example: 'a1b2c3d4-...,e5f6g7h8-...',
+  })
+  @IsOptional()
+  @Transform(({ value }) =>
+    typeof value === 'string'
+      ? value.split(',').map(s => s.trim()).filter(Boolean)
+      : value,
+  )
+  @IsArray()
+  @IsUUID('4', { each: true })
+  missingTagIds?: string[];
 }
