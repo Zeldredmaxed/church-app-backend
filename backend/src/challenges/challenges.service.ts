@@ -58,6 +58,48 @@ export class ChallengesService {
     return r.today;
   }
 
+  /** Tenant timezone (IANA name like "America/New_York"). */
+  private async tenantTimezone(tenantId: string): Promise<string> {
+    const { queryRunner } = this.getRlsContext();
+    const [r] = await queryRunner.query(
+      `SELECT timezone FROM public.tenants WHERE id = $1`,
+      [tenantId],
+    );
+    if (!r?.timezone) throw new NotFoundException('Tenant not found');
+    return r.timezone;
+  }
+
+  /**
+   * Compute the UTC ISO timestamp at which a task unlocks, given the
+   * enrollment's anchor date + the task's day_index + the tenant's
+   * timezone. Used for the `unlocksAt` field on locked Task responses
+   * (powers the "Unlocks in N hours" chip on mobile) and the
+   * TASK_LOCKED error payload.
+   *
+   * Math: enrollment.started_on + (dayIndex - 1) days, at 00:00:00
+   * in the tenant's timezone, converted to a UTC instant. Postgres
+   * `(date::timestamp AT TIME ZONE 'America/...')` does exactly this
+   * — interprets the naive midnight as being in the named TZ and
+   * returns the corresponding timestamptz. DST-safe (Postgres uses
+   * the IANA TZ database).
+   */
+  private async unlocksAtFor(
+    startedOn: string | Date,
+    dayIndex: number,
+    tenantTimezone: string,
+  ): Promise<string | null> {
+    const { queryRunner } = this.getRlsContext();
+    const startedOnStr = this.toDateString(startedOn);
+    if (!startedOnStr) return null;
+    const [r] = await queryRunner.query(
+      `SELECT (($1::date + ($2::int - 1) * INTERVAL '1 day')::date::timestamp
+              AT TIME ZONE $3) AS unlocks_at`,
+      [startedOnStr, dayIndex, tenantTimezone],
+    );
+    if (!r?.unlocks_at) return null;
+    return new Date(r.unlocks_at).toISOString();
+  }
+
   // ───────────────────────── mappers ─────────────────────────
 
   private mapChallenge(r: any) {
@@ -689,16 +731,22 @@ export class ChallengesService {
 
   /**
    * Tasks for a given day of a challenge, annotated with my completion +
-   * gating booleans (migration 098). Pass `currentDayIndex` (tenant-local
-   * "today" mapped to the enrollment's day) so the gating can be
-   * server-authoritative. If null, gating fields are still set as
-   * best-effort using the dayIndex alone (e.g. for admin previews).
+   * gating booleans + unlocksAt timestamp (migration 098).
+   *
+   * Pass `currentDayIndex` (tenant-local "today" mapped to the
+   * enrollment's day) so isLocked/isLate are server-authoritative.
+   *
+   * Pass `enrollmentStartedOn` + `tenantTimezone` to populate
+   * `unlocksAt` (UTC ISO) on locked tasks — powers mobile's "Unlocks
+   * in N hours" chip. When either is null, unlocksAt comes back null.
    */
   private async tasksForDay(
     challengeId: string,
     userId: string,
     dayIndex: number,
     currentDayIndex: number | null = null,
+    enrollmentStartedOn: string | Date | null = null,
+    tenantTimezone: string | null = null,
   ) {
     const { queryRunner } = this.getRlsContext();
     const rows = await queryRunner.query(
@@ -713,6 +761,20 @@ export class ChallengesService {
        ORDER BY t.position ASC`,
       [challengeId, userId, dayIndex],
     );
+
+    // Compute unlocksAt once for the whole day (all rows share the
+    // same dayIndex, so they share the same unlock instant). Skip the
+    // SQL entirely if we don't have the inputs or the day isn't locked.
+    let unlocksAt: string | null = null;
+    if (
+      enrollmentStartedOn != null &&
+      tenantTimezone != null &&
+      currentDayIndex != null &&
+      dayIndex > currentDayIndex
+    ) {
+      unlocksAt = await this.unlocksAtFor(enrollmentStartedOn, dayIndex, tenantTimezone);
+    }
+
     return rows.map((r: any) => {
       const isCompleted = r.completion_id != null;
       // Per the mobile spec:
@@ -725,6 +787,9 @@ export class ChallengesService {
         ...this.mapTask(r),
         isLocked,
         isLate,
+        // unlocksAt only meaningful when isLocked === true. null
+        // otherwise (mobile uses it to render "Unlocks in N hours").
+        unlocksAt: isLocked ? unlocksAt : null,
         completion: isCompleted
           ? {
               id: r.completion_id,
@@ -753,14 +818,21 @@ export class ChallengesService {
       [userId, tenantId],
     );
 
+    // Look up tenant TZ once for the loop — needed to compute
+    // unlocksAt timestamps on locked tasks.
+    const tenantTz = await this.tenantTimezone(tenantId);
+
     const data = [];
     for (const e of enrollments) {
       const rawDay = this.dayIndexFor(e.started_on, today, e.duration_days);
       const started = rawDay >= 1;
       const finished = rawDay > e.duration_days;
       const dayIndex = Math.min(Math.max(rawDay, 1), e.duration_days);
-      // Pass rawDay so isLocked/isLate are stamped relative to "today".
-      const tasks = started && !finished ? await this.tasksForDay(e.challenge_id, userId, rawDay, rawDay) : [];
+      // Pass rawDay + startedOn + tz so isLocked/isLate/unlocksAt are
+      // server-authoritative on every task row.
+      const tasks = started && !finished
+        ? await this.tasksForDay(e.challenge_id, userId, rawDay, rawDay, e.started_on, tenantTz)
+        : [];
       const enrollment = this.mapEnrollment(e);
       // Resolve live badge tier for the viewer's own enrollment (Mythic
       // depends on the leaderboard so it can't trust the denormalized
@@ -807,10 +879,13 @@ export class ChallengesService {
     );
     if (!e) throw new BadRequestException('Not enrolled in this challenge');
     const today = await this.tenantToday(tenantId);
+    const tenantTz = await this.tenantTimezone(tenantId);
     const rawDay = this.dayIndexFor(e.started_on, today, e.duration_days);
     const started = rawDay >= 1;
     const finished = rawDay > e.duration_days;
-    const tasks = started && !finished ? await this.tasksForDay(challengeId, userId, rawDay, rawDay) : [];
+    const tasks = started && !finished
+      ? await this.tasksForDay(challengeId, userId, rawDay, rawDay, e.started_on, tenantTz)
+      : [];
     const enrollment = this.mapEnrollment(e);
     enrollment.badgeTier = await this.resolveViewerBadgeTier(
       tenantId, challengeId, e.id, userId, enrollment.missedCount, await this.totalTaskCount(challengeId),
@@ -844,8 +919,11 @@ export class ChallengesService {
       );
     }
     const today = await this.tenantToday(tenantId);
+    const tenantTz = await this.tenantTimezone(tenantId);
     const currentDay = this.dayIndexFor(e.started_on, today, e.duration_days);
-    const tasks = await this.tasksForDay(challengeId, userId, dayIndex, currentDay);
+    const tasks = await this.tasksForDay(
+      challengeId, userId, dayIndex, currentDay, e.started_on, tenantTz,
+    );
     return { dayIndex, tasks };
   }
 
@@ -916,19 +994,23 @@ export class ChallengesService {
     const currentDayIndex = this.dayIndexFor(enrollment.started_on, today, enrollment.duration_days);
 
     // ── Faith Walks gating (migration 098) ──
-    // Future day: hard-stop with TASK_LOCKED.
+    // Future day: hard-stop with TASK_LOCKED. Payload carries both
+    // unlocksOn (YYYY-MM-DD, kept for back-compat) and unlocksAt
+    // (UTC ISO timestamp, used by mobile's "Unlocks in N hours" chip).
     if (task.day_index > currentDayIndex) {
-      // unlocksOn = enrollment.started_on + (task.day_index - 1) days,
-      // formatted as YYYY-MM-DD in the tenant timezone.
+      const tenantTz = await this.tenantTimezone(tenantId);
       const [u] = await queryRunner.query(
-        `SELECT to_char(($1::date + ($2::int - 1) * INTERVAL '1 day')::date, 'YYYY-MM-DD') AS unlocks_on`,
-        [this.toDateString(enrollment.started_on), task.day_index],
+        `SELECT
+           to_char(($1::date + ($2::int - 1) * INTERVAL '1 day')::date, 'YYYY-MM-DD') AS unlocks_on,
+           (($1::date + ($2::int - 1) * INTERVAL '1 day')::date::timestamp AT TIME ZONE $3) AS unlocks_at`,
+        [this.toDateString(enrollment.started_on), task.day_index, tenantTz],
       );
       throw new BadRequestException({
         statusCode: 400,
         code: 'TASK_LOCKED',
         message: "This task isn't unlocked yet.",
         unlocksOn: u?.unlocks_on,
+        unlocksAt: u?.unlocks_at ? new Date(u.unlocks_at).toISOString() : null,
       });
     }
 

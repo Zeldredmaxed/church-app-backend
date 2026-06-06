@@ -23,7 +23,8 @@ interface FetchPassageInput {
   book: string;
   chapter: number;
   start: number;
-  end: number;
+  /** null = "to end of chapter". Service caps gracefully. */
+  end: number | null;
 }
 
 /**
@@ -62,39 +63,54 @@ export class BibleService {
       );
     }
 
-    // Use the canonical (correctly-cased) book name in the cache key
-    // so different casings of the same book collapse to one entry.
+    // Always fetch + cache the WHOLE chapter, then slice locally to
+    // start..end. Two wins from this approach (vs caching per range):
+    //   1. Fixes Bug 2 (overshoot 400s) — we always know the chapter's
+    //      max verse count after fetching, so `end > maxVerse` gracefully
+    //      caps to maxVerse instead of bubbling up the upstream 400.
+    //   2. Cache hit rate goes up — different (start, end) windows on
+    //      the same chapter all share one cache entry. A user reading
+    //      John 3:1-10 then John 3:11-36 makes one upstream call total.
     const cacheKey = [
       'bible',
       input.translation,
       book.name.toLowerCase().replace(/\s+/g, '+'),
       input.chapter,
-      input.start,
-      input.end,
     ].join(':');
 
-    return this.cache.wrap(cacheKey, this.cacheTtlSeconds, () =>
-      this.fetchFromUpstream(book.name, input),
+    const chapter = await this.cache.wrap(cacheKey, this.cacheTtlSeconds, () =>
+      this.fetchWholeChapterFromUpstream(book.name, input.translation, input.chapter),
     );
+
+    if (chapter.length === 0) {
+      throw new BadRequestException('No verses found in this chapter');
+    }
+
+    // Cap end to the chapter's actual max verse — fixes Bug 2.
+    const maxVerse = chapter[chapter.length - 1].verse;
+    const startCapped = Math.max(input.start, 1);
+    const endCapped = input.end == null ? maxVerse : Math.min(input.end, maxVerse);
+
+    return chapter.filter((p) => p.verse >= startCapped && p.verse <= endCapped);
   }
 
   /**
-   * Single upstream call. Kept private so the cache wrap is the only
-   * call-path — prevents accidental cache bypass.
+   * Single upstream call for the WHOLE chapter. Kept private so the
+   * cache wrap is the only call-path — prevents accidental cache bypass.
    *
-   * bible-api response shape:
+   * URL pattern: bible-api.com accepts `/<book>+<chapter>?translation=<t>`
+   * (no verse range) and returns every verse in the chapter.
+   *
+   * Response shape:
    *   { reference, verses: [{ book_id, book_name, chapter, verse, text }], ... }
    */
-  private async fetchFromUpstream(
+  private async fetchWholeChapterFromUpstream(
     canonicalBookName: string,
-    input: FetchPassageInput,
+    translation: SupportedTranslation,
+    chapter: number,
   ): Promise<BiblePassage[]> {
     const bookSlug = encodeURIComponent(canonicalBookName.replace(/\s+/g, '+'));
-    const range =
-      input.start === input.end
-        ? `${input.chapter}:${input.start}`
-        : `${input.chapter}:${input.start}-${input.end}`;
-    const url = `${this.upstreamBase}/${bookSlug}+${encodeURIComponent(range)}?translation=${input.translation}`;
+    const url = `${this.upstreamBase}/${bookSlug}+${chapter}?translation=${translation}`;
 
     // 5-second timeout. Undici's default is no timeout — without this
     // a hung upstream (bible-api is a free single-maintainer service)
@@ -124,14 +140,13 @@ export class BibleService {
     };
 
     if (!data?.verses?.length) {
-      // Upstream returns 200 with empty verses for out-of-range requests
-      // (e.g., John 3:200). Map that to a clean 400 for the client.
-      throw new BadRequestException('No verses in requested range');
+      // Upstream returns 200 with empty verses for unknown chapters.
+      return [];
     }
 
     return data.verses.map((v) => ({
-      ref: `${v.book_name ?? canonicalBookName} ${v.chapter ?? input.chapter}:${v.verse ?? input.start}`,
-      verse: v.verse ?? input.start,
+      ref: `${v.book_name ?? canonicalBookName} ${v.chapter ?? chapter}:${v.verse ?? 0}`,
+      verse: v.verse ?? 0,
       text: (v.text ?? '').trim(),
     }));
   }

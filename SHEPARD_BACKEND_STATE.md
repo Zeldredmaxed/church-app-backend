@@ -457,7 +457,7 @@ Bible.com-style multi-day reading plans (UI label "Faith Walks"; backend identif
 **"Today" + streaks.** Day bucketing is tenant-local (`tenants.timezone`). A challenge with `startsOn = null` is **self-paced** (the enrollee's day 1 = enroll date); a `startsOn` date is a **fixed cohort** (everyone's day 1 anchored to it). `dayIndex = (today_local − started_on) + 1`. Streaks are day-granular: the first **on-time** completion of a new local day bumps `currentStreak` (consecutive days); same-day repeats don't; **late completions never bump the streak**.
 
 **Day-of-day gating (migration 098).** Members can VIEW any day but can only COMPLETE on-time within today's anchored day.
-- `dayIndex > currentDayIndex` (future): tasks return `isLocked: true`; `POST /complete` returns `400 TASK_LOCKED` with `unlocksOn: "YYYY-MM-DD"`.
+- `dayIndex > currentDayIndex` (future): tasks return `isLocked: true` + `unlocksAt: "<UTC ISO timestamp>"` (e.g. `"2026-06-08T05:00:00.000Z"` = midnight in tenant TZ converted to UTC, DST-safe via Postgres TZ database). Powers mobile's "Unlocks in N hours" / "in N days" chip. `POST /complete` returns `400 TASK_LOCKED` with both `unlocksOn` (date) and `unlocksAt` (timestamp).
 - `dayIndex < currentDayIndex` (past): tasks return `isLate: true`; `POST /complete` accepts but stamps the completion `isLate: true`, awards `pointsEarned: 0`, doesn't bump streak, and decrements `missedCount` (the late completion moves the task from "missed" to "late-completed").
 - `dayIndex === currentDayIndex` (today): normal flow; points awarded by tenant-local hour (see Points tier).
 
@@ -514,6 +514,7 @@ Bible.com-style multi-day reading plans (UI label "Faith Walks"; backend identif
   timerSeconds /* null when no gate */, reflectionPrompt,
   isLocked,    // migration 098: dayIndex > today AND not completed
   isLate,      // migration 098: dayIndex < today AND not completed
+  unlocksAt,   // UTC ISO; midnight of dayIndex in tenant TZ. null when not locked.
   completion: {
     id, completedAt, reflectionText, secondsSpent, timerSatisfied,
     isLate,      // migration 098: was this completion past its anchored day?
@@ -558,7 +559,7 @@ Bible.com-style multi-day reading plans (UI label "Faith Walks"; backend identif
 Errors:
 - `400 REFLECTION_REQUIRED` — reflection task, blank text.
 - `400 TIMER_NOT_SATISFIED` — `{ ..., requiredSeconds }`.
-- `400 TASK_LOCKED` (migration 098) — `{ statusCode: 400, code: "TASK_LOCKED", message: "This task isn't unlocked yet.", unlocksOn: "YYYY-MM-DD" }`.
+- `400 TASK_LOCKED` (migration 098) — `{ statusCode: 400, code: "TASK_LOCKED", message: "This task isn't unlocked yet.", unlocksOn: "YYYY-MM-DD", unlocksAt: "<UTC ISO>" }`.
 
 Completing the last remaining task flips the enrollment to `completed`. Re-completing an already-done task is idempotent (updates reflection/seconds; `isLate`/`pointsEarned` are set on first insert and don't flip).
 

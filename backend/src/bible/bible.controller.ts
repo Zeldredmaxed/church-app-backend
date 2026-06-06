@@ -44,19 +44,20 @@ export class BibleController {
 
   @Get()
   @ApiOperation({
-    summary: 'Fetch a passage from bible-api.com (cached 1h)',
+    summary: 'Fetch a Bible passage (cached 1h)',
     description:
-      'Returns { passages: [{ ref, verse, text }] }. All four range ' +
-      'params (translation, book, chapter, start) are required; end ' +
-      'defaults to start (single-verse).',
+      'Returns { passages: [{ ref, verse, text }] }. Required: translation, ' +
+      'book, chapter. Optional: start (default 1), end (default = end of ' +
+      'chapter). Omitting both start and end returns the entire chapter. ' +
+      'Overshoots are gracefully capped to the chapter\'s last verse.',
   })
   @ApiQuery({ name: 'translation', required: true, enum: SUPPORTED_TRANSLATIONS })
   @ApiQuery({ name: 'book', required: true, example: 'john' })
   @ApiQuery({ name: 'chapter', required: true, example: 3 })
-  @ApiQuery({ name: 'start', required: true, example: 1 })
-  @ApiQuery({ name: 'end', required: false, example: 16 })
+  @ApiQuery({ name: 'start', required: false, example: 1, description: 'Defaults to 1.' })
+  @ApiQuery({ name: 'end', required: false, example: 16, description: 'Defaults to end of chapter. Overshoots are gracefully capped.' })
   @ApiResponse({ status: 200, description: '{ passages: BiblePassage[] }' })
-  @ApiResponse({ status: 400, description: 'Invalid translation / book / chapter / verse range' })
+  @ApiResponse({ status: 400, description: 'Invalid translation / book / chapter' })
   @ApiResponse({ status: 502, description: 'Upstream bible-api unreachable' })
   async getPassage(
     @Query('translation') translation?: string,
@@ -68,13 +69,15 @@ export class BibleController {
     if (!translation) throw new BadRequestException('translation is required');
     if (!book) throw new BadRequestException('book is required');
     if (chapter == null) throw new BadRequestException('chapter is required');
-    if (start == null) throw new BadRequestException('start is required');
 
     const t = this.assertTranslation(translation);
     const chapterNum = this.parsePositiveInt(chapter, 'chapter');
-    const startNum = this.parsePositiveInt(start, 'start');
-    const endNum = end == null ? startNum : this.parsePositiveInt(end, 'end');
-    if (endNum < startNum) {
+    // start defaults to 1 — mobile's "show me this chapter" call omits it
+    // (Bug 1 from mobile ticket). end defaults to null = "to end of chapter"
+    // (Bug 2 — overshoots are capped server-side in the service).
+    const startNum = start == null ? 1 : this.parsePositiveInt(start, 'start');
+    const endNum = end == null ? null : this.parsePositiveInt(end, 'end');
+    if (endNum != null && endNum < startNum) {
       throw new BadRequestException('end must be >= start');
     }
 
