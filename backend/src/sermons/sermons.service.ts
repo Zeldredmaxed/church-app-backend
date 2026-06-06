@@ -24,19 +24,30 @@ export class SermonsService {
   async getSermons(filter: 'all' | 'recent' | 'series' | 'topics', limit: number, cursor?: string) {
     const { queryRunner } = this.getRlsContext();
     const params: any[] = [limit + 1];
-    let sql = `SELECT * FROM public.sermons`;
+
+    // commentCount = comments across every post that links to this sermon
+    // (posts ARE the comment surface; no sermon_comments table).
+    // discussionPostCount = top-level threads — how many distinct posts
+    // discuss the sermon. Lets the UI render "12 discussions, 47 comments".
+    let sql = `SELECT s.*,
+      (SELECT COUNT(*)::int FROM public.comments c
+         JOIN public.posts p ON p.id = c.post_id
+         WHERE p.linked_sermon_id = s.id AND p.tenant_id = s.tenant_id) AS comment_count,
+      (SELECT COUNT(*)::int FROM public.posts p
+         WHERE p.linked_sermon_id = s.id AND p.tenant_id = s.tenant_id) AS discussion_post_count
+      FROM public.sermons s`;
 
     const conditions: string[] = [];
 
     if (filter === 'recent') {
-      conditions.push(`created_at >= now() - interval '30 days'`);
+      conditions.push(`s.created_at >= now() - interval '30 days'`);
     } else if (filter === 'series') {
-      conditions.push(`series_name IS NOT NULL`);
+      conditions.push(`s.series_name IS NOT NULL`);
     }
 
     if (cursor) {
       params.push(cursor);
-      conditions.push(`id < $${params.length}`);
+      conditions.push(`s.id < $${params.length}`);
     }
 
     if (conditions.length > 0) {
@@ -44,9 +55,9 @@ export class SermonsService {
     }
 
     if (filter === 'series') {
-      sql += ` ORDER BY series_name ASC, created_at DESC LIMIT $1`;
+      sql += ` ORDER BY s.series_name ASC, s.created_at DESC LIMIT $1`;
     } else {
-      sql += ` ORDER BY created_at DESC LIMIT $1`;
+      sql += ` ORDER BY s.created_at DESC LIMIT $1`;
     }
 
     const rows = await queryRunner.query(sql, params);
@@ -62,7 +73,13 @@ export class SermonsService {
   async getSermon(id: string) {
     const { queryRunner } = this.getRlsContext();
     const rows = await queryRunner.query(
-      `SELECT * FROM public.sermons WHERE id = $1`,
+      `SELECT s.*,
+        (SELECT COUNT(*)::int FROM public.comments c
+           JOIN public.posts p ON p.id = c.post_id
+           WHERE p.linked_sermon_id = s.id AND p.tenant_id = s.tenant_id) AS comment_count,
+        (SELECT COUNT(*)::int FROM public.posts p
+           WHERE p.linked_sermon_id = s.id AND p.tenant_id = s.tenant_id) AS discussion_post_count
+       FROM public.sermons s WHERE s.id = $1`,
       [id],
     );
     if (!rows.length) throw new NotFoundException('Sermon not found');
@@ -90,7 +107,11 @@ export class SermonsService {
       summary: `${await this.actorName(userId)} published sermon "${saved.title}" by ${saved.speaker}`,
       metadata: { title: saved.title, speaker: saved.speaker, seriesName: saved.seriesName },
     });
-    return saved;
+    // Re-fetch through getSermon so the response shape includes
+    // commentCount + discussionPostCount (both 0 on a freshly-created
+    // sermon, but the keys must be present so the mobile doesn't read
+    // `undefined`).
+    return this.getSermon(saved.id);
   }
 
   async updateSermon(tenantId: string, id: string, dto: UpdateSermonDto) {
@@ -123,18 +144,21 @@ export class SermonsService {
       return this.getSermon(id);
     }
 
-    const sql = `UPDATE public.sermons SET ${setClauses.join(', ')} WHERE id = $1 AND tenant_id = $2 RETURNING *`;
+    const sql = `UPDATE public.sermons SET ${setClauses.join(', ')} WHERE id = $1 AND tenant_id = $2 RETURNING id, title`;
     const rows = await queryRunner.query(sql, params);
     if (!rows.length) throw new NotFoundException('Sermon not found');
-    const updated = this.mapSermon(rows[0]);
     await this.audit.log({
       action: 'sermon.updated',
       resourceType: 'sermon',
       resourceId: id,
-      summary: `Admin updated sermon "${updated.title}"`,
-      metadata: { changedFields: Object.keys(dto), title: updated.title },
+      summary: `Admin updated sermon "${rows[0].title}"`,
+      metadata: { changedFields: Object.keys(dto), title: rows[0].title },
     });
-    return updated;
+    // Re-fetch through getSermon so the response shape includes
+    // commentCount + discussionPostCount (the RETURNING * above
+    // bypassed the sub-selects so updates returned commentCount=0
+    // regardless of truth).
+    return this.getSermon(id);
   }
 
   async deleteSermon(tenantId: string, id: string) {
@@ -157,7 +181,15 @@ export class SermonsService {
   async getFeatured(tenantId: string) {
     const { queryRunner } = this.getRlsContext();
     const rows = await queryRunner.query(
-      `SELECT * FROM public.sermons WHERE tenant_id = $1 AND is_featured = true ORDER BY created_at DESC LIMIT 1`,
+      `SELECT s.*,
+        (SELECT COUNT(*)::int FROM public.comments c
+           JOIN public.posts p ON p.id = c.post_id
+           WHERE p.linked_sermon_id = s.id AND p.tenant_id = s.tenant_id) AS comment_count,
+        (SELECT COUNT(*)::int FROM public.posts p
+           WHERE p.linked_sermon_id = s.id AND p.tenant_id = s.tenant_id) AS discussion_post_count
+       FROM public.sermons s
+       WHERE s.tenant_id = $1 AND s.is_featured = true
+       ORDER BY s.created_at DESC LIMIT 1`,
       [tenantId],
     );
     if (!rows.length) return null;
@@ -227,6 +259,12 @@ export class SermonsService {
       transcript: r.transcript,
       viewCount: r.view_count,
       likeCount: r.like_count,
+      // Sermon discussion is rendered via posts that link to this sermon.
+      // commentCount = total comments across all linked posts.
+      // discussionPostCount = number of distinct discussion threads (linked posts).
+      // Both default to 0 when called from surfaces that don't supply them (e.g. createSermon).
+      commentCount: r.comment_count != null ? Number(r.comment_count) : 0,
+      discussionPostCount: r.discussion_post_count != null ? Number(r.discussion_post_count) : 0,
       createdAt: r.created_at,
     };
   }

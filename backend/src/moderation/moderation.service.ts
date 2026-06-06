@@ -42,7 +42,8 @@ export class ModerationService {
         ru.full_name  AS reported_user_name,
         ru.avatar_url AS reported_user_avatar,
         -- chat message details (if message_id stored in comment_id column or similar)
-        mu.full_name  AS message_author_name
+        mu.full_name  AS message_author_name,
+        cm.channel_id AS message_channel_id
       FROM public.post_reports r
       LEFT JOIN public.posts p ON p.id = r.post_id
       LEFT JOIN public.users pu ON pu.id = p.author_id
@@ -136,6 +137,7 @@ export class ModerationService {
             kind: 'message' as const,
             authorName: r.message_author_name,
             messageId: r.comment_id,
+            channelId: r.message_channel_id,
           },
         };
       default:

@@ -165,6 +165,31 @@ export class MembershipsController {
     return this.membershipsService.getMembers(tenantId, query.cursor, query.limit, query.missingTagIds);
   }
 
+  @Get('tenants/:tenantId/members/:userId/profile-completeness')
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @UseInterceptors(RlsContextInterceptor)
+  @ApiOperation({
+    summary: "Get a member's per-requirement-set profile completeness (admin/pastor only)",
+    description:
+      'Admin variant of GET /api/users/me/profile-completeness — returns the same shape ({ sets: { core, volunteer, child_pickup, group_leader } }) for the target user. Admin must hold admin/pastor in the JWT current_tenant_id (matching :tenantId) AND the target user must be a member of that tenant.',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      '{ sets: { core: { complete, missing }, volunteer: { ... }, child_pickup: { ... }, group_leader: { ... } } }',
+  })
+  @ApiResponse({ status: 403, description: 'Not authorized for this tenant' })
+  @ApiResponse({ status: 404, description: 'Member not found in this tenant' })
+  getMemberProfileCompleteness(
+    @Param('tenantId', ParseUUIDPipe) tenantId: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    assertUrlTenantMatchesJwt(tenantId, user);
+    return this.membershipsService.getMemberProfileCompleteness(tenantId, userId);
+  }
+
   @Get('tenants/:tenantId/members/:userId/profile-extras')
   @UseGuards(RoleGuard)
   @RequiresRole('admin', 'pastor')

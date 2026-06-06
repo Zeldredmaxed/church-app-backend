@@ -88,4 +88,25 @@ export class AttendanceScheduler {
       this.logger.error(`Occurrence generator failed: ${err.message}`);
     }
   }
+
+  /**
+   * 03:30 UTC daily. Honors the 90-day retention commitment in the
+   * privacy policy for raw GPS pings. Aggregated service_attendance
+   * rows are retained separately (per the policy: 7 years anonymized
+   * for historical attendance counts).
+   *
+   * Without this cron the policy is a false promise — GDPR Art. 5(1)(e)
+   * storage-limitation violation if a regulator inspects the DB.
+   */
+  @Cron('30 3 * * *')
+  async tickPurgeOldPings(): Promise<void> {
+    try {
+      const result = await this.attendance.purgeRawPings(90);
+      if (result.deleted > 0) {
+        this.logger.log(`Purged ${result.deleted} attendance_pings older than 90 days`);
+      }
+    } catch (err: any) {
+      this.logger.error(`Ping purge failed: ${err.message}`);
+    }
+  }
 }

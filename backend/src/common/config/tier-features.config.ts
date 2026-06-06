@@ -151,6 +151,31 @@ export const TIER_DISPLAY_NAMES: Record<TierName, string> = {
 };
 
 /**
+ * Monthly subscription price in USD cents. Single source of truth for
+ * Stripe Checkout (plan upgrade) and any future Billing Portal /
+ * pricing-page rendering. Standard is included for completeness even
+ * though it isn't upgrade-able from anywhere (it's the entry tier).
+ */
+export const TIER_MONTHLY_PRICE_CENTS: Record<TierName, number> = {
+  standard: 2900,
+  premium: 7900,
+  enterprise: 19900,
+};
+
+/**
+ * Ordinal rank used by upgrade-flow code to refuse downgrades and
+ * already-on-tier requests. Higher number = higher tier.
+ */
+export function getTierLevel(tier: string): number {
+  switch (tier) {
+    case 'standard': return 1;
+    case 'premium': return 2;
+    case 'enterprise': return 3;
+    default: return 0;
+  }
+}
+
+/**
  * Returns the minimum tier required for a given feature.
  * Used in upsell messages: "Video uploads require Pro tier or higher."
  */

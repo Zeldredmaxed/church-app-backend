@@ -70,8 +70,15 @@ export class NotificationsService {
    * round-trip to /api/notifications/unread-count when rendering the
    * inbox).
    */
-  async getNotifications(userId: string, offset = 0, limit = 20, unreadOnly = false) {
+  async getNotifications(userId: string, offset = 0, limit = 20, unreadOnly = false, type?: string) {
     const unreadFilter = unreadOnly ? `AND n.read_at IS NULL` : '';
+    // $1 = userId, $2 = limit, $3 = offset, $4 = type (when present). The
+    // type filter ships as an optional fragment so existing call sites keep
+    // their two-parameter shape and we don't pay for an unused parameter.
+    const typeFilter = type ? `AND n.type = $4` : '';
+    const listParams: any[] = type ? [userId, limit, offset, type] : [userId, limit, offset];
+    const countParams: any[] = type ? [userId, type] : [userId];
+    const countTypeFilter = type ? `AND n.type = $2` : '';
 
     const rows = await this.dataSource.query(
       `SELECT n.id, n.type, n.title, n.body, n.data, n.read_at, n.created_at,
@@ -79,15 +86,15 @@ export class NotificationsService {
               u.full_name AS sender_name, u.avatar_url AS sender_avatar
        FROM public.notifications n
        LEFT JOIN public.users u ON u.id = n.sender_id
-       WHERE n.recipient_id = $1 ${unreadFilter}
+       WHERE n.recipient_id = $1 ${unreadFilter} ${typeFilter}
        ORDER BY n.created_at DESC
        LIMIT $2 OFFSET $3`,
-      [userId, limit, offset],
+      listParams,
     );
 
     const [{ count: total }] = await this.dataSource.query(
-      `SELECT COUNT(*)::int AS count FROM public.notifications n WHERE n.recipient_id = $1 ${unreadFilter}`,
-      [userId],
+      `SELECT COUNT(*)::int AS count FROM public.notifications n WHERE n.recipient_id = $1 ${unreadFilter} ${countTypeFilter}`,
+      countParams,
     );
 
     const [{ count: unreadCount }] = await this.dataSource.query(

@@ -24,6 +24,7 @@ export const ACCOUNT_DELETION_HTML = `<!DOCTYPE html>
     h2 { font-size: 20px; margin-top: 32px; }
     p, li { font-size: 16px; }
     a { color: #2563eb; }
+    .updated { color: #64748b; font-size: 14px; margin-bottom: 24px; }
     .panel { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px 24px; margin-top: 16px; }
     .button {
       display: inline-block;
@@ -42,6 +43,7 @@ export const ACCOUNT_DELETION_HTML = `<!DOCTYPE html>
 </head>
 <body>
   <h1>Delete Your Shepard Account</h1>
+  <p class="updated">Last updated: June 6, 2026</p>
   <p>You can permanently delete your Shepard account and the personal data we hold about you at any time. This page explains how — both from inside the app and via email if you've lost access.</p>
 
   <h2>Option 1 — Inside the app (recommended)</h2>
@@ -53,18 +55,18 @@ export const ACCOUNT_DELETION_HTML = `<!DOCTYPE html>
       <li>Tap <strong>Delete Account</strong>.</li>
       <li>Confirm the deletion. You'll be signed out immediately.</li>
     </ol>
-    <p>Your account, posts, comments, chat messages, prayer requests, group memberships, and profile data are permanently deleted within 30 days. Financial records (donations) are retained in anonymized form for tax/legal compliance.</p>
+    <p>Your account, posts, comments, chat messages, prayer requests, group memberships, and profile data are permanently deleted within 30 days. Financial records (donations) are retained in anonymized form for tax/legal compliance — see below.</p>
   </div>
 
   <h2>Option 2 — If you've lost access</h2>
-  <p>If you can no longer sign in to delete your account from inside the app, email us at <a href="mailto:privacy@shepardapp.com?subject=Account%20Deletion%20Request&body=I%20would%20like%20to%20delete%20my%20Shepard%20account.%0A%0AAccount%20email%3A%20%5Byour%20email%5D%0AFull%20name%20on%20account%3A%20%5Byour%20name%5D">privacy@shepardapp.com</a> with the subject line "Account Deletion Request" and include:</p>
+  <p>If you can no longer sign in to delete your account from inside the app, email us at <a href="mailto:privacy@shepard.love?subject=Account%20Deletion%20Request&body=I%20would%20like%20to%20delete%20my%20Shepard%20account.%0A%0AAccount%20email%3A%20%5Byour%20email%5D%0AFull%20name%20on%20account%3A%20%5Byour%20name%5D">privacy@shepard.love</a> with the subject line "Account Deletion Request" and include:</p>
   <ul>
     <li>The email address on your Shepard account</li>
     <li>The full name on your Shepard account</li>
     <li>(Optional) Reason for deletion — helps us improve</li>
   </ul>
   <p>We'll verify your identity by sending a confirmation link to the account email, then complete the deletion within 30 days of confirmation.</p>
-  <p><a class="button" href="mailto:privacy@shepardapp.com?subject=Account%20Deletion%20Request&body=I%20would%20like%20to%20delete%20my%20Shepard%20account.%0A%0AAccount%20email%3A%20%5Byour%20email%5D%0AFull%20name%20on%20account%3A%20%5Byour%20name%5D">Email Deletion Request</a></p>
+  <p><a class="button" href="mailto:privacy@shepard.love?subject=Account%20Deletion%20Request&body=I%20would%20like%20to%20delete%20my%20Shepard%20account.%0A%0AAccount%20email%3A%20%5Byour%20email%5D%0AFull%20name%20on%20account%3A%20%5Byour%20name%5D">Email Deletion Request</a></p>
 
   <h2>What gets deleted</h2>
   <ul>
@@ -74,14 +76,15 @@ export const ACCOUNT_DELETION_HTML = `<!DOCTYPE html>
     <li>Prayer requests, event RSVPs, group memberships</li>
     <li>Follow relationships, likes, saves</li>
     <li>Push notification tokens and notification history</li>
+    <li>Auto-attendance location pings (raw lat/lng) and aggregated service-attendance records tied to your identity</li>
   </ul>
 
   <h2>What is kept (in anonymized form)</h2>
   <ul>
-    <li>Donation records — required for tax reporting and Stripe dispute resolution. Your name is removed; only the amount, date, and church remain on the record.</li>
+    <li><strong>Donation records</strong> — retained for <strong>7 years</strong> to satisfy U.S. Internal Revenue Service recordkeeping requirements and to remain within Stripe's chargeback/dispute window. Your name and other identifying information are removed from the record on deletion; only the amount, date, and recipient church remain.</li>
   </ul>
 
   <h2>Questions</h2>
-  <p>If you have questions or want to confirm a deletion was processed, email <a href="mailto:privacy@shepardapp.com">privacy@shepardapp.com</a>.</p>
+  <p>If you have questions or want to confirm a deletion was processed, email <a href="mailto:privacy@shepard.love">privacy@shepard.love</a>.</p>
 </body>
 </html>`;

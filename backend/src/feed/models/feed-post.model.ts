@@ -50,6 +50,9 @@ export class FeedPost {
   @Field(() => String, { nullable: true })
   transcodeStatus: 'pending' | 'ready' | 'failed' | null;
 
+  @Field(() => ID, { nullable: true })
+  linkedSermonId: string | null;
+
   @Field()
   createdAt: Date;
 

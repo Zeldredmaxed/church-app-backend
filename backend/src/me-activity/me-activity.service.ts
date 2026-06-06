@@ -246,13 +246,18 @@ export class MeActivityService {
     const rows = await this.dataSource.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.media_aspect, p.transcode_status, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.media_aspect, p.transcode_status, p.shared_badge_id, p.linked_sermon_id, p.visibility,
          p.created_at, p.updated_at,
          u.full_name AS author_full_name, u.avatar_url AS author_avatar_url,
+         pt.id AS u_church_id, pt.name AS u_church_name, pt.brand_color AS u_church_brand_color,
+         sb.id AS sb_id, sb.name AS sb_name, sb.description AS sb_description,
+         sb.icon AS sb_icon, sb.tier AS sb_tier, sb.category AS sb_category, sb.color AS sb_color,
          (SELECT COUNT(*)::int FROM public.post_likes WHERE post_id = p.id) AS like_count,
          (SELECT COUNT(*)::int FROM public.comments   WHERE post_id = p.id) AS comment_count
        FROM public.posts p
        LEFT JOIN public.users u ON u.id = p.author_id
+       LEFT JOIN public.tenants pt ON pt.id = p.tenant_id
+       LEFT JOIN public.badges sb ON sb.id = p.shared_badge_id
        WHERE p.author_id = $1 AND p.is_archived = false
        ORDER BY p.created_at DESC
        LIMIT $2 OFFSET $3`,
@@ -324,15 +329,20 @@ export class MeActivityService {
     const rows = await this.dataSource.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.media_aspect, p.transcode_status, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.media_aspect, p.transcode_status, p.shared_badge_id, p.linked_sermon_id, p.visibility,
          p.created_at, p.updated_at,
          u.full_name AS author_full_name, u.avatar_url AS author_avatar_url,
+         pt.id AS u_church_id, pt.name AS u_church_name, pt.brand_color AS u_church_brand_color,
+         sb.id AS sb_id, sb.name AS sb_name, sb.description AS sb_description,
+         sb.icon AS sb_icon, sb.tier AS sb_tier, sb.category AS sb_category, sb.color AS sb_color,
          pl.created_at AS liked_at,
          (SELECT COUNT(*)::int FROM public.post_likes WHERE post_id = p.id) AS like_count,
          (SELECT COUNT(*)::int FROM public.comments   WHERE post_id = p.id) AS comment_count
        FROM public.post_likes pl
        JOIN public.posts p ON p.id = pl.post_id
        LEFT JOIN public.users u ON u.id = p.author_id
+       LEFT JOIN public.tenants pt ON pt.id = p.tenant_id
+       LEFT JOIN public.badges sb ON sb.id = p.shared_badge_id
        WHERE pl.user_id = $1 AND p.is_archived = false
        ORDER BY pl.created_at DESC
        LIMIT $2 OFFSET $3`,
@@ -703,6 +713,7 @@ export class MeActivityService {
       videoCropRect: r.video_crop_rect ?? null,
       mediaAspect: r.media_aspect ?? null,
       transcodeStatus: r.transcode_status ?? null,
+      linkedSermonId: r.linked_sermon_id ?? null,
       visibility: r.visibility,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
@@ -710,7 +721,21 @@ export class MeActivityService {
         id: r.author_id,
         fullName: r.author_full_name,
         avatarUrl: r.author_avatar_url,
+        church: r.u_church_id ? {
+          id: r.u_church_id,
+          name: r.u_church_name,
+          brandColor: r.u_church_brand_color,
+        } : null,
       },
+      sharedBadge: r.sb_id ? {
+        id: r.sb_id,
+        name: r.sb_name,
+        description: r.sb_description,
+        icon: r.sb_icon,
+        tier: r.sb_tier,
+        category: r.sb_category,
+        color: r.sb_color,
+      } : null,
       likeCount: Number(r.like_count),
       commentCount: Number(r.comment_count),
     };

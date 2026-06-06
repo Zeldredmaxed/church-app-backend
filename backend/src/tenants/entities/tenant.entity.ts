@@ -33,6 +33,22 @@ export class Tenant {
   @Column({ type: 'text', name: 'stripe_account_status', default: 'pending' })
   stripeAccountStatus: string;
 
+  /**
+   * Stripe Customer on the PLATFORM account used to bill the church for
+   * their monthly Shepard subscription. Distinct from Connect (which routes
+   * donations to the church's bank) and from users.stripe_customer_id
+   * (donor-side customer). Lazily created on first plan upgrade.
+   */
+  @Column({ type: 'text', nullable: true, name: 'stripe_billing_customer_id' })
+  stripeBillingCustomerId: string | null;
+
+  /**
+   * Active Stripe Subscription id for the church's monthly plan. Set when
+   * checkout.session.completed fires for a plan upgrade.
+   */
+  @Column({ type: 'text', nullable: true, name: 'stripe_billing_subscription_id' })
+  stripeBillingSubscriptionId: string | null;
+
   /** When false, all members excluded from church + global leaderboards. */
   @Column({ type: 'boolean', name: 'leaderboard_enabled', default: true })
   leaderboardEnabled: boolean;

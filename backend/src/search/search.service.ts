@@ -9,6 +9,7 @@ export interface PostSearchResult {
   videoMuxPlaybackId: string | null;
   mediaAspect: number | null;
   transcodeStatus: 'pending' | 'ready' | 'failed' | null;
+  linkedSermonId: string | null;
   visibility: string;
   createdAt: Date;
   likeCount: number;
@@ -72,6 +73,7 @@ export class SearchService {
         p.video_mux_playback_id  AS "videoMuxPlaybackId",
         p.media_aspect           AS "mediaAspect",
         p.transcode_status       AS "transcodeStatus",
+        p.linked_sermon_id       AS "linkedSermonId",
         p.visibility,
         p.created_at             AS "createdAt",
         u.id            AS author_id,
@@ -114,6 +116,7 @@ export class SearchService {
       videoMuxPlaybackId: row.videoMuxPlaybackId ?? null,
       mediaAspect: row.mediaAspect ?? null,
       transcodeStatus: row.transcodeStatus ?? null,
+      linkedSermonId: row.linkedSermonId ?? null,
       visibility: row.visibility,
       createdAt: row.createdAt,
       likeCount: Number(row.like_count),

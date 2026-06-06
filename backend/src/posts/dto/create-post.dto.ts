@@ -109,4 +109,12 @@ export class CreatePostDto {
   @IsOptional()
   @IsUUID()
   sharedBadgeId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Sermon this post is discussing. When set, comments on this post become the sermon\'s discussion thread. No sermon_comments table — posts are the comment surface.',
+  })
+  @IsOptional()
+  @IsUUID()
+  linkedSermonId?: string;
 }

@@ -18,6 +18,7 @@ import { UpdatePermissionsDto } from './dto/update-permissions.dto';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 import { getTierFeatures, TIER_DISPLAY_NAMES, TierName } from '../common/config/tier-features.config';
 import { AuditService } from '../audit/audit.service';
+import { ProfileCompletenessService } from '../users/profile-completeness.service';
 
 @Injectable()
 export class MembershipsService {
@@ -26,7 +27,28 @@ export class MembershipsService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
+    private readonly completeness: ProfileCompletenessService,
   ) {}
+
+  /**
+   * Admin variant of GET /api/users/me/profile-completeness — returns the
+   * target user's per-requirement-set completeness state. Controller has
+   * already clamped tenantId to JWT + RoleGuard'd admin/pastor. We add the
+   * membership-existence check here so an admin of tenant A can't probe a
+   * userId that only exists in tenant B (returns 404 the same way the
+   * profile-extras route does).
+   */
+  async getMemberProfileCompleteness(tenantId: string, targetUserId: string) {
+    const [exists] = await this.dataSource.query(
+      `SELECT 1 FROM public.tenant_memberships
+       WHERE tenant_id = $1 AND user_id = $2`,
+      [tenantId, targetUserId],
+    );
+    if (!exists) {
+      throw new NotFoundException('Member not found in this tenant');
+    }
+    return this.completeness.getAll(targetUserId);
+  }
 
   /**
    * Self-service join: the authenticated user adds themselves to a tenant

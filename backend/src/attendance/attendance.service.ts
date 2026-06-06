@@ -56,8 +56,9 @@ export class AttendanceService {
          (tenant_id, name, day_of_week, start_time, end_time,
           latitude, longitude, radius_meters,
           late_threshold_minutes, early_leave_threshold_minutes,
-          is_active, auto_push_enabled, push_message)
-       VALUES ($1, $2, $3, $4::time, $5::time, $6, $7, $8, $9, $10, $11, $12, $13)
+          is_active, auto_push_enabled, push_message,
+          start_push_lead_minutes, end_push_lead_minutes, end_push_message)
+       VALUES ($1, $2, $3, $4::time, $5::time, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        RETURNING *`,
       [
         tenantId,
@@ -73,6 +74,9 @@ export class AttendanceService {
         dto.isActive ?? true,
         dto.autoPushEnabled ?? true,
         dto.pushMessage ?? null,
+        dto.startPushLeadMinutes ?? 0,
+        dto.endPushLeadMinutes ?? 3,
+        dto.endPushMessage ?? null,
       ],
     );
 
@@ -103,6 +107,9 @@ export class AttendanceService {
       ['isActive', 'is_active'],
       ['autoPushEnabled', 'auto_push_enabled'],
       ['pushMessage', 'push_message'],
+      ['startPushLeadMinutes', 'start_push_lead_minutes'],
+      ['endPushLeadMinutes', 'end_push_lead_minutes'],
+      ['endPushMessage', 'end_push_message'],
     ];
     for (const [dtoKey, col, cast] of map) {
       if ((dto as any)[dtoKey] !== undefined) {
@@ -226,13 +233,20 @@ export class AttendanceService {
       [tenantId, LEAD_MINUTES],
     );
 
-    // Distance + in_radius only computed if we found an occurrence with
-    // configured geo. Pings outside a service window still land but
-    // don't link to anything; the row is there if the user later
-    // disputes attendance.
+    // Refuse pings outside any service window. The privacy policy
+    // explicitly says: "we collect your precise GPS coordinates only
+    // during pre-defined service windows" — silently dropping the row
+    // is the only way to honor that. Previously we stored the row
+    // anyway with a null occurrence id "for dispute evidence", which
+    // contradicted the policy. Mobile is responsible for not pinging
+    // outside windows; this is the server-side guarantee.
+    if (!occ) {
+      return { recorded: false, reason: 'outside_service_window' as const };
+    }
+
     let distance: number | null = null;
     let inRadius = false;
-    if (occ?.latitude != null && occ?.longitude != null && occ?.radius_meters != null) {
+    if (occ.latitude != null && occ.longitude != null && occ.radius_meters != null) {
       distance = this.haversineDistance(dto.lat, dto.lng, occ.latitude, occ.longitude);
       inRadius = distance <= occ.radius_meters;
     }
@@ -246,7 +260,7 @@ export class AttendanceService {
       [
         userId,
         tenantId,
-        occ?.id ?? null,
+        occ.id,
         dto.lat,
         dto.lng,
         dto.accuracyMeters ?? null,
@@ -259,7 +273,7 @@ export class AttendanceService {
     return {
       recorded: true,
       pingId: row.id,
-      serviceOccurrenceId: occ?.id ?? null,
+      serviceOccurrenceId: occ.id,
       distance: distance != null ? Math.round(distance) : null,
       inRadius,
     };
@@ -440,6 +454,10 @@ export class AttendanceService {
    * trade-off and helps users notice if they want to opt out.
    */
   async fireStartPushes(): Promise<{ pushed: number }> {
+    // Fire start_push_lead_minutes BEFORE the service's starts_at. With
+    // the default (0) this preserves the prior behaviour of firing right
+    // at starts_at; admins can set a 5-15 min lead so members get the
+    // push BEFORE they sit down and silence their phones.
     const occurrences = await this.dataSource.query(
       `SELECT so.id, so.tenant_id, s.name AS service_name, s.auto_push_enabled,
               s.push_message
@@ -447,8 +465,8 @@ export class AttendanceService {
        JOIN public.services s ON s.id = so.service_id
        WHERE so.is_cancelled = false
          AND so.start_push_sent_at IS NULL
-         AND so.starts_at <= now() + interval '60 seconds'
-         AND so.starts_at >= now() - interval '5 minutes'`,
+         AND so.starts_at - (s.start_push_lead_minutes::text || ' minutes')::interval <= now() + interval '60 seconds'
+         AND so.starts_at - (s.start_push_lead_minutes::text || ' minutes')::interval >= now() - interval '5 minutes'`,
     );
     if (occurrences.length === 0) return { pushed: 0 };
 
@@ -521,7 +539,7 @@ export class AttendanceService {
   async fireEndPushes(): Promise<{ pushed: number }> {
     const occurrences = await this.dataSource.query(
       `SELECT so.id, so.tenant_id, s.name AS service_name, s.auto_push_enabled,
-              s.end_push_lead_minutes
+              s.end_push_lead_minutes, s.end_push_message
        FROM public.service_occurrences so
        JOIN public.services s ON s.id = so.service_id
        WHERE so.is_cancelled = false
@@ -551,12 +569,15 @@ export class AttendanceService {
       );
       if (recipients.length === 0) continue;
 
+      const endBody = occ.end_push_message ??
+        'Final attendance check. Thanks for being with us today.';
+
       await this.notificationsQueue.add('auto_attendance_push', {
         type: 'church_broadcast',
         tenantId: occ.tenant_id,
         recipientIds: recipients.map((r: any) => r.user_id),
         title: `${occ.service_name} — wrapping up`,
-        body: 'Final attendance check. Thanks for being with us today.',
+        body: endBody,
         sourceId: `end:${occ.id}`,
         data: {
           kind: 'auto_attendance_ping',
@@ -580,6 +601,34 @@ export class AttendanceService {
    *   - first in_radius ping > start + late_threshold_minutes → was_late
    *   - last in_radius ping < end - early_leave_threshold_minutes → left_early
    */
+
+  /**
+   * Honors the 90-day retention promise in the privacy policy. Deletes
+   * raw ping rows older than the cutoff in batches so a multi-million
+   * row purge doesn't lock the table. Aggregated service_attendance is
+   * NOT touched (the policy keeps it 7 years anonymized).
+   */
+  async purgeRawPings(retentionDays = 90): Promise<{ deleted: number }> {
+    let totalDeleted = 0;
+    while (true) {
+      const result = await this.dataSource.query(
+        `WITH victims AS (
+           SELECT id FROM public.attendance_pings
+           WHERE recorded_at < now() - ($1::int || ' days')::interval
+           LIMIT 5000
+         )
+         DELETE FROM public.attendance_pings p
+         USING victims v WHERE p.id = v.id
+         RETURNING p.id`,
+        [retentionDays],
+      );
+      const batch = result.length;
+      totalDeleted += batch;
+      if (batch < 5000) break;
+    }
+    return { deleted: totalDeleted };
+  }
+
   async sweepEndedOccurrences(): Promise<{ swept: number }> {
     const SWEEP_LAG_MINUTES = 5;
     const occurrences = await this.dataSource.query(
@@ -708,6 +757,9 @@ export class AttendanceService {
       isActive: r.is_active,
       autoPushEnabled: r.auto_push_enabled,
       pushMessage: r.push_message,
+      startPushLeadMinutes: r.start_push_lead_minutes,
+      endPushLeadMinutes: r.end_push_lead_minutes,
+      endPushMessage: r.end_push_message,
       upcomingOccurrenceCount: r.upcoming_occurrence_count,
       createdAt: r.created_at,
       updatedAt: r.updated_at,

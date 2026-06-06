@@ -17,6 +17,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { TasksService } from './tasks.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
+import { ListTasksDto } from './dto/list-tasks.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -35,6 +36,7 @@ export class TasksController {
   @ApiResponse({ status: 200, description: 'Paginated list of tasks' })
   getTasks(
     @CurrentUser() user: SupabaseJwtPayload,
+    @Query() listQuery: ListTasksDto,
     @Query('status') status?: string,
     @Query('priority') priority?: string,
     @Query('assignedTo') assignedTo?: string,
@@ -45,9 +47,10 @@ export class TasksController {
   ) {
     const tenantId = user.app_metadata?.current_tenant_id!;
     const parsedLimit = Math.min(Math.max(parseInt(limit ?? '20', 10) || 20, 1), 100);
+    const overdue = listQuery.overdue === 'true';
     return this.tasksService.getTasks(
       tenantId,
-      { status, priority, assignedTo, linkedType, linkedId },
+      { status, priority, assignedTo, linkedType, linkedId, overdue, dueBefore: listQuery.dueBefore },
       parsedLimit,
       cursor,
     );

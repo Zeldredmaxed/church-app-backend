@@ -40,6 +40,8 @@ export interface PostWithMeta {
     category: string;
     color: string;
   } | null;
+  /** Sermon this post is discussing (post-as-comment surface). NULL for normal posts. */
+  linkedSermonId: string | null;
   visibility: 'public' | 'private';
   createdAt: Date;
   updatedAt: Date;
@@ -131,6 +133,20 @@ export class PostsService {
       }
     }
 
+    // Sermon linking: refuse cross-tenant sermons. Without this check
+    // tenant A could post a "comment thread" linked to tenant B's sermon,
+    // inflating B's commentCount/discussionPostCount and polluting their
+    // sermon engagement KPIs.
+    if (dto.linkedSermonId) {
+      const [sermonOk] = await queryRunner.query(
+        `SELECT 1 FROM public.sermons WHERE id = $1 AND tenant_id = $2`,
+        [dto.linkedSermonId, currentTenantId],
+      );
+      if (!sermonOk) {
+        throw new BadRequestException('Sermon not found in your church');
+      }
+    }
+
     // Initial transcode state: 'ready' if Mux already finished by the
     // time the post lands (rare race-win), 'pending' if we're still
     // waiting for the webhook, NULL for non-video posts. Mux webhooks
@@ -155,6 +171,7 @@ export class PostsService {
       // to DTO when client wants to send it inline).
       mediaAspect: null,
       sharedBadgeId: dto.sharedBadgeId ?? null,
+      linkedSermonId: dto.linkedSermonId ?? null,
       visibility: dto.visibility ?? 'public',
     });
 
@@ -275,6 +292,11 @@ export class PostsService {
       transcodeStatus: initialTranscodeStatus,
       mediaAspect: null,
       sharedBadgeId: dto.sharedBadgeId ?? null,
+      // linkedSermonId is intentionally NOT set on global posts —
+      // sermons are tenant-scoped and a global post can't be validated
+      // against any tenant, so allowing it would let any user inflate
+      // any church's sermon engagement counts.
+      linkedSermonId: null,
       // Global posts are always public — private global posts make no
       // sense (the feed-tag is "everyone's feed"). Force the value.
       visibility: 'public',
@@ -353,6 +375,7 @@ export class PostsService {
       id: string; tenant_id: string; author_id: string; content: string;
       media_type: string; media_url: string | null; video_mux_playback_id: string | null; video_crop_rect: any | null;
       media_aspect: number | null; transcode_status: 'pending' | 'ready' | 'failed' | null;
+      linked_sermon_id: string | null;
       visibility: 'public' | 'private';
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
@@ -364,7 +387,7 @@ export class PostsService {
     }> = await queryRunner.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.media_aspect, p.transcode_status, p.shared_badge_id, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.media_aspect, p.transcode_status, p.shared_badge_id, p.linked_sermon_id, p.visibility,
          p.created_at, p.updated_at,
          u.id         AS u_id,
          u.full_name  AS u_full_name,
@@ -440,6 +463,7 @@ export class PostsService {
             color: r.sb_color!,
           }
         : null,
+      linkedSermonId: r.linked_sermon_id ?? null,
       visibility: r.visibility,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
@@ -473,7 +497,7 @@ export class PostsService {
     const rows = await queryRunner.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.media_aspect, p.transcode_status, p.shared_badge_id, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.media_aspect, p.transcode_status, p.shared_badge_id, p.linked_sermon_id, p.visibility,
          p.created_at, p.updated_at,
          u.id         AS u_id,
          u.full_name  AS u_full_name,
@@ -528,6 +552,7 @@ export class PostsService {
             color: r.sb_color!,
           }
         : null,
+      linkedSermonId: r.linked_sermon_id ?? null,
       visibility: r.visibility,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
@@ -687,6 +712,7 @@ export class PostsService {
       id: string; tenant_id: string; author_id: string; content: string;
       media_type: string; media_url: string | null; video_mux_playback_id: string | null; video_crop_rect: any | null;
       media_aspect: number | null; transcode_status: 'pending' | 'ready' | 'failed' | null;
+      linked_sermon_id: string | null;
       visibility: 'public' | 'private';
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
@@ -698,7 +724,7 @@ export class PostsService {
     }> = await queryRunner.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.media_aspect, p.transcode_status, p.shared_badge_id, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.media_aspect, p.transcode_status, p.shared_badge_id, p.linked_sermon_id, p.visibility,
          p.created_at, p.updated_at,
          u.id         AS u_id,
          u.full_name  AS u_full_name,
@@ -757,6 +783,7 @@ export class PostsService {
             color: r.sb_color!,
           }
         : null,
+      linkedSermonId: r.linked_sermon_id ?? null,
       visibility: r.visibility,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
@@ -894,6 +921,7 @@ export class PostsService {
       id: string; tenant_id: string; author_id: string; content: string;
       media_type: string; media_url: string | null; video_mux_playback_id: string | null; video_crop_rect: any | null;
       media_aspect: number | null; transcode_status: 'pending' | 'ready' | 'failed' | null;
+      linked_sermon_id: string | null;
       visibility: 'public' | 'private';
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
@@ -905,7 +933,7 @@ export class PostsService {
     }> = await queryRunner.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.media_aspect, p.transcode_status, p.shared_badge_id, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.media_aspect, p.transcode_status, p.shared_badge_id, p.linked_sermon_id, p.visibility,
          p.created_at, p.updated_at,
          u.id AS u_id, u.full_name AS u_full_name, u.avatar_url AS u_avatar_url,
          ut.id AS u_church_id, ut.name AS u_church_name, ut.brand_color AS u_church_brand_color,
@@ -953,6 +981,7 @@ export class PostsService {
             color: r.sb_color!,
           }
         : null,
+      linkedSermonId: r.linked_sermon_id ?? null,
       visibility: r.visibility,
       createdAt: r.created_at,
       updatedAt: r.updated_at,

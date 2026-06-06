@@ -11,7 +11,15 @@ export class TasksService {
 
   async getTasks(
     tenantId: string,
-    filters: { status?: string; priority?: string; assignedTo?: string; linkedType?: string; linkedId?: string },
+    filters: {
+      status?: string;
+      priority?: string;
+      assignedTo?: string;
+      linkedType?: string;
+      linkedId?: string;
+      overdue?: boolean;
+      dueBefore?: string;
+    },
     limit: number,
     cursor?: string,
   ) {
@@ -38,6 +46,16 @@ export class TasksService {
     if (filters.linkedId) {
       conditions.push(`t.linked_id = $${idx++}`);
       params.push(filters.linkedId);
+    }
+    // Overdue = past due AND not completed. Layered with the explicit
+    // status filter rather than replacing it (caller can still
+    // overdue=true&status=in_progress to slice further).
+    if (filters.overdue) {
+      conditions.push(`t.due_date < now() AND t.status != 'completed'`);
+    }
+    if (filters.dueBefore) {
+      conditions.push(`t.due_date < $${idx++}`);
+      params.push(filters.dueBefore);
     }
     if (cursor) {
       conditions.push(`t.created_at < $${idx++}`);

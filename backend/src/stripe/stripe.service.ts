@@ -260,6 +260,68 @@ export class StripeService {
   }
 
   /**
+   * Creates a Checkout Session in `subscription` mode for a tenant plan
+   * upgrade. Inline price_data avoids maintaining one Price object per
+   * tier in the Stripe dashboard — the catalog lives in
+   * tier-features.config.ts. Caller-supplied `idempotencyKey` ensures a
+   * network-retry within the same minute returns the same Session, so we
+   * don't strand the church on two parallel checkouts.
+   *
+   * success_url / cancel_url both receive the appended `?session_id=` so
+   * the frontend can confirm completion without trusting the redirect.
+   */
+  async createCheckoutSession(params: {
+    customerId: string;
+    amountCents: number;
+    tierLabel: string;
+    returnUrl: string;
+    tenantId: string;
+    targetTier: 'premium' | 'enterprise';
+    actorUserId: string;
+    idempotencyKey?: string;
+  }): Promise<Stripe.Checkout.Session> {
+    const sep = params.returnUrl.includes('?') ? '&' : '?';
+    const successUrl = `${params.returnUrl}${sep}checkout=success&session_id={CHECKOUT_SESSION_ID}`;
+    const cancelUrl = `${params.returnUrl}${sep}checkout=cancelled`;
+
+    return this.ensureStripe().checkout.sessions.create(
+      {
+        mode: 'subscription',
+        customer: params.customerId,
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency: 'usd',
+              recurring: { interval: 'month' },
+              unit_amount: params.amountCents,
+              product_data: {
+                name: `Shepard ${params.tierLabel} Plan`,
+              },
+            },
+          },
+        ],
+        success_url: successUrl,
+        cancel_url: cancelUrl,
+        client_reference_id: params.tenantId,
+        metadata: {
+          tenantId: params.tenantId,
+          targetTier: params.targetTier,
+          actorUserId: params.actorUserId,
+        },
+        subscription_data: {
+          metadata: {
+            tenantId: params.tenantId,
+            targetTier: params.targetTier,
+          },
+        },
+        allow_promotion_codes: true,
+      },
+      params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : undefined,
+    );
+  }
+
+  /**
    * Verifies a Stripe webhook signature and returns the parsed event.
    * Throws Stripe.errors.StripeSignatureVerificationError on failure.
    */

@@ -86,6 +86,26 @@ export class CreateServiceDto {
   @IsString()
   @MaxLength(500)
   pushMessage?: string;
+
+  @ApiPropertyOptional({ default: 0, minimum: 0, maximum: 30, description: 'Minutes BEFORE starts_at the start-of-service push fires (0 = fire at starts_at).' })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(30)
+  startPushLeadMinutes?: number;
+
+  @ApiPropertyOptional({ default: 3, minimum: 0, maximum: 30, description: 'Minutes BEFORE ends_at the end-of-service push fires.' })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(30)
+  endPushLeadMinutes?: number;
+
+  @ApiPropertyOptional({ maxLength: 500, description: 'Free text body for the end-of-service push. NULL = use default copy.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  endPushMessage?: string;
 }
 
 export class UpdateServiceDto extends CreateServiceDto {

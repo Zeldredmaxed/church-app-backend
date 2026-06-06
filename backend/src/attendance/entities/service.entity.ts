@@ -60,6 +60,21 @@ export class Service {
   @Column({ type: 'text', nullable: true, name: 'push_message' })
   pushMessage: string | null;
 
+  /** Minutes BEFORE starts_at to fire the start-of-service push.
+   *  0 = fire at starts_at (default, preserves pre-migration-085 behaviour).
+   *  Bounded 0–30 by CHECK constraint. */
+  @Column({ type: 'integer', name: 'start_push_lead_minutes', default: 0 })
+  startPushLeadMinutes: number;
+
+  /** Minutes BEFORE ends_at to fire the end-of-service push. Default 3.
+   *  Bounded 0–30 by CHECK constraint. (Added in migration 081.) */
+  @Column({ type: 'integer', name: 'end_push_lead_minutes', default: 3 })
+  endPushLeadMinutes: number;
+
+  /** Free text shown on the end-of-service push body. NULL = use default. */
+  @Column({ type: 'text', nullable: true, name: 'end_push_message' })
+  endPushMessage: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

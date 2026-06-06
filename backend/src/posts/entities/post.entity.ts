@@ -102,6 +102,16 @@ export class Post {
   @Column({ type: 'boolean', name: 'is_archived', default: false })
   isArchived: boolean;
 
+  /**
+   * Sermon this post is discussing. Set when the post is created from the
+   * sermon detail screen's "Start a discussion" or "Comment" CTAs.
+   * Comments on this post are the sermon's discussion thread — no
+   * dedicated sermon_comments table is needed. ON DELETE SET NULL keeps
+   * the discussion alive as a normal post if the sermon is removed.
+   */
+  @Column({ type: 'uuid', nullable: true, name: 'linked_sermon_id' })
+  linkedSermonId: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

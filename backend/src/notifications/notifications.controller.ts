@@ -114,6 +114,7 @@ export class NotificationsController {
       offset,
       limit,
       query.unreadOnly === true,
+      query.type,
     );
   }
 
