@@ -354,16 +354,14 @@ export class PostsService {
          sb.tier      AS sb_tier,
          sb.category  AS sb_category,
          sb.color     AS sb_color,
-         lc.like_count,
-         cc.comment_count,
+         p.like_count,
+         p.comment_count,
          EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $1) AS is_liked_by_me,
          EXISTS(SELECT 1 FROM public.post_saves WHERE post_id = p.id AND user_id = $1) AS is_saved_by_me
        FROM public.posts p
        LEFT JOIN public.users u ON u.id = p.author_id
        LEFT JOIN public.tenants ut ON ut.id = u.last_accessed_tenant_id
        LEFT JOIN public.badges sb ON sb.id = p.shared_badge_id
-       LEFT JOIN LATERAL (SELECT COUNT(*)::int AS like_count FROM public.post_likes WHERE post_id = p.id) lc ON true
-       LEFT JOIN LATERAL (SELECT COUNT(*)::int AS comment_count FROM public.comments WHERE post_id = p.id) cc ON true
        WHERE p.is_archived = false ${authorFilter} ${mediaTypeFilter} ${blockFilter}
        ORDER BY p.created_at DESC
        LIMIT $2 OFFSET $3`,
@@ -463,16 +461,14 @@ export class PostsService {
          sb.tier      AS sb_tier,
          sb.category  AS sb_category,
          sb.color     AS sb_color,
-         lc.like_count,
-         cc.comment_count,
+         p.like_count,
+         p.comment_count,
          EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $2) AS is_liked_by_me,
          EXISTS(SELECT 1 FROM public.post_saves WHERE post_id = p.id AND user_id = $2) AS is_saved_by_me
        FROM public.posts p
        LEFT JOIN public.users u ON u.id = p.author_id
        LEFT JOIN public.tenants ut ON ut.id = u.last_accessed_tenant_id
        LEFT JOIN public.badges sb ON sb.id = p.shared_badge_id
-       LEFT JOIN LATERAL (SELECT COUNT(*)::int AS like_count FROM public.post_likes WHERE post_id = p.id) lc ON true
-       LEFT JOIN LATERAL (SELECT COUNT(*)::int AS comment_count FROM public.comments WHERE post_id = p.id) cc ON true
        WHERE p.id = $1
          AND (p.is_archived = false OR p.author_id = $2)`,
       [postId, userId],
@@ -687,8 +683,8 @@ export class PostsService {
          sb.tier      AS sb_tier,
          sb.category  AS sb_category,
          sb.color     AS sb_color,
-         (SELECT COUNT(*)::int FROM public.post_likes WHERE post_id = p.id) AS like_count,
-         (SELECT COUNT(*)::int FROM public.comments   WHERE post_id = p.id) AS comment_count,
+         p.like_count,
+         p.comment_count,
          EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $1) AS is_liked_by_me
        FROM public.post_saves ps
        JOIN public.posts p ON p.id = ps.post_id
@@ -880,8 +876,8 @@ export class PostsService {
          p.created_at, p.updated_at,
          u.id AS u_id, u.full_name AS u_full_name, u.avatar_url AS u_avatar_url,
          ut.id AS u_church_id, ut.name AS u_church_name, ut.brand_color AS u_church_brand_color,
-         (SELECT COUNT(*)::int FROM public.post_likes WHERE post_id = p.id) AS like_count,
-         (SELECT COUNT(*)::int FROM public.comments   WHERE post_id = p.id) AS comment_count,
+         p.like_count,
+         p.comment_count,
          EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $1) AS is_liked_by_me,
          EXISTS(SELECT 1 FROM public.post_saves WHERE post_id = p.id AND user_id = $1) AS is_saved_by_me
        FROM public.posts p

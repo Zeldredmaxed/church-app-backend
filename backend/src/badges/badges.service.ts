@@ -454,6 +454,37 @@ export class BadgesService {
       };
     }>
   > {
+    // 60s coalescing cache. Mobile calls /badges/check on every screen
+    // focus; without this, every focus runs the full set of per-badge
+    // SUM/COUNT queries. A 60s window means the celebration modal still
+    // sees brand-new awards within a minute (well within the user-perceived
+    // freshness threshold) while screen-spam doesn't hammer the DB.
+    //
+    // The cache key includes both ids so two members of the same church
+    // get isolated entries.
+    const cacheKey = `badges:check:${tenantId}:${userId}`;
+    return this.cache.wrap(cacheKey, 60, () => this._checkAndAwardAutoBadges(tenantId, userId));
+  }
+
+  private async _checkAndAwardAutoBadges(
+    tenantId: string,
+    userId: string,
+  ): Promise<
+    Array<{
+      id: string;
+      badgeId: string;
+      earnedAt: string;
+      badge: {
+        id: string;
+        name: string;
+        description: string | null;
+        icon: string;
+        tier: string;
+        category: string;
+        color: string;
+      };
+    }>
+  > {
     const { queryRunner } = this.getRlsContext();
 
     // 1. Load all active badges with auto_award_rules for this tenant.

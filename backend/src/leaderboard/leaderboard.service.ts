@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { UpdateCheckinConfigDto } from './dto/update-checkin-config.dto';
+import { CacheService } from '../common/services/cache.service';
 
 type Category = 'check_ins' | 'giving' | 'attendance' | 'posts';
 type Scope = 'church' | 'global';
@@ -37,7 +38,10 @@ export interface UserRankEntry {
 export class LeaderboardService {
   private readonly logger = new Logger(LeaderboardService.name);
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly cache: CacheService,
+  ) {}
 
   // ---------------------------------------------------------------------------
   // Admin Leaderboard Toggle
@@ -275,6 +279,19 @@ export class LeaderboardService {
   // getUserRanks — top-10 ranks across all categories/scopes
   // ---------------------------------------------------------------------------
   async getUserRanks(tenantId: string, userId: string): Promise<UserRankEntry[]> {
+    // 5-min cache per (tenant, user). getUserRanks fires on every screen
+    // focus on the mobile + drives the profile rank cards on the admin
+    // dashboard. Without this cache it runs 8 full-table window
+    // rankings on every call. 5min is short enough that ranks feel live
+    // but long enough to absorb the foreground-spam case.
+    return this.cache.wrap(
+      `leaderboard:user-ranks:${tenantId}:${userId}`,
+      300,
+      () => this._computeUserRanks(tenantId, userId),
+    );
+  }
+
+  private async _computeUserRanks(tenantId: string, userId: string): Promise<UserRankEntry[]> {
     const categories: Category[] = ['check_ins', 'giving', 'attendance', 'posts'];
     const scopes: Scope[] = ['church', 'global'];
     const results: UserRankEntry[] = [];
