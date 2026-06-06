@@ -26,6 +26,12 @@ export class AttendanceScheduler {
 
   constructor(private readonly attendance: AttendanceService) {}
 
+  /**
+   * Per-minute tick fires the **start** push when an occurrence's
+   * starts_at is within the next 60 seconds AND hasn't been pushed.
+   * That filter means in practice we only push ONCE per occurrence —
+   * the 1438 ticks per day where no occurrence is starting are no-ops.
+   */
   @Cron(CronExpression.EVERY_MINUTE)
   async tickStartPushes(): Promise<void> {
     try {
@@ -35,6 +41,23 @@ export class AttendanceScheduler {
       }
     } catch (err: any) {
       this.logger.error(`Start-push tick failed: ${err.message}`);
+    }
+  }
+
+  /**
+   * Per-minute tick fires the **end** push (default 3 min before ends_at)
+   * so the mobile sends a final location. Once per occurrence by the
+   * same start_push_sent_at-style lock.
+   */
+  @Cron(CronExpression.EVERY_MINUTE)
+  async tickEndPushes(): Promise<void> {
+    try {
+      const result = await this.attendance.fireEndPushes();
+      if (result.pushed > 0) {
+        this.logger.log(`End-push tick: pushed ${result.pushed} notifications`);
+      }
+    } catch (err: any) {
+      this.logger.error(`End-push tick failed: ${err.message}`);
     }
   }
 

@@ -17,6 +17,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { UsersService } from './users.service';
+import { ProfileCompletenessService, RequirementSet } from './profile-completeness.service';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -29,7 +30,25 @@ import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 @Controller('users')
 @UseGuards(JwtAuthGuard)
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly completeness: ProfileCompletenessService,
+  ) {}
+
+  @Get('me/profile-completeness')
+  @ApiOperation({
+    summary: 'Per-requirement-set profile completeness',
+    description:
+      'Returns one entry per requirement set (core, volunteer, child_pickup, group_leader) with { complete: boolean, missing: [{ field, label }] }. Mobile uses this to render checkmarks on the "Complete your profile" screen and to gate feature buttons.',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      '{ sets: { core: { complete, missing }, volunteer: { ... }, child_pickup: { ... }, group_leader: { ... } } }',
+  })
+  getProfileCompleteness(@CurrentUser() user: SupabaseJwtPayload) {
+    return this.completeness.getAll(user.sub);
+  }
 
   @Get('me')
   @UseInterceptors(RlsContextInterceptor)

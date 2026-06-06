@@ -3,12 +3,14 @@ import { DataSource } from 'typeorm';
 import { rlsStorage } from '../common/storage/rls.storage';
 import { LogHoursDto } from './dto/log-hours.dto';
 import { AuditService } from '../audit/audit.service';
+import { ProfileCompletenessService } from '../users/profile-completeness.service';
 
 @Injectable()
 export class VolunteerService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
+    private readonly completeness: ProfileCompletenessService,
   ) {}
 
   private async resolveName(userId: string): Promise<string> {
@@ -52,6 +54,15 @@ export class VolunteerService {
 
   async signup(opportunityId: string, userId: string) {
     const { queryRunner } = this.getRlsContext();
+
+    // Profile-completeness gate. The church needs to be able to reach
+    // volunteers — without phone + email + address the church can't
+    // notify them about shift changes, send T-shirts, or run a
+    // background check. The 400 carries a structured `missing` array
+    // so the mobile can render a "Complete your profile" sheet that
+    // routes the user to the right setting.
+    await this.completeness.require(userId, 'volunteer');
+
     await queryRunner.query(
       `INSERT INTO public.volunteer_signups (opportunity_id, user_id)
        VALUES ($1, $2)

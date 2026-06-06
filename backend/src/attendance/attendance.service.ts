@@ -500,6 +500,63 @@ export class AttendanceService {
   }
 
   /**
+   * Per-minute tick: find any occurrence whose ends_at -
+   * end_push_lead_minutes is now (or in the next 60s) and that hasn't
+   * had its end-push fired. Sends a second silent broadcast asking
+   * phones for a fresh location so the sweep at end + 5 min has
+   * up-to-date data to detect early leavers.
+   *
+   * "Per minute" is the tick — actual push fires ONCE per occurrence
+   * because end_push_sent_at locks it after the first fire.
+   */
+  async fireEndPushes(): Promise<{ pushed: number }> {
+    const occurrences = await this.dataSource.query(
+      `SELECT so.id, so.tenant_id, s.name AS service_name, s.auto_push_enabled,
+              s.end_push_lead_minutes
+       FROM public.service_occurrences so
+       JOIN public.services s ON s.id = so.service_id
+       WHERE so.is_cancelled = false
+         AND so.end_push_sent_at IS NULL
+         AND so.start_push_sent_at IS NOT NULL
+         AND so.ends_at - (s.end_push_lead_minutes::text || ' minutes')::interval <= now() + interval '60 seconds'
+         AND so.ends_at - (s.end_push_lead_minutes::text || ' minutes')::interval >= now() - interval '5 minutes'`,
+    );
+    if (occurrences.length === 0) return { pushed: 0 };
+
+    let pushed = 0;
+    for (const occ of occurrences) {
+      const locked = await this.dataSource.query(
+        `UPDATE public.service_occurrences
+         SET end_push_sent_at = now()
+         WHERE id = $1 AND end_push_sent_at IS NULL
+         RETURNING id`,
+        [occ.id],
+      );
+      if (locked.length === 0) continue;
+      if (!occ.auto_push_enabled) continue;
+
+      const recipients = await this.dataSource.query(
+        `SELECT user_id FROM public.attendance_opt_in
+         WHERE tenant_id = $1 AND opted_in = true`,
+        [occ.tenant_id],
+      );
+      if (recipients.length === 0) continue;
+
+      await this.notificationsQueue.add('auto_attendance_push', {
+        type: 'church_broadcast',
+        tenantId: occ.tenant_id,
+        recipientIds: recipients.map((r: any) => r.user_id),
+        title: `${occ.service_name} — wrapping up`,
+        body: 'Final attendance check. Thanks for being with us today.',
+        sourceId: `end:${occ.id}`,
+        data: { occurrenceId: occ.id, kind: 'auto_attendance_ping', phase: 'end' },
+      });
+      pushed += recipients.length;
+    }
+    return { pushed };
+  }
+
+  /**
    * Per-minute tick: find any occurrence whose end_at + 5 min is in the
    * past and that hasn't been swept. For each, compute attendance per
    * opted-in member based on their pings.
