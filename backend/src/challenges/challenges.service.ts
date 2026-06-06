@@ -31,6 +31,21 @@ export class ChallengesService {
     return r?.full_name ?? 'Admin';
   }
 
+  /**
+   * Normalize a DATE value to a 'YYYY-MM-DD' string. node-postgres parses
+   * `date` columns into JS Date objects at the process-local midnight of the
+   * calendar date, so we read the local components back out (round-trips
+   * regardless of server timezone). Plain strings are passed through.
+   */
+  private toDateString(d: string | Date | null): string | null {
+    if (d == null) return null;
+    if (typeof d === 'string') return d.slice(0, 10);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
   /** Tenant-local "today" (YYYY-MM-DD) bucketed by tenants.timezone. */
   private async tenantToday(tenantId: string): Promise<string> {
     const { queryRunner } = this.getRlsContext();
@@ -54,7 +69,7 @@ export class ChallengesService {
       coverImageUrl: r.cover_image_url,
       category: r.category,
       durationDays: r.duration_days,
-      startsOn: r.starts_on,
+      startsOn: this.toDateString(r.starts_on),
       isPublished: r.is_published,
       createdBy: r.created_by,
       createdAt: r.created_at,
@@ -85,12 +100,12 @@ export class ChallengesService {
       id: r.id,
       challengeId: r.challenge_id,
       userId: r.user_id,
-      startedOn: r.started_on,
+      startedOn: this.toDateString(r.started_on),
       status: r.status,
       completedAt: r.completed_at,
       currentStreak: r.current_streak,
       longestStreak: r.longest_streak,
-      lastCompletedDate: r.last_completed_date,
+      lastCompletedDate: this.toDateString(r.last_completed_date),
     };
   }
 
@@ -528,9 +543,10 @@ export class ChallengesService {
   }
 
   /** day_index for an enrollment given tenant-local today (1-based, clamped). */
-  private dayIndexFor(startedOn: string, today: string, durationDays: number): number {
+  private dayIndexFor(startedOn: string | Date, today: string, durationDays: number): number {
+    const start = this.toDateString(startedOn);
     const diff = Math.floor(
-      (Date.parse(today + 'T00:00:00Z') - Date.parse(startedOn + 'T00:00:00Z')) / 86400000,
+      (Date.parse(today + 'T00:00:00Z') - Date.parse(start + 'T00:00:00Z')) / 86400000,
     );
     return diff + 1; // may be <1 (not started) or >durationDays (finished); caller clamps
   }
