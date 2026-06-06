@@ -34,6 +34,14 @@ export class ExpoPushService {
     title: string;
     body: string;
     data?: Record<string, any>;
+    /**
+     * Optional idempotency key. When the notifications BullMQ queue
+     * retries (attempts: 5), the same job lands here multiple times —
+     * without a dedupe key, every retry inserts another notification row
+     * and re-pushes (up to 5× duplicate). Pass `job.id` or a deterministic
+     * `${type}:${recipientId}:${sourceId}` so retries are no-ops.
+     */
+    dedupeKey?: string;
   }): Promise<Notification> {
     // 1. Skip self-notifications
     if (params.senderId && params.recipientId === params.senderId) {
@@ -41,20 +49,51 @@ export class ExpoPushService {
       return {} as Notification;
     }
 
-    // 2. Insert in-app notification
-    const notification = await this.dataSource.manager.save(
-      Notification,
-      this.dataSource.manager.create(Notification, {
-        recipientId: params.recipientId,
-        senderId: params.senderId ?? null,
-        tenantId: params.tenantId,
-        type: params.type,
-        title: params.title,
-        body: params.body,
-        data: params.data ?? {},
-        payload: params.data ?? {},
-      }),
-    );
+    // 2. Insert in-app notification with dedupe.
+    // Partial UNIQUE index on dedupe_key (migration 073) means a retry
+    // hits the conflict path and we look up the existing row instead of
+    // double-inserting + double-pushing.
+    let notification: Notification;
+    if (params.dedupeKey) {
+      const inserted = await this.dataSource.query(
+        `INSERT INTO public.notifications
+           (recipient_id, sender_id, tenant_id, type, title, body, data, payload, dedupe_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $7::jsonb, $8)
+         ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+         RETURNING id`,
+        [
+          params.recipientId,
+          params.senderId ?? null,
+          params.tenantId,
+          params.type,
+          params.title,
+          params.body,
+          JSON.stringify(params.data ?? {}),
+          params.dedupeKey,
+        ],
+      );
+      if (inserted.length === 0) {
+        this.logger.debug(
+          `Notification dedupe_key ${params.dedupeKey} already processed — skipping`,
+        );
+        return {} as Notification;
+      }
+      notification = inserted[0] as Notification;
+    } else {
+      notification = await this.dataSource.manager.save(
+        Notification,
+        this.dataSource.manager.create(Notification, {
+          recipientId: params.recipientId,
+          senderId: params.senderId ?? null,
+          tenantId: params.tenantId,
+          type: params.type,
+          title: params.title,
+          body: params.body,
+          data: params.data ?? {},
+          payload: params.data ?? {},
+        }),
+      );
+    }
 
     // 3. Check user preferences
     const pref = await this.dataSource.manager.findOne(NotificationPreference, {
@@ -172,11 +211,58 @@ export class ExpoPushService {
     title: string;
     body: string;
     data?: Record<string, any>;
+    /**
+     * Per-job key prefix; per-recipient dedupe key is composed as
+     * `${dedupeKeyPrefix}:${recipientId}`. Retries of a broadcast job
+     * therefore land on the same INSERT conflict per recipient and skip.
+     */
+    dedupeKeyPrefix?: string;
   }): Promise<void> {
-    // Batch insert notifications
-    const notifications = params.recipientIds
-      .filter(id => id !== params.senderId)
-      .map(recipientId =>
+    // Batch insert notifications with optional dedupe.
+    const recipients = params.recipientIds.filter(id => id !== params.senderId);
+    if (params.dedupeKeyPrefix) {
+      // Per-recipient dedupe via INSERT ... ON CONFLICT DO NOTHING. Can't
+      // use TypeORM's batch save here because we need the conflict clause.
+      const values = recipients
+        .map((_id, i) => {
+          const off = i * 9;
+          return `($${off + 1}, $${off + 2}, $${off + 3}, $${off + 4}, $${off + 5}, $${off + 6}, $${off + 7}::jsonb, $${off + 7}::jsonb, $${off + 8})`;
+        })
+        .join(',');
+      // Chunk to avoid blowing the parameter limit (PG max ~65k).
+      const CHUNK = 100;
+      for (let i = 0; i < recipients.length; i += CHUNK) {
+        const slice = recipients.slice(i, i + CHUNK);
+        if (slice.length === 0) continue;
+        const flatParams: any[] = [];
+        const placeholders: string[] = [];
+        slice.forEach((recipientId, j) => {
+          const base = j * 8;
+          placeholders.push(
+            `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}::jsonb, $${base + 8})`,
+          );
+          flatParams.push(
+            recipientId,
+            params.senderId ?? null,
+            params.tenantId,
+            params.type,
+            params.title,
+            params.body,
+            JSON.stringify(params.data ?? {}),
+            `${params.dedupeKeyPrefix}:${recipientId}`,
+          );
+        });
+        await this.dataSource.query(
+          `INSERT INTO public.notifications
+             (recipient_id, sender_id, tenant_id, type, title, body, data, dedupe_key)
+           VALUES ${placeholders.join(',')}
+           ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
+          flatParams,
+        );
+      }
+    } else {
+      // Legacy path — no dedupe key.
+      const notifications = recipients.map(recipientId =>
         this.dataSource.manager.create(Notification, {
           recipientId,
           senderId: params.senderId ?? null,
@@ -188,10 +274,9 @@ export class ExpoPushService {
           payload: params.data ?? {},
         }),
       );
-
-    // Save in batches of 100
-    for (let i = 0; i < notifications.length; i += 100) {
-      await this.dataSource.manager.save(Notification, notifications.slice(i, i + 100));
+      for (let i = 0; i < notifications.length; i += 100) {
+        await this.dataSource.manager.save(Notification, notifications.slice(i, i + 100));
+      }
     }
 
     // Get all active device tokens for recipients (excluding those with push disabled)

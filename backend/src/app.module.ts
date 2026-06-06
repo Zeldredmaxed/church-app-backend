@@ -221,6 +221,16 @@ import { NotificationPreference } from './notifications/entities/notification-pr
           maxRetriesPerRequest: 3,
           tls: config.get<string>('REDIS_HOST', '').includes('upstash.io') ? {} : undefined,
         },
+        // Sane defaults for every queue: bounded retries, exponential
+        // backoff, automatic cleanup of completed/failed jobs so Upstash
+        // doesn't accumulate them forever. Individual queues can still
+        // override via per-queue defaultJobOptions or per-add options.
+        defaultJobOptions: {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 2000 },
+          removeOnComplete: { age: 86400, count: 1000 },
+          removeOnFail: { age: 7 * 86400, count: 5000 },
+        },
       }),
     }),
 

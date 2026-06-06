@@ -96,9 +96,27 @@ export class WebhooksController {
 
     const payload = JSON.parse(rawBody.toString('utf8'));
     const eventType = payload.type ?? 'unknown';
+    const eventId = payload.id ?? payload.attempts?.[0]?.id;
 
-    this.logger.log(`Mux webhook received: ${eventType}`);
+    this.logger.log(`Mux webhook received: ${eventType} (id=${eventId})`);
     this.logger.debug(`Mux webhook payload: ${JSON.stringify(payload)}`);
+
+    // Idempotency. Mux can replay any event — without this check, replays
+    // re-overwrite playback_id, bump posts.updated_at, and could revert
+    // status from 'errored' back to 'ready'. Mirrors the
+    // stripe_processed_events pattern.
+    if (eventId) {
+      const dedupe = await this.dataSource.query(
+        `INSERT INTO public.mux_processed_events (event_id)
+         VALUES ($1) ON CONFLICT (event_id) DO NOTHING
+         RETURNING event_id`,
+        [eventId],
+      );
+      if (dedupe.length === 0) {
+        this.logger.log(`Mux webhook ${eventId} already processed — skipping`);
+        return { received: true };
+      }
+    }
 
     // Mux event routing.
     //

@@ -75,14 +75,20 @@ export class SocialFanoutProcessor extends WorkerHost implements OnModuleDestroy
 
     this.logger.log(`Fanning out post ${postId} to ${followers.length} follower(s)`);
 
-    // Pipeline Redis commands for efficiency — single round-trip for all followers
-    const pipeline = this.redis.pipeline();
+    // Idempotency: BullMQ default = 3 attempts. Without LREM first, a
+    // retry of this whole job re-LPUSHes the same postId — so a follower
+    // sees the same post twice (or three times) at the top of their
+    // feed. LREM is cheap (O(N) scan of one user's bounded 500-item
+    // list) and runs in the same pipeline, so the round-trip cost
+    // doesn't change.
+    const lpushPipeline = this.redis.pipeline();
     for (const { followerId } of followers) {
       const feedKey = `user:${followerId}:feed:global`;
-      pipeline.lpush(feedKey, postId);
-      pipeline.ltrim(feedKey, 0, MAX_FEED_LENGTH - 1);
+      lpushPipeline.lrem(feedKey, 0, postId);
+      lpushPipeline.lpush(feedKey, postId);
+      lpushPipeline.ltrim(feedKey, 0, MAX_FEED_LENGTH - 1);
     }
-    await pipeline.exec();
+    await lpushPipeline.exec();
 
     this.logger.log(`Fan-out complete: post ${postId} pushed to ${followers.length} feed(s)`);
 
@@ -93,11 +99,28 @@ export class SocialFanoutProcessor extends WorkerHost implements OnModuleDestroy
     });
     const previewText = post?.content?.slice(0, 100) ?? '';
 
-    // Dispatch notification jobs for each follower (non-blocking — failures are isolated)
+    // Per-follower notification idempotency. The processor's dedupe path
+    // (notifications.dedupe_key) will silently skip duplicates, but
+    // checking here lets us avoid enqueueing 10k jobs that all get
+    // discarded on a retry. NX semantics: only succeeds if the key
+    // wasn't set in the last 24h.
+    const notifyPipeline = this.redis.pipeline();
+    const candidates: string[] = [];
     for (const { followerId } of followers) {
+      const key = `fanout:notified:${postId}:${followerId}`;
+      notifyPipeline.set(key, '1', 'EX', 86400, 'NX');
+      candidates.push(followerId);
+    }
+    const results = await notifyPipeline.exec();
+
+    // ioredis pipeline.exec returns Array<[err, result]> in command order.
+    for (let i = 0; i < candidates.length; i++) {
+      const result = results?.[i]?.[1];
+      if (result !== 'OK') continue; // already notified, skip
+      const followerId = candidates[i];
       await this.notificationsQueue.add('NEW_GLOBAL_POST', {
         type: NotificationType.NEW_GLOBAL_POST,
-        tenantId: '', // Global posts have no tenant
+        tenantId: null as any, // Global posts have no tenant
         recipientUserId: followerId,
         actorUserId: authorId,
         postId,

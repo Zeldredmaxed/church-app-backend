@@ -33,9 +33,9 @@ export class NotificationsProcessor extends WorkerHost {
     // Generic handler: every notification type flows through expo.send()
     // which handles in-app row creation + push delivery + preference checks.
     if ('recipientUserId' in data && data.recipientUserId) {
-      await this.handleSingleRecipient(data);
+      await this.handleSingleRecipient(data, job.id);
     } else if ('recipientIds' in data && (data as any).recipientIds) {
-      await this.handleBulkRecipients(data as any);
+      await this.handleBulkRecipients(data as any, job.id);
     } else if (data.type === 'INVITATION_EMAIL') {
       // Email-only notification — no push
       this.logger.log(
@@ -47,7 +47,23 @@ export class NotificationsProcessor extends WorkerHost {
     }
   }
 
-  private async handleSingleRecipient(data: any): Promise<void> {
+  /**
+   * Build the dedupe key for a single-recipient job.
+   *
+   * Prefer a deterministic key (`${type}:${recipient}:${sourceId}`) so
+   * that even a fresh-job retry from a different invocation is deduped.
+   * Fall back to the BullMQ job id (still safe across the configured
+   * 5 attempts of the same job).
+   */
+  private buildDedupeKey(data: any, jobId?: string): string {
+    const sourceId =
+      data.postId ?? data.commentId ?? data.eventId ?? data.fundraiserId ??
+      data.requestId ?? data.badgeId ?? data.sourceId;
+    if (sourceId) return `${data.type}:${data.recipientUserId}:${sourceId}`;
+    return `job:${jobId ?? data.recipientUserId}:${data.type}`;
+  }
+
+  private async handleSingleRecipient(data: any, jobId?: string): Promise<void> {
     // Resolve sender name for the title
     let senderName = 'Someone';
     if (data.actorUserId) {
@@ -68,10 +84,11 @@ export class NotificationsProcessor extends WorkerHost {
       title,
       body,
       data: deepLink,
+      dedupeKey: this.buildDedupeKey(data, jobId),
     });
   }
 
-  private async handleBulkRecipients(data: any): Promise<void> {
+  private async handleBulkRecipients(data: any, jobId?: string): Promise<void> {
     let senderName = '';
     if (data.actorUserId) {
       const [sender] = await this.dataSource.query(
@@ -83,6 +100,13 @@ export class NotificationsProcessor extends WorkerHost {
 
     const { title, body, deepLink } = this.buildNotificationContent(data, senderName);
 
+    // Deterministic per-recipient dedupe key. The bulk job carries a
+    // sourceId (eventId, fundraiserId, etc.); together with the type and
+    // recipientId this uniquely identifies one celebration target.
+    const sourceId =
+      data.eventId ?? data.fundraiserId ?? data.postId ?? data.broadcastId ?? jobId;
+    const dedupeKeyPrefix = sourceId ? `${data.type}:${sourceId}` : undefined;
+
     await this.expo.sendBulk({
       recipientIds: data.recipientIds,
       senderId: data.actorUserId,
@@ -91,6 +115,7 @@ export class NotificationsProcessor extends WorkerHost {
       title,
       body,
       data: deepLink,
+      dedupeKeyPrefix,
     });
   }
 

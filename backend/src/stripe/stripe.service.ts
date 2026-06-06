@@ -99,6 +99,53 @@ export class StripeService {
   }
 
   /**
+   * Retrieves an existing PaymentIntent. Used by the fundraiser-donate
+   * retry path: if we still have a pending donation in our DB whose PI
+   * Stripe still considers reusable (requires_payment_method / _confirmation
+   * / _action), we reuse it rather than creating a new one — preventing
+   * double-credit when the mobile retries POST /donate.
+   */
+  async retrievePaymentIntent(paymentIntentId: string): Promise<Stripe.PaymentIntent> {
+    return this.ensureStripe().paymentIntents.retrieve(paymentIntentId);
+  }
+
+  /**
+   * Refunds a captured PaymentIntent. Used by the in-app donation refund
+   * flow (admin / accountant moderating gifts). Returns the Refund object
+   * so the caller can pull amount, currency, and reason for the audit log.
+   */
+  async refundPaymentIntent(
+    paymentIntentId: string,
+    options?: { amount?: number; reason?: 'duplicate' | 'fraudulent' | 'requested_by_customer' },
+  ): Promise<Stripe.Refund> {
+    return this.ensureStripe().refunds.create({
+      payment_intent: paymentIntentId,
+      ...(options?.amount ? { amount: options.amount } : {}),
+      ...(options?.reason ? { reason: options.reason } : {}),
+    });
+  }
+
+  /**
+   * Fetches Connect account health for the admin dashboard.
+   * Returns the live Account object so the dashboard can show
+   * charges_enabled / payouts_enabled / requirements / next payout.
+   */
+  async retrieveConnectAccount(accountId: string): Promise<Stripe.Account> {
+    return this.ensureStripe().accounts.retrieve(accountId);
+  }
+
+  async listConnectPayouts(accountId: string, limit = 10): Promise<Stripe.ApiList<Stripe.Payout>> {
+    return this.ensureStripe().payouts.list(
+      { limit },
+      { stripeAccount: accountId },
+    );
+  }
+
+  async getConnectBalance(accountId: string): Promise<Stripe.Balance> {
+    return this.ensureStripe().balance.retrieve({ stripeAccount: accountId });
+  }
+
+  /**
    * Creates a Stripe Customer for the given email.
    * Called lazily on first SetupIntent creation.
    */

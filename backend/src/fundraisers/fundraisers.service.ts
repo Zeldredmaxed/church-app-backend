@@ -214,6 +214,42 @@ export class FundraisersService {
     const platformFeeRate = tierFeatures.transactionFeePercent / 100;
     const platformFeeCents = Math.round(dto.amount * platformFeeRate);
 
+    // Idempotency: if the same donor has an unconfirmed pending donation
+    // to this fundraiser for the same amount in the last 30 min, reuse
+    // its PaymentIntent. Without this, a mobile retry of POST /donate
+    // creates a second pending row; the webhook then double-credits the
+    // fundraiser when both rows flip to 'succeeded'. UNIQUE constraint
+    // on payment_intent_id (migration 073) is the DB-level backstop;
+    // this is the friendly reuse path.
+    const existingPending = await queryRunner.query(
+      `SELECT id, payment_intent_id
+       FROM public.fundraiser_donations
+       WHERE fundraiser_id = $1 AND donor_id = $2 AND amount = $3
+         AND payment_status = 'pending'
+         AND created_at > now() - interval '30 minutes'
+       ORDER BY created_at DESC LIMIT 1`,
+      [fundraiserId, userId, dto.amount],
+    );
+    if (existingPending.length > 0) {
+      const existing = existingPending[0];
+      try {
+        const pi = await this.stripeService.retrievePaymentIntent(existing.payment_intent_id);
+        if (pi.client_secret && ['requires_payment_method', 'requires_confirmation', 'requires_action'].includes(pi.status)) {
+          this.logger.log(
+            `Reusing pending fundraiser donation ${existing.id} (PI ${existing.payment_intent_id}) for ${userId}`,
+          );
+          return {
+            donationId: existing.id,
+            clientSecret: pi.client_secret,
+            status: 'requires_confirmation',
+          };
+        }
+      } catch (err: any) {
+        // PI not retrievable (deleted, expired) — fall through to create a new one.
+        this.logger.warn(`Could not retrieve existing PI ${existing.payment_intent_id}: ${err.message}`);
+      }
+    }
+
     // Create Stripe PaymentIntent
     let paymentIntent;
     try {
