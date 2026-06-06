@@ -14,15 +14,22 @@ import {
 } from './bible-books';
 
 /**
- * Public Bible passage proxy.
+ * Public Bible passage endpoint.
  *
- * No JwtAuthGuard — scripture is public. Throttled to 60/min per client
- * to prevent abuse since the upstream (bible-api.com) is also unauthed
- * and we don't want to look like a botnet to them.
+ * No JwtAuthGuard — scripture is public. Migration 099 self-hosted 7
+ * of 8 translations into local Postgres, so most reads are now sub-20ms
+ * and have no upstream dependency.
+ *
+ * Throttle: 120/min per IP. We bumped from the original 60/min (which
+ * was protecting bible-api.com upstream) but kept it tight because the
+ * endpoint is unauthed — a generous limit on a public unauthed read
+ * is DoS-friendly from a botnet. 120/min comfortably handles a real
+ * member's reading pace (one chapter every 30s sustained, or bursts
+ * of full chapter flips) without leaving the door wide open.
  */
 @ApiTags('Bible')
 @Controller('bible')
-@Throttle({ default: { ttl: 60_000, limit: 60 } })
+@Throttle({ default: { ttl: 60_000, limit: 120 } })
 export class BibleController {
   constructor(private readonly bibleService: BibleService) {}
 

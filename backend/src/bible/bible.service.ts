@@ -4,6 +4,7 @@ import {
   BadRequestException,
   BadGatewayException,
 } from '@nestjs/common';
+import { DataSource } from 'typeorm';
 import { CacheService } from '../common/services/cache.service';
 import {
   BIBLE_BOOKS,
@@ -28,11 +29,18 @@ interface FetchPassageInput {
 }
 
 /**
- * Thin proxy to bible-api.com (public, key-less, immutable content).
+ * Bible passage lookup.
  *
- * Cache strategy: passages are immutable scripture — once fetched we can
- * cache them effectively forever, but we use 1h to allow upstream
- * corrections (typos, etc.) to propagate without an out-of-band purge.
+ * Migration 099 self-hosted 7 public-domain translations (KJV, ASV, BBE,
+ * Darby, DRA, WBT, YLT) — those reads hit the local Postgres tables
+ * `bible_verses`/`bible_books`/`bible_chapter_lengths` with sub-20ms
+ * latency, no upstream dependency, no rate limit. WEB stays on the
+ * bible-api.com proxy as a fallback (scrollmapper's bulk JSON doesn't
+ * include it — follow-up seeding work).
+ *
+ * Cache: local reads don't need caching (Postgres is already <10ms);
+ * upstream reads cache at the WHOLE-chapter level for 1h so different
+ * verse windows share entries.
  */
 @Injectable()
 export class BibleService {
@@ -40,7 +48,15 @@ export class BibleService {
   private readonly upstreamBase = 'https://bible-api.com';
   private readonly cacheTtlSeconds = 3600;
 
-  constructor(private readonly cache: CacheService) {}
+  /** Translations whose verses live in our local DB (migration 099). */
+  private readonly SELF_HOSTED: ReadonlySet<SupportedTranslation> = new Set([
+    'kjv', 'asv', 'bbe', 'darby', 'dra', 'wbt', 'ylt',
+  ]);
+
+  constructor(
+    private readonly cache: CacheService,
+    private readonly dataSource: DataSource,
+  ) {}
 
   /** Static — the 66 books and their chapter counts. */
   listBooks(): ReadonlyArray<BibleBook> {
@@ -48,9 +64,11 @@ export class BibleService {
   }
 
   /**
-   * Fetches a verse range from bible-api.com (cached). Returns the
-   * passages in the shape the mobile UI expects: { ref, verse, text }
-   * where ref is the human-readable reference (e.g., "John 3:16").
+   * Fetches a verse range. Routes to local SQL for self-hosted
+   * translations; falls back to the proxy for WEB (and any future
+   * non-self-hosted translation). Returns the passages in the shape
+   * the mobile UI expects: { ref, verse, text } where ref is the
+   * human-readable reference (e.g., "John 3:16").
    */
   async getPassage(input: FetchPassageInput): Promise<BiblePassage[]> {
     const book = findBook(input.book);
@@ -63,14 +81,76 @@ export class BibleService {
       );
     }
 
-    // Always fetch + cache the WHOLE chapter, then slice locally to
-    // start..end. Two wins from this approach (vs caching per range):
-    //   1. Fixes Bug 2 (overshoot 400s) — we always know the chapter's
-    //      max verse count after fetching, so `end > maxVerse` gracefully
-    //      caps to maxVerse instead of bubbling up the upstream 400.
-    //   2. Cache hit rate goes up — different (start, end) windows on
-    //      the same chapter all share one cache entry. A user reading
-    //      John 3:1-10 then John 3:11-36 makes one upstream call total.
+    if (this.SELF_HOSTED.has(input.translation)) {
+      return this.fetchFromLocal(book, input);
+    }
+    return this.fetchFromUpstreamCached(book, input);
+  }
+
+  // ──────────────────── Local (self-hosted) path ────────────────────
+
+  /**
+   * Direct Postgres query on bible_verses. Slicing to start..end +
+   * graceful overshoot capping happen in SQL (no need to fetch the
+   * whole chapter and filter in JS — the PK index covers this range
+   * efficiently).
+   */
+  private async fetchFromLocal(
+    book: BibleBook,
+    input: FetchPassageInput,
+  ): Promise<BiblePassage[]> {
+    const bookSlug = book.name.toLowerCase().replace(/\s+/g, '-');
+    // Cap end to the chapter's actual verse count — Bug 2 fix is now
+    // a single SUBQUERY against bible_chapter_lengths (faster than the
+    // proxy's whole-chapter fetch).
+    const [lengthRow] = await this.dataSource.query(
+      `SELECT verse_count FROM public.bible_chapter_lengths
+       WHERE translation = $1 AND book_slug = $2 AND chapter = $3`,
+      [input.translation, bookSlug, input.chapter],
+    );
+    if (!lengthRow) {
+      // Defensive: chapter validated against static BIBLE_BOOKS above,
+      // but if the seed somehow missed this row for this translation
+      // we shouldn't expose internal architecture ("not seeded for X")
+      // to public callers. Log server-side so ops can see the gap +
+      // return the same shape the proxy would return for a 404.
+      this.logger.error(
+        `Local seed missing chapter ${book.name} ${input.chapter} for translation ${input.translation}`,
+      );
+      throw new BadRequestException('Passage not found');
+    }
+    const maxVerse: number = lengthRow.verse_count;
+    const startCapped = Math.max(input.start, 1);
+    const endCapped = input.end == null ? maxVerse : Math.min(input.end, maxVerse);
+
+    if (endCapped < startCapped) return [];
+
+    const rows = await this.dataSource.query(
+      `SELECT verse, text FROM public.bible_verses
+       WHERE translation = $1 AND book_slug = $2 AND chapter = $3
+         AND verse BETWEEN $4 AND $5
+       ORDER BY verse ASC`,
+      [input.translation, bookSlug, input.chapter, startCapped, endCapped],
+    );
+
+    return rows.map((r: any) => ({
+      ref: `${book.name} ${input.chapter}:${r.verse}`,
+      verse: r.verse,
+      text: r.text,
+    }));
+  }
+
+  // ─────────────────────── Upstream proxy path ──────────────────────
+  //
+  // Used only for translations not in SELF_HOSTED (currently just WEB).
+  // Caches the WHOLE chapter so different verse windows on the same
+  // chapter share one cache entry. Same shape as the local path so the
+  // controller doesn't need to care which backend served the read.
+
+  private async fetchFromUpstreamCached(
+    book: BibleBook,
+    input: FetchPassageInput,
+  ): Promise<BiblePassage[]> {
     const cacheKey = [
       'bible',
       input.translation,
@@ -86,23 +166,15 @@ export class BibleService {
       throw new BadRequestException('No verses found in this chapter');
     }
 
-    // Cap end to the chapter's actual max verse — fixes Bug 2.
     const maxVerse = chapter[chapter.length - 1].verse;
     const startCapped = Math.max(input.start, 1);
     const endCapped = input.end == null ? maxVerse : Math.min(input.end, maxVerse);
-
     return chapter.filter((p) => p.verse >= startCapped && p.verse <= endCapped);
   }
 
   /**
    * Single upstream call for the WHOLE chapter. Kept private so the
    * cache wrap is the only call-path — prevents accidental cache bypass.
-   *
-   * URL pattern: bible-api.com accepts `/<book>+<chapter>?translation=<t>`
-   * (no verse range) and returns every verse in the chapter.
-   *
-   * Response shape:
-   *   { reference, verses: [{ book_id, book_name, chapter, verse, text }], ... }
    */
   private async fetchWholeChapterFromUpstream(
     canonicalBookName: string,
@@ -112,9 +184,6 @@ export class BibleService {
     const bookSlug = encodeURIComponent(canonicalBookName.replace(/\s+/g, '+'));
     const url = `${this.upstreamBase}/${bookSlug}+${chapter}?translation=${translation}`;
 
-    // 5-second timeout. Undici's default is no timeout — without this
-    // a hung upstream (bible-api is a free single-maintainer service)
-    // pins an event-loop slot indefinitely. AbortError → 502.
     let response: Response;
     try {
       response = await fetch(url, { signal: AbortSignal.timeout(5000) });
@@ -140,12 +209,15 @@ export class BibleService {
     };
 
     if (!data?.verses?.length) {
-      // Upstream returns 200 with empty verses for unknown chapters.
       return [];
     }
 
     return data.verses.map((v) => ({
-      ref: `${v.book_name ?? canonicalBookName} ${v.chapter ?? chapter}:${v.verse ?? 0}`,
+      // Always use OUR canonical book name (not v.book_name) so the
+      // ref string format matches the local path exactly. Mobile can
+      // safely parse `ref` knowing both paths emit the same template:
+      //   "{OurCanonicalName} {chapter}:{verse}"
+      ref: `${canonicalBookName} ${v.chapter ?? chapter}:${v.verse ?? 0}`,
       verse: v.verse ?? 0,
       text: (v.text ?? '').trim(),
     }));

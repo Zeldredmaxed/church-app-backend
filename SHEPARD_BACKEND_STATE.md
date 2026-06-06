@@ -4,8 +4,9 @@
 > **Status:** Pre-launch, beta on Android via Expo Go, first church client imminent
 > **Last updated:** 2026-06-06 (Faith Walks extensions — gating, points, medals, leaderboard, missed-day cron)
 > **Live backend:** `https://church-app-backend-27hc.onrender.com/api`
-> **Latest migration applied:** `098_challenges_gating_points_medals.sql`
+> **Latest migration applied:** `099_bible_self_hosted.sql`
 > **Migration 097:** `097_groups_auto_tag.sql` — applied (additive cols for upcoming groups feature, not yet wired in services)
+> **Migration 099:** `099_bible_self_hosted.sql` — applied + seeded with 7 PD translations (~218k verses)
 
 This document supersedes EVERY prior `*_PROMPT.md`, `*_REPLY*.md`,
 `*_FIXES.md`, and `FRONTEND_HANDOFF*.md`. Going forward, ANY change to
@@ -386,10 +387,19 @@ Set up new card via existing SetupIntent flow: `POST /api/stripe/connect/setup-i
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/bible?translation=&book=&chapter=&start=&end=` | `{ passages: [{ ref, verse, text }] }`. 1h cache, 60/min throttle, no auth. |
-| `GET` | `/api/bible/books?translation=` | `{ books: [{ name, chapters }] }`. |
+| `GET` | `/api/bible?translation=&book=&chapter=&start=&end=` | `{ passages: [{ ref, verse, text }] }`. No auth. Self-hosted reads <20ms; throttle 120/min per IP (tight because public + unauthed). |
+| `GET` | `/api/bible/books?translation=` | `{ books: [{ name, chapters }] }`. Static. |
 
-Translations: `kjv, web, asv, bbe, darby, dra, wbt, ylt`. **ESV is NOT available** — bible-api.com doesn't carry it (copyright). Mobile should fall back gracefully.
+Translations: `kjv, web, asv, bbe, darby, dra, wbt, ylt`. **ESV is NOT available** (copyright).
+
+**Self-hosted (migration 099)** — 7 of 8 translations live in local Postgres (`bible_books`, `bible_chapter_lengths`, `bible_verses`, ~218k verses total): `kjv, asv, bbe, darby, dra, wbt, ylt`. Reads are sub-20ms, no upstream dependency, no per-IP rate-limit pressure.
+
+**Still proxied** — `web` (World English Bible) — scrollmapper's bulk JSON doesn't carry it; service routes WEB to the existing `bible-api.com` cached proxy. Follow-up: seed WEB via per-chapter ingestion from bible-api.com/data when there's time. Mobile is unaffected — same response shape for both paths.
+
+**Query semantics:**
+- `start` is optional (default 1).
+- `end` is optional (default = end of chapter); overshoots are gracefully capped to the chapter's last verse via `bible_chapter_lengths` (self-hosted) or whole-chapter fetch (WEB proxy).
+- Omitting both `start` and `end` returns the entire chapter — this is the call mobile makes for "show me John 3."
 
 ## §1.16 Notifications
 
