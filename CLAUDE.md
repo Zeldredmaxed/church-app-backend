@@ -137,3 +137,43 @@ backend/src/
 - Badge icons are Hugeicons names in kebab-case (e.g., `hand-prayer`), converted to PascalCase + `Icon` suffix on frontend
 - Fundraiser amounts are in CENTS (divide by 100 for display)
 - The `is_channel_member()` SECURITY DEFINER function prevents RLS recursion on chat policies
+
+## Cross-team inbox
+
+This project shares a request bus with the two other Shepard Claude
+Code sessions on this machine. A daemon at
+`D:/shepard-team-inbox/daemon.js` watches `D:/shepard-team-inbox/to-backend/`
+and spawns YOU (a fresh `claude -p` session) when a new request file
+appears.
+
+**On a cold start (when daemon spawned you):**
+1. The prompt that spawned you points at a specific file in
+   `D:/shepard-team-inbox/to-backend/`. Read it.
+2. Follow the conventions in this CLAUDE.md.
+3. Read `D:/Shepard backend/SHEPARD_BACKEND_STATE.md` for the current
+   API surface (single source of truth for both teams).
+4. Do the work (read code, edit, type-check, commit if appropriate).
+5. Write your reply to the path the spawning prompt gave you, following
+   the reply schema in `D:/shepard-team-inbox/PROTOCOL.md`.
+6. If the change touches a contract (new endpoint, payload shape, etc.),
+   update the relevant §1 (mobile) / §2 (admin) / §3 (cross-cutting)
+   section of `SHEPARD_BACKEND_STATE.md` IN THE SAME COMMIT.
+
+**When a human starts an interactive session and asks "any new asks?":**
+List `D:/shepard-team-inbox/to-backend/` for `.md` files NOT ending in
+`--reply.md`. For each: read it, do the work, write a reply, move the
+original to `D:/shepard-team-inbox/processed/backend/`.
+
+**Sending a request to the mobile or admin Claude session:**
+Write `D:/shepard-team-inbox/to-mobile/backend--<slug>.md` or
+`D:/shepard-team-inbox/to-admin/backend--<slug>.md` with the
+frontmatter + sections from PROTOCOL.md. The daemon picks it up within
+~1 second and spawns the destination Claude.
+
+**Rules of thumb:**
+- Cold-start Claude has NO memory of prior conversations. Make the
+  request file self-contained.
+- Be generous with "decisions you're allowed to make without asking" —
+  every round-trip costs a daemon spawn AND the human's attention.
+- Reply files MUST end with `--reply.md` so the daemon archives them
+  without spawning a fresh session.

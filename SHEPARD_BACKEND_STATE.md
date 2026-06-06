@@ -857,3 +857,36 @@ Every backend change ships with an updated section of this document in the SAME 
 5. Adversarial-review fixes (when applicable) called out
 
 **Going forward, this is the single document both teams read.** No more `*_PROMPT.md` / `*_REPLY*.md` / `*_FIXES.md` per-feature docs — they get folded into this one.
+
+---
+
+# Cross-team inbox (sibling project, not in this repo)
+
+Lives at `D:/shepard-team-inbox/` (separate from this backend repo). A
+file-watcher daemon ferries requests between the three Shepard Claude
+Code sessions on this machine (backend, mobile, admin) without the
+human in the middle copy-pasting.
+
+**How a request flows:**
+1. Mobile or admin Claude writes a request file to
+   `D:/shepard-team-inbox/to-backend/<team>--<slug>.md` per
+   `D:/shepard-team-inbox/PROTOCOL.md`
+2. The daemon (running in a background terminal — `cd D:/shepard-team-inbox && npm start`)
+   sees the new file within ~1 second and spawns a headless
+   `claude -p` session inside the backend project
+3. That cold-start Claude reads the request, does the work (edits
+   code, runs `npx tsc --noEmit`, commits, etc.), and writes a reply
+   to `D:/shepard-team-inbox/to-<sender>/<original>--reply.md`
+4. The originating team's daemon picks up the reply and spawns their
+   Claude with "read the reply and take any follow-up action"
+
+**For interactive sessions** (someone at the keyboard), asking "any
+new asks?" prompts Claude to scan `D:/shepard-team-inbox/to-<self>/`
+and process pending requests.
+
+**Anything that changes a contract MUST update this document in the
+same commit** — that's how the other team finds out without a
+follow-up round-trip.
+
+See `D:/shepard-team-inbox/README.md` for setup + `PROTOCOL.md` for
+the request/reply file schema.
