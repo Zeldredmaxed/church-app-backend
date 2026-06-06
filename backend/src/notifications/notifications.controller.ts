@@ -208,4 +208,18 @@ export class NotificationsController {
   ) {
     return this.notificationsService.broadcast(user.sub, dto.title, dto.body, dto.tenantId);
   }
+
+  @Get('broadcasts/history')
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @UseInterceptors(RlsContextInterceptor)
+  @ApiOperation({
+    summary: 'List past broadcasts with delivery stats (admin/pastor)',
+    description:
+      'Returns the most recent broadcast_history rows for the current tenant with sender name + audience + delivered/failed/read counts. Lets the admin dashboard answer "did 412 of 800 phones actually get it?"',
+  })
+  @ApiResponse({ status: 200, description: '{ broadcasts: [...] }' })
+  getBroadcastHistory(@CurrentUser() user: SupabaseJwtPayload) {
+    return this.notificationsService.getBroadcastHistory(user.app_metadata?.current_tenant_id!);
+  }
 }

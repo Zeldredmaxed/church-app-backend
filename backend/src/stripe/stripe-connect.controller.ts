@@ -154,6 +154,65 @@ export class StripeConnectController {
     };
   }
 
+  @Get('health')
+  @ApiOperation({
+    summary: 'Connect account health (balance, payouts, requirements) — admin/accountant',
+    description:
+      'Returns charges_enabled / payouts_enabled / outstanding requirements / available balance / last 10 payouts. Used by the admin dashboard hero card to alert when the account is restricted.',
+  })
+  @ApiResponse({ status: 200, description: 'Connect health payload' })
+  @ApiResponse({ status: 400, description: 'No Connect account / no tenant context' })
+  async getHealth() {
+    const { queryRunner, userId, currentTenantId } = rlsStorage.getStore()!;
+    if (!currentTenantId) throw new BadRequestException('No active tenant context');
+    await this.requireAdmin(queryRunner, userId, currentTenantId);
+
+    const tenant = await queryRunner.manager.findOne(Tenant, {
+      where: { id: currentTenantId },
+    });
+    if (!tenant?.stripeAccountId) {
+      throw new BadRequestException('This church has not started Stripe Connect onboarding');
+    }
+
+    const [account, balance, payouts] = await Promise.all([
+      this.stripeService.retrieveConnectAccount(tenant.stripeAccountId),
+      this.stripeService.getConnectBalance(tenant.stripeAccountId),
+      this.stripeService.listConnectPayouts(tenant.stripeAccountId, 10),
+    ]);
+
+    return {
+      account: {
+        id: account.id,
+        chargesEnabled: account.charges_enabled,
+        payoutsEnabled: account.payouts_enabled,
+        detailsSubmitted: account.details_submitted,
+        requirements: {
+          currentlyDue: account.requirements?.currently_due ?? [],
+          eventuallyDue: account.requirements?.eventually_due ?? [],
+          pastDue: account.requirements?.past_due ?? [],
+          disabledReason: account.requirements?.disabled_reason ?? null,
+        },
+      },
+      balance: {
+        available: balance.available.map(b => ({
+          amount: b.amount,
+          currency: b.currency,
+        })),
+        pending: balance.pending.map(b => ({
+          amount: b.amount,
+          currency: b.currency,
+        })),
+      },
+      recentPayouts: payouts.data.map(p => ({
+        id: p.id,
+        amount: p.amount,
+        currency: p.currency,
+        status: p.status,
+        arrivalDate: p.arrival_date,
+      })),
+    };
+  }
+
   /**
    * Creates a Stripe SetupIntent for saving a payment method.
    *

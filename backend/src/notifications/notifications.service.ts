@@ -274,6 +274,23 @@ export class NotificationsService {
       return { sent: 0 };
     }
 
+    // Persist a broadcast_history row up front so a partial-send failure
+    // still leaves the admin a record. delivered/failed counts are updated
+    // by the Expo receipts callback (out of scope for this commit — for now
+    // we mark audienceSize and let the dashboard show "pending delivery"
+    // until the read-back endpoint is fleshed out further).
+    let broadcastId: string | null = null;
+    if (tenantId) {
+      const [row] = await this.dataSource.query(
+        `INSERT INTO public.broadcast_history
+           (tenant_id, sent_by, title, body, audience_kind, audience_size)
+         VALUES ($1, $2, $3, $4, 'all', $5)
+         RETURNING id`,
+        [tenantId, senderId, title, body, recipientIds.length],
+      );
+      broadcastId = row.id;
+    }
+
     await this.expo.sendBulk({
       recipientIds,
       senderId,
@@ -281,7 +298,8 @@ export class NotificationsService {
       type: tenantId ? 'church_broadcast' : 'system_broadcast',
       title,
       body,
-      data: { screen: 'Announcements' },
+      data: { screen: 'Announcements', broadcastId },
+      dedupeKeyPrefix: broadcastId ? `broadcast:${broadcastId}` : undefined,
     });
 
     const [actor] = await this.dataSource.query(
@@ -291,8 +309,10 @@ export class NotificationsService {
     await this.audit.log({
       action: 'notification.broadcast_sent',
       resourceType: 'notification',
+      resourceId: broadcastId ?? undefined,
       summary: `${actor?.full_name ?? 'Admin'} sent broadcast "${title}" to ${recipientIds.length} recipient(s)`,
       metadata: {
+        broadcastId,
         title,
         body,
         audienceSize: recipientIds.length,
@@ -301,7 +321,39 @@ export class NotificationsService {
       },
     });
 
-    return { sent: recipientIds.length };
+    return { sent: recipientIds.length, broadcastId };
+  }
+
+  /**
+   * Admin read-back of past broadcasts. Returns sender's name + the
+   * delivery/failed/read counts written by the Expo receipts pipeline.
+   * Sorted newest-first, capped at 200.
+   */
+  async getBroadcastHistory(tenantId: string) {
+    const rows = await this.dataSource.query(
+      `SELECT bh.id, bh.title, bh.body, bh.audience_kind, bh.audience_size,
+              bh.delivered_count, bh.failed_count, bh.read_count, bh.sent_at,
+              u.full_name AS sent_by_name
+       FROM public.broadcast_history bh
+       LEFT JOIN public.users u ON u.id = bh.sent_by
+       WHERE bh.tenant_id = $1
+       ORDER BY bh.sent_at DESC LIMIT 200`,
+      [tenantId],
+    );
+    return {
+      broadcasts: rows.map((r: any) => ({
+        id: r.id,
+        title: r.title,
+        body: r.body,
+        audienceKind: r.audience_kind,
+        audienceSize: r.audience_size,
+        deliveredCount: r.delivered_count,
+        failedCount: r.failed_count,
+        readCount: r.read_count,
+        sentAt: r.sent_at,
+        sentByName: r.sent_by_name,
+      })),
+    };
   }
 
   private getRlsContext() {

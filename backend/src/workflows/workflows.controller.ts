@@ -96,6 +96,62 @@ export class WorkflowsController {
 
   /* ───── Static Routes (BEFORE :id) ───── */
 
+  @Get('executions/admin')
+  @ApiOperation({
+    summary: 'Cross-workflow execution browser (admin) — filter by status + window',
+    description:
+      'Lists workflow_executions across ALL workflows in the tenant for a failure dashboard. Filter by status=succeeded|failed|cancelled|running and a since= ISO date. Joined with the workflow name so the dashboard table can render without an N+1.',
+  })
+  @ApiResponse({ status: 200, description: '{ executions: [...], total }' })
+  async listExecutions(
+    @CurrentUser() user: SupabaseJwtPayload,
+    @Query('status') status?: string,
+    @Query('since') since?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const tenantId = user.app_metadata?.current_tenant_id;
+    if (!tenantId) throw new ForbiddenException('No tenant context');
+    const parsedLimit = Math.min(Math.max(parseInt(limit ?? '100', 10) || 100, 1), 500);
+    const params: any[] = [tenantId, parsedLimit];
+    let whereStatus = '';
+    if (status && ['running', 'completed', 'failed', 'paused', 'cancelled'].includes(status)) {
+      params.push(status);
+      whereStatus = ` AND we.status = $${params.length}`;
+    }
+    let whereSince = '';
+    if (since) {
+      params.push(since);
+      whereSince = ` AND we.started_at >= $${params.length}::timestamptz`;
+    }
+    const rows = await this.dataSource.query(
+      `SELECT we.id, we.workflow_id, we.status, we.started_at, we.completed_at,
+              we.trigger_data, we.error_message, we.target_user_id,
+              w.name AS workflow_name,
+              u.full_name AS target_user_full_name
+       FROM public.workflow_executions we
+       JOIN public.workflows w ON w.id = we.workflow_id
+       LEFT JOIN public.users u ON u.id = we.target_user_id
+       WHERE we.tenant_id = $1 ${whereStatus} ${whereSince}
+       ORDER BY we.started_at DESC LIMIT $2`,
+      params,
+    );
+    return {
+      executions: rows.map((r: any) => ({
+        id: r.id,
+        workflowId: r.workflow_id,
+        workflowName: r.workflow_name,
+        status: r.status,
+        triggerData: r.trigger_data,
+        startedAt: r.started_at,
+        completedAt: r.completed_at,
+        errorMessage: r.error_message,
+        targetUserId: r.target_user_id,
+        targetUserFullName: r.target_user_full_name,
+      })),
+      total: rows.length,
+    };
+  }
+
   @Get('node-types')
   @ApiOperation({ summary: 'Get available node types for the workflow builder palette' })
   @ApiResponse({ status: 200, description: 'Node type registry' })
