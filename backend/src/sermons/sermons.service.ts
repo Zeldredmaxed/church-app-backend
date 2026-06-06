@@ -94,7 +94,7 @@ export class SermonsService {
   }
 
   async updateSermon(tenantId: string, id: string, dto: UpdateSermonDto) {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, userId } = this.getRlsContext();
 
     const setClauses: string[] = [];
     const params: any[] = [id, tenantId];
@@ -126,7 +126,15 @@ export class SermonsService {
     const sql = `UPDATE public.sermons SET ${setClauses.join(', ')} WHERE id = $1 AND tenant_id = $2 RETURNING *`;
     const rows = await queryRunner.query(sql, params);
     if (!rows.length) throw new NotFoundException('Sermon not found');
-    return this.mapSermon(rows[0]);
+    const updated = this.mapSermon(rows[0]);
+    await this.audit.log({
+      action: 'sermon.updated',
+      resourceType: 'sermon',
+      resourceId: id,
+      summary: `Admin updated sermon "${updated.title}"`,
+      metadata: { changedFields: Object.keys(dto), title: updated.title },
+    });
+    return updated;
   }
 
   async deleteSermon(tenantId: string, id: string) {

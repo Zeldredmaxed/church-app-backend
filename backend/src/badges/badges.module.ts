@@ -5,10 +5,12 @@ import { BadgesMemberController } from './badges-member.controller';
 import { BadgesService } from './badges.service';
 import { CacheService } from '../common/services/cache.service';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
     BullModule.registerQueue({ name: 'notifications' }),
+    AuditModule,
   ],
   controllers: [BadgesController, BadgesMemberController],
   providers: [BadgesService, CacheService, RlsContextInterceptor],

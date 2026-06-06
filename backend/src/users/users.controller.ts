@@ -6,6 +6,7 @@ import {
   Delete,
   Body,
   Param,
+  Req,
   ParseUUIDPipe,
   UseGuards,
   UseInterceptors,
@@ -13,6 +14,8 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import { Request } from 'express';
 import { UsersService } from './users.service';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
@@ -49,12 +52,16 @@ export class UsersController {
   }
 
   @Delete('me')
+  @Throttle({ default: { ttl: 86400000, limit: 3 } })
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Permanently delete account and all data (GDPR Right to Erasure)' })
+  @ApiOperation({ summary: 'Permanently delete account and all data (GDPR Right to Erasure, 3/day)' })
   @ApiResponse({ status: 200, description: 'Account deleted. All personal data erased.' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  deleteMe(@CurrentUser() user: SupabaseJwtPayload) {
-    return this.usersService.deleteMe(user.sub);
+  deleteMe(@CurrentUser() user: SupabaseJwtPayload, @Req() req: Request) {
+    const xff = req.headers['x-forwarded-for'];
+    const ip = (typeof xff === 'string' ? xff.split(',')[0].trim() : null) || req.ip || null;
+    const userAgent = (req.headers['user-agent'] as string) ?? null;
+    return this.usersService.deleteMe(user.sub, { ip, userAgent });
   }
 
   @Get('me/settings')
@@ -83,8 +90,9 @@ export class UsersController {
   }
 
   @Get('me/export')
+  @Throttle({ default: { ttl: 86400000, limit: 5 } })
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Export all personal data as JSON (GDPR Right of Access)' })
+  @ApiOperation({ summary: 'Export all personal data as JSON (GDPR Right of Access, 5/day)' })
   @ApiResponse({ status: 200, description: 'JSON dump of all user data across all tenants' })
   exportData(@CurrentUser() user: SupabaseJwtPayload) {
     return this.usersService.exportData(user.sub);

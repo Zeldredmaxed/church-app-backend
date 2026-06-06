@@ -180,10 +180,23 @@ export class UsersService {
    * Uses service-role DataSource (not RLS QueryRunner) because the deletion
    * must operate across tenant boundaries and cascade through all tables.
    */
-  async deleteMe(userId: string): Promise<{ deleted: true }> {
+  async deleteMe(
+    userId: string,
+    ctx?: { ip?: string | null; userAgent?: string | null },
+  ): Promise<{ deleted: true }> {
     this.logger.log(`Account deletion initiated for user ${userId}`);
 
-    // Step 1: Fetch tenant memberships for S3 cleanup scope
+    // Step 1: Fetch tenant memberships for S3 cleanup scope + audit log.
+    // We capture the user's identifiers BEFORE the cascade deletes them
+    // — once public.users is gone, we can't reconstruct email/name.
+    const [identity] = await this.dataSource.manager.query(
+      `SELECT email, full_name FROM public.users WHERE id = $1`,
+      [userId],
+    );
+    if (!identity) {
+      throw new NotFoundException('User not found');
+    }
+
     const memberships = await this.dataSource.manager.query(
       `SELECT tenant_id FROM public.tenant_memberships WHERE user_id = $1`,
       [userId],
@@ -192,7 +205,24 @@ export class UsersService {
       (m: { tenant_id: string }) => m.tenant_id,
     );
 
-    // Step 2: Delete S3 objects (best-effort — failures logged, not thrown)
+    // Step 2: Write the deletion log BEFORE the cascade. If anything
+    // after this fails, we still have the forensic record. GDPR Art. 30
+    // requires the controller to keep a record of erasure requests.
+    await this.dataSource.query(
+      `INSERT INTO public.account_deletion_log
+         (user_id, email, full_name, tenant_ids, ip_address, user_agent)
+       VALUES ($1, $2, $3, $4, $5::inet, $6)`,
+      [
+        userId,
+        identity.email,
+        identity.full_name,
+        tenantIds,
+        ctx?.ip ?? null,
+        ctx?.userAgent ?? null,
+      ],
+    );
+
+    // Step 3: Delete S3 objects (best-effort — failures logged, not thrown)
     if (tenantIds.length > 0) {
       const deletedCount = await this.mediaService.deleteUserObjects(
         tenantIds,
@@ -203,7 +233,7 @@ export class UsersService {
       );
     }
 
-    // Step 3: Delete from public.users.
+    // Step 4: Delete from public.users.
     // ON DELETE CASCADE removes: posts, comments, chat_messages, notifications,
     // follows, channel_members, chat_channels, tenant_memberships, invitations.
     // ON DELETE SET NULL on transactions.user_id preserves financial records.
@@ -218,7 +248,7 @@ export class UsersService {
 
     this.logger.log(`Deleted public.users row for user ${userId}`);
 
-    // Step 4: Delete from auth.users via Supabase Admin API.
+    // Step 5: Delete from auth.users via Supabase Admin API.
     // This revokes all sessions and prevents the user from logging in.
     const { error } = await this.supabaseAdmin.auth.admin.deleteUser(userId);
     if (error) {

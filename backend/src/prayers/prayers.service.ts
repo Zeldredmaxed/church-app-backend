@@ -1,14 +1,29 @@
 import { Injectable, NotFoundException, ForbiddenException, InternalServerErrorException } from '@nestjs/common';
+import { DataSource } from 'typeorm';
 import { rlsStorage } from '../common/storage/rls.storage';
 import { Prayer } from './entities/prayer.entity';
 import { CreatePrayerDto } from './dto/create-prayer.dto';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class PrayersService {
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly audit: AuditService,
+  ) {}
+
   private getRlsContext() {
     const ctx = rlsStorage.getStore();
     if (!ctx) throw new InternalServerErrorException('RLS context unavailable');
     return ctx;
+  }
+
+  private async actorName(userId: string): Promise<string> {
+    const [r] = await this.dataSource.query(
+      `SELECT full_name FROM public.users WHERE id = $1`,
+      [userId],
+    );
+    return r?.full_name ?? 'Admin';
   }
 
   async getPrayers(filter: 'all' | 'mine' | 'answered', userId: string, limit: number, cursor?: string) {
@@ -117,12 +132,13 @@ export class PrayersService {
     const { queryRunner, currentTenantId } = this.getRlsContext();
 
     const rows = await queryRunner.query(
-      `SELECT p.author_id FROM public.prayers p WHERE p.id = $1`,
+      `SELECT p.author_id, p.content, p.is_anonymous FROM public.prayers p WHERE p.id = $1`,
       [prayerId],
     );
     if (!rows.length) throw new NotFoundException('Prayer not found');
+    const before = rows[0];
 
-    const isAuthor = rows[0].author_id === userId;
+    const isAuthor = before.author_id === userId;
 
     if (!isAuthor) {
       // Check if user is an admin in the current tenant
@@ -136,6 +152,25 @@ export class PrayersService {
     }
 
     await queryRunner.manager.delete(Prayer, { id: prayerId });
+
+    // Audit when an admin removes someone else's prayer. Prayers can
+    // contain medical / marital / sensitive content — a compromised
+    // admin silently deleting them previously left no trail. Self-
+    // deletes are routine user actions and aren't audited.
+    if (!isAuthor) {
+      await this.audit.log({
+        action: 'prayer.deleted',
+        resourceType: 'prayer',
+        resourceId: prayerId,
+        targetUserId: before.author_id,
+        summary: `${await this.actorName(userId)} deleted a prayer by another member`,
+        metadata: {
+          authorId: before.author_id,
+          isAnonymous: before.is_anonymous,
+          contentPreview: (before.content ?? '').slice(0, 200),
+        },
+      });
+    }
   }
 
   private mapPrayer(r: any) {

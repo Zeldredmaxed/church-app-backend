@@ -296,6 +296,34 @@ export class MembershipsService {
       throw new NotFoundException('Member not found in this tenant');
     }
 
+    // GDPR/CCPA "right to know who accessed my data" — audit every
+    // admin/pastor view of someone else's profile-extras. Self-views are
+    // not audited (the user accessing their own data is not a moderation
+    // concern and would just create noise).
+    if (userId !== user.sub) {
+      // Fire-and-forget; do NOT block the response on audit write.
+      // RlsContextInterceptor guarantees the audit context is hot.
+      this.audit
+        .log({
+          action: 'member.profile_extras_viewed',
+          resourceType: 'user',
+          resourceId: userId,
+          targetUserId: userId,
+          summary: `${await this.resolveName(user.sub)} viewed extended profile of ${row.full_name ?? 'unknown'}`,
+          metadata: {
+            // The mobile/admin app reads every field in the response;
+            // mark which categories were sensitive (PRIVATE per the
+            // profile-extras spec) so a compliance review can filter.
+            viewedSensitive: true,
+            fields: [
+              'phone', 'phoneSecondary', 'address', 'dateOfBirth',
+              'children', 'emergencyContact', 'dietaryRestrictions',
+            ],
+          },
+        })
+        .catch(err => this.logger.warn(`Audit write failed: ${err.message}`));
+    }
+
     return {
       id: row.id,
       email: row.email,

@@ -4,6 +4,7 @@ import { Queue } from 'bullmq';
 import { DataSource } from 'typeorm';
 import { rlsStorage } from '../common/storage/rls.storage';
 import { CacheService } from '../common/services/cache.service';
+import { AuditService } from '../audit/audit.service';
 import { Badge } from './entities/badge.entity';
 import { CreateBadgeDto } from './dto/create-badge.dto';
 import { UpdateBadgeDto } from './dto/update-badge.dto';
@@ -156,8 +157,17 @@ export class BadgesService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly cache: CacheService,
+    private readonly audit: AuditService,
     @InjectQueue('notifications') private readonly notificationsQueue: Queue,
   ) {}
+
+  private async actorName(userId: string): Promise<string> {
+    const [r] = await this.dataSource.query(
+      `SELECT full_name FROM public.users WHERE id = $1`,
+      [userId],
+    );
+    return r?.full_name ?? 'Admin';
+  }
 
   private getRlsContext() {
     const ctx = rlsStorage.getStore();
@@ -243,7 +253,20 @@ export class BadgesService {
         displayOrder: dto.displayOrder ?? 0,
         createdBy: userId,
       });
-      return await queryRunner.manager.save(Badge, badge);
+      const saved = await queryRunner.manager.save(Badge, badge);
+      await this.audit.log({
+        action: 'badge.created',
+        resourceType: 'badge',
+        resourceId: saved.id,
+        summary: `${await this.actorName(userId)} created badge "${saved.name}"`,
+        metadata: {
+          name: saved.name,
+          tier: saved.tier,
+          category: saved.category,
+          autoAwardRule: saved.autoAwardRule,
+        },
+      });
+      return saved;
     } catch (err: any) {
       if (err.code === '23505') {
         throw new ConflictException('A badge with this name already exists');
@@ -253,7 +276,7 @@ export class BadgesService {
   }
 
   async updateBadge(id: string, dto: UpdateBadgeDto) {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, userId } = this.getRlsContext();
     const updates: any = {};
     if (dto.name !== undefined) updates.name = dto.name;
     if (dto.description !== undefined) updates.description = dto.description;
@@ -267,35 +290,84 @@ export class BadgesService {
 
     const result = await queryRunner.manager.update(Badge, { id }, updates);
     if (result.affected === 0) throw new NotFoundException('Badge not found');
-    return queryRunner.manager.findOneOrFail(Badge, { where: { id } });
+    const after = await queryRunner.manager.findOneOrFail(Badge, { where: { id } });
+    await this.audit.log({
+      action: 'badge.updated',
+      resourceType: 'badge',
+      resourceId: id,
+      summary: `${await this.actorName(userId)} updated badge "${after.name}"`,
+      metadata: { changedFields: Object.keys(dto) },
+    });
+    return after;
   }
 
   async deleteBadge(id: string) {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, userId } = this.getRlsContext();
+    const before = await queryRunner.manager.findOne(Badge, { where: { id } });
     const result = await queryRunner.manager.delete(Badge, { id });
     if (result.affected === 0) throw new NotFoundException('Badge not found');
+    await this.audit.log({
+      action: 'badge.deleted',
+      resourceType: 'badge',
+      resourceId: id,
+      summary: `${await this.actorName(userId)} deleted badge "${before?.name ?? '(unknown)'}"`,
+      metadata: { name: before?.name, tier: before?.tier, category: before?.category },
+    });
   }
 
   async awardBadge(badgeId: string, dto: AwardBadgeDto, awardedBy: string) {
     const { queryRunner, currentTenantId } = this.getRlsContext();
+    let awardedCount = 0;
     for (const userId of dto.userIds) {
-      await queryRunner.query(
+      const inserted = await queryRunner.query(
         `INSERT INTO public.member_badges (badge_id, user_id, tenant_id, awarded_by, awarded_reason)
          VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (badge_id, user_id) DO NOTHING`,
+         ON CONFLICT (badge_id, user_id) DO NOTHING
+         RETURNING id`,
         [badgeId, userId, currentTenantId, awardedBy, dto.reason ?? null],
       );
+      if (inserted.length > 0) awardedCount++;
     }
-    return { awarded: dto.userIds.length };
+    if (awardedCount > 0) {
+      const [badge] = await this.dataSource.query(
+        `SELECT name FROM public.badges WHERE id = $1`,
+        [badgeId],
+      );
+      await this.audit.log({
+        action: 'badge.awarded',
+        resourceType: 'badge',
+        resourceId: badgeId,
+        summary: `${await this.actorName(awardedBy)} manually awarded "${badge?.name ?? 'badge'}" to ${awardedCount} member(s)`,
+        metadata: {
+          badgeName: badge?.name,
+          recipientCount: awardedCount,
+          recipientIds: dto.userIds,
+          reason: dto.reason ?? null,
+        },
+      });
+    }
+    return { awarded: awardedCount, requested: dto.userIds.length };
   }
 
   async revokeBadge(badgeId: string, userId: string) {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, userId: actorId } = this.getRlsContext();
     const result = await queryRunner.query(
       `DELETE FROM public.member_badges WHERE badge_id = $1 AND user_id = $2 RETURNING id`,
       [badgeId, userId],
     );
     if (result.length === 0) throw new NotFoundException('Badge assignment not found');
+    const [badge] = await this.dataSource.query(
+      `SELECT name FROM public.badges WHERE id = $1`,
+      [badgeId],
+    );
+    await this.audit.log({
+      action: 'badge.revoked',
+      resourceType: 'badge',
+      resourceId: badgeId,
+      targetUserId: userId,
+      summary: `${await this.actorName(actorId)} revoked "${badge?.name ?? 'badge'}" from a member`,
+      metadata: { badgeName: badge?.name, fromUserId: userId },
+    });
   }
 
   async getMemberBadges(userId: string) {
