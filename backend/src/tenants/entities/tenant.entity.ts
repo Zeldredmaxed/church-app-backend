@@ -86,6 +86,15 @@ export class Tenant {
   @Column({ type: 'boolean', name: 'is_guest', default: false })
   isGuest: boolean;
 
+  /**
+   * IANA timezone for the church (e.g. "America/Los_Angeles"). Used to
+   * bucket check-ins by local-day for attendance streaks and leaderboard
+   * "days active this week" so a Pacific-time Sunday 6pm check-in doesn't
+   * land on Monday UTC. Defaults to America/New_York for back-compat.
+   */
+  @Column({ type: 'text', default: 'America/New_York' })
+  timezone: string;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }

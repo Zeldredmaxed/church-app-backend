@@ -514,8 +514,12 @@ export class BadgesService {
 
         case 'attendance_streak': {
           const rows = await queryRunner.query(
-            `SELECT DISTINCT DATE(checked_in_at) AS check_date
-             FROM public.check_ins WHERE user_id = $1 AND tenant_id = $2
+            // Bucket by tenant local time so a Sunday 6pm Pacific check-in
+            // doesn't fall on Monday UTC and break the streak (migration 077).
+            `SELECT DISTINCT (ci.checked_in_at AT TIME ZONE t.timezone)::date AS check_date
+             FROM public.check_ins ci
+             JOIN public.tenants t ON t.id = ci.tenant_id
+             WHERE ci.user_id = $1 AND ci.tenant_id = $2
              ORDER BY check_date DESC`,
             [userId, tenantId],
           );

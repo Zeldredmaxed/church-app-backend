@@ -492,11 +492,17 @@ export class LeaderboardService {
     const distance = this.haversineDistance(lat, lng, config.latitude, config.longitude);
     const distanceRounded = Math.round(distance);
 
-    // 5. Check for duplicate (1 geo check-in per user per day)
+    // 5. Check for duplicate (1 geo check-in per user per local day).
+    // Uses the tenant's IANA timezone so a Pacific-time 6pm Sunday
+    // check-in registers as Sunday, not Monday UTC (migration 077).
+    // The unique partial index uniq_checkin_per_user_day_no_service is
+    // the DB-level backstop; this check is the friendly UX path.
     const dupeRows: any[] = await this.dataSource.query(
-      `SELECT id FROM public.check_ins
-       WHERE tenant_id = $1 AND user_id = $2 AND check_in_type = 'geo'
-         AND checked_in_at::date = CURRENT_DATE
+      `SELECT 1 FROM public.check_ins ci
+       JOIN public.tenants t ON t.id = ci.tenant_id
+       WHERE ci.tenant_id = $1 AND ci.user_id = $2 AND ci.check_in_type = 'geo'
+         AND (ci.checked_in_at AT TIME ZONE t.timezone)::date
+             = (now() AT TIME ZONE t.timezone)::date
        LIMIT 1`,
       [tenantId, userId],
     );
