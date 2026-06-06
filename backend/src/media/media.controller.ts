@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { DataSource } from 'typeorm';
@@ -13,6 +14,7 @@ import { MediaService } from './media.service';
 import { MuxService } from './mux.service';
 import { PresignedUrlDto } from './dto/presigned-url.dto';
 import { MuxUploadDto } from './dto/mux-upload.dto';
+import { FinalizeImageDto } from './dto/finalize-image.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -68,6 +70,39 @@ export class MediaController {
     );
 
     return result;
+  }
+
+  @Post('finalize-image')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Server-side EXIF strip + aspect probe after a presigned-URL upload',
+    description:
+      'Mobile pattern: PUT bytes to the presigned URL → call this endpoint with the returned fileKey. ' +
+      'Backend GETs from S3, runs the image through sharp (re-encode strips all EXIF/IPTC/XMP, including GPS), ' +
+      'PUTs the cleaned bytes back to the same key, returns the public URL + mediaAspect ratio. ' +
+      'Idempotent — calling twice on a clean image is a no-op aside from the round-trip cost.',
+  })
+  @ApiResponse({ status: 200, description: '{ url, mediaAspect, bytes }' })
+  @ApiResponse({ status: 400, description: 'fileKey missing or object not found' })
+  @ApiResponse({ status: 403, description: 'fileKey does not belong to the caller' })
+  async finalizeImage(
+    @Body() dto: FinalizeImageDto,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    const tenantId = user.app_metadata?.current_tenant_id;
+    if (!tenantId) throw new BadRequestException('No tenant context');
+
+    // Path-traversal + ownership check. Regex on DTO blocks the
+    // obviously-malformed prefix shape; this verifies the prefix
+    // matches the caller's own tenant+user namespace. Without this an
+    // authenticated guest user could pass any tenant's key and DoS
+    // their images via the sharp round-trip.
+    const expectedPrefix = `tenants/${tenantId}/users/${user.sub}/`;
+    if (!dto.fileKey.startsWith(expectedPrefix) || dto.fileKey.includes('..')) {
+      throw new ForbiddenException('fileKey not owned by caller');
+    }
+
+    return this.mediaService.finalizeImage(dto.fileKey);
   }
 
   @Post('mux-upload')

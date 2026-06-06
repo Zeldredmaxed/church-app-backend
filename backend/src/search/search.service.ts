@@ -6,6 +6,9 @@ export interface PostSearchResult {
   content: string;
   mediaType: string;
   mediaUrl: string | null;
+  videoMuxPlaybackId: string | null;
+  mediaAspect: number | null;
+  transcodeStatus: 'pending' | 'ready' | 'failed' | null;
   visibility: string;
   createdAt: Date;
   likeCount: number;
@@ -64,10 +67,13 @@ export class SearchService {
       SELECT
         p.id,
         p.content,
-        p.media_type    AS "mediaType",
-        p.media_url     AS "mediaUrl",
+        p.media_type             AS "mediaType",
+        p.media_url              AS "mediaUrl",
+        p.video_mux_playback_id  AS "videoMuxPlaybackId",
+        p.media_aspect           AS "mediaAspect",
+        p.transcode_status       AS "transcodeStatus",
         p.visibility,
-        p.created_at    AS "createdAt",
+        p.created_at             AS "createdAt",
         u.id            AS author_id,
         u.full_name     AS author_full_name,
         u.avatar_url    AS author_avatar_url,
@@ -105,6 +111,9 @@ export class SearchService {
       content: row.content,
       mediaType: row.mediaType,
       mediaUrl: row.mediaUrl,
+      videoMuxPlaybackId: row.videoMuxPlaybackId ?? null,
+      mediaAspect: row.mediaAspect ?? null,
+      transcodeStatus: row.transcodeStatus ?? null,
       visibility: row.visibility,
       createdAt: row.createdAt,
       likeCount: Number(row.like_count),

@@ -12,6 +12,7 @@ import {
   UseInterceptors,
   HttpCode,
   HttpStatus,
+  BadRequestException,
 } from '@nestjs/common';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
@@ -19,7 +20,7 @@ import { IsString, IsOptional, IsBoolean, IsUUID, IsIn } from 'class-validator';
 import { NotificationsService } from './notifications.service';
 import { DeleteNotificationsDto } from './dto/delete-notifications.dto';
 import { GetNotificationsDto } from './dto/get-notifications.dto';
-import { NOTIFICATION_CATEGORIES, NOTIFICATION_TYPE_KEYS } from './notifications.types';
+import { NOTIFICATION_TYPE_KEYS } from './notifications.types';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -128,17 +129,17 @@ export class NotificationsController {
 
   @Get('categories')
   @ApiOperation({
-    summary: 'Notification type catalog for the preferences screen',
+    summary: 'Notification type catalog merged with the caller\'s current toggle state',
     description:
-      'Returns the canonical list of notification types with labels, grouping, and channel defaults. The mobile preferences UI should render from this list (do NOT hardcode types client-side).',
+      'Returns one entry per notification type with both the catalog metadata (label, group, channel defaults) AND the caller\'s currently-stored toggle state (currentPushEnabled, currentInAppEnabled, currentEmailEnabled). When the caller has never explicitly toggled a type, the current* fields fall back to the catalog defaults so the mobile renders without a separate merge pass.',
   })
   @ApiResponse({
     status: 200,
     description:
-      '{ categories: [{ key, label, description, group, defaultPush, defaultEmail, defaultSms }] }',
+      '{ categories: [{ key, label, description, group, defaultPush, defaultEmail, defaultSms, currentPushEnabled, currentInAppEnabled, currentEmailEnabled }] }',
   })
-  getCategories() {
-    return { categories: NOTIFICATION_CATEGORIES };
+  async getCategories(@CurrentUser() user: SupabaseJwtPayload) {
+    return this.notificationsService.getCategoriesWithPreferences(user.sub);
   }
 
   @Get('preferences')
@@ -232,6 +233,26 @@ export class NotificationsController {
     @Body() dto: BroadcastDto,
   ) {
     return this.notificationsService.broadcast(user.sub, dto.title, dto.body, dto.tenantId);
+  }
+
+  @Post('broadcast/:broadcastId/opened')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Record that the caller opened a broadcast push (fire-and-forget)',
+    description:
+      'Mobile calls this when the user taps a push whose data.broadcastId is present. Idempotent — second call by the same (broadcast, user) is a no-op. Increments broadcast_history.read_count exactly once per recipient via DB trigger.',
+  })
+  @ApiResponse({ status: 204, description: 'Recorded (or already recorded — same effect)' })
+  @ApiResponse({ status: 404, description: 'Unknown broadcastId' })
+  async recordBroadcastOpen(
+    @Param('broadcastId', ParseUUIDPipe) broadcastId: string,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    const tenantId = user.app_metadata?.current_tenant_id;
+    if (!tenantId) {
+      throw new BadRequestException('No tenant context');
+    }
+    return this.notificationsService.recordBroadcastOpen(broadcastId, user.sub, tenantId);
   }
 
   @Get('broadcasts/history')

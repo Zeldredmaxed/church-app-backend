@@ -7,12 +7,27 @@ import {
 import { ConfigService } from '@nestjs/config';
 import {
   PutObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   DeleteObjectsCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { PresignedUrlDto } from './dto/presigned-url.dto';
+import sharp from 'sharp';
+
+// Module-init sharp caps. Without these a single 12MP photo (~60-80MB
+// decompressed RGBA) on Render's 512MB Starter OOMs at ~4 concurrent.
+// cache(false): disables libvips operation cache — saves RSS.
+// concurrency(1): caps libvips internal threads to 1; we handle
+// per-request concurrency at the HTTP layer so libvips's fan-out is
+// just wasted RAM.
+sharp.cache(false);
+sharp.concurrency(1);
+
+const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
+const MAX_IMAGE_PIXELS = 25_000_000;
 
 /** Strips everything except alphanumeric, hyphens, underscores, and dots. */
 function sanitizeFilename(raw: string): string {
@@ -174,5 +189,75 @@ export class MediaService {
     }
 
     return totalDeleted;
+  }
+
+  /**
+   * Server-side EXIF strip + aspect-ratio probe. The mobile uploads
+   * images directly to S3 via the presigned URL, so the server never
+   * sees the bytes in flight; without this step the EXIF GPS metadata
+   * the OS attached at capture time would survive in S3 and leak in
+   * every downstream consumer.
+   *
+   * Flow:
+   *   1. Mobile PUTs image bytes to the presigned URL → S3
+   *   2. Mobile calls POST /api/media/finalize-image with the fileKey
+   *   3. This method GETs the object, runs through sharp (re-encode →
+   *      strips EXIF/IPTC/XMP), re-uploads to the same key, returns
+   *      the public URL + media aspect ratio.
+   *
+   * sharp's default behavior IS to strip metadata on re-encode (you have
+   * to opt-IN with .withMetadata() to preserve it). We just call .rotate()
+   * which respects orientation EXIF then drops it. ~50ms per image at
+   * typical mobile-photo sizes.
+   */
+  async finalizeImage(fileKey: string): Promise<{ url: string; mediaAspect: number; bytes: number }> {
+    const s3 = this.ensureS3();
+
+    // HEAD first — refuse anything over 15MB BEFORE we GET the bytes.
+    // Without this a malicious upload of e.g. 500MB would be fully
+    // streamed into memory before sharp ever sees it.
+    const head = await s3.send(new HeadObjectCommand({ Bucket: this.bucket, Key: fileKey }));
+    if (!head.ContentLength) {
+      throw new BadRequestException('Object not found or empty');
+    }
+    if (head.ContentLength > MAX_IMAGE_BYTES) {
+      throw new BadRequestException(
+        `Image too large: ${head.ContentLength} bytes exceeds ${MAX_IMAGE_BYTES} byte cap`,
+      );
+    }
+
+    const get = await s3.send(new GetObjectCommand({ Bucket: this.bucket, Key: fileKey }));
+    if (!get.Body) throw new BadRequestException('Object not found');
+
+    // Stream → buffer. AWS SDK v3 streams are AsyncIterable.
+    const chunks: Buffer[] = [];
+    for await (const chunk of get.Body as any) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    const inputBuffer = Buffer.concat(chunks);
+
+    // .rotate() reads + drops EXIF orientation; .toBuffer() re-encodes
+    // and (because we don't call .withMetadata()) drops all metadata
+    // including GPS, camera-make/model, software, original-date, etc.
+    // limitInputPixels caps decompressed pixel count — defends against
+    // small files declaring absurd dimensions (decompression bomb).
+    const pipeline = sharp(inputBuffer, { limitInputPixels: MAX_IMAGE_PIXELS }).rotate();
+    const metadata = await pipeline.metadata();
+    const outputBuffer = await pipeline.toBuffer();
+    const mediaAspect =
+      metadata.width && metadata.height ? metadata.width / metadata.height : 1;
+
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: fileKey,
+        Body: outputBuffer,
+        ContentType: get.ContentType ?? 'image/jpeg',
+      }),
+    );
+
+    const region = this.config.get<string>('S3_REGION', 'us-east-1');
+    const url = `https://${this.bucket}.s3.${region}.amazonaws.com/${fileKey}`;
+    return { url, mediaAspect, bytes: outputBuffer.length };
   }
 }

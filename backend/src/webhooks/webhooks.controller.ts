@@ -192,6 +192,27 @@ export class WebhooksController {
     const playbackId = asset?.playback_ids?.[0]?.id;
     const passthrough = asset?.passthrough;
     const assetId = asset?.id;
+    // Mux delivers aspect_ratio as "w:h" string ("16:9") OR per-track
+    // max_width/max_height. safeAspect guards against zeros, NaN, and
+    // audio-only assets — anything that would make the ratio Infinity,
+    // NaN, or out of (0..100) returns null. The downstream UPDATE uses
+    // COALESCE so a null new value leaves the existing media_aspect
+    // alone (instead of tripping the migration-084 CHECK and crashing
+    // the webhook into Mux's retry loop).
+    const safeAspect = (a: any, b: any): number | null => {
+      const w = Number(a);
+      const h = Number(b);
+      if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
+      const r = w / h;
+      return r > 0 && r < 100 ? r : null;
+    };
+    const tracks = asset?.tracks ?? [];
+    const videoTrack = tracks.find((t: any) => t.type === 'video');
+    let mediaAspect: number | null = safeAspect(videoTrack?.max_width, videoTrack?.max_height);
+    if (mediaAspect === null && typeof asset?.aspect_ratio === 'string' && /^\d+:\d+$/.test(asset.aspect_ratio)) {
+      const [w, h] = asset.aspect_ratio.split(':');
+      mediaAspect = safeAspect(w, h);
+    }
 
     if (!playbackId) {
       this.logger.warn(`video.asset.ready missing playbackId: ${JSON.stringify({ assetId, passthrough })}`);
@@ -200,12 +221,16 @@ export class WebhooksController {
 
     // Legacy path: passthrough is the post id.
     if (passthrough) {
-      const updated = await this.dataSource.manager.update(
-        PostEntity,
-        { id: passthrough },
-        { videoMuxPlaybackId: playbackId },
+      const updated = await this.dataSource.query(
+        `UPDATE public.posts
+         SET video_mux_playback_id = $1,
+             transcode_status = 'ready',
+             media_aspect = COALESCE($3, media_aspect),
+             updated_at = now()
+         WHERE id = $2`,
+        [playbackId, passthrough, mediaAspect],
       );
-      if (updated.affected && updated.affected > 0) {
+      if (updated[1] > 0) {
         this.logger.log(`Legacy passthrough: updated post ${passthrough} with playback ${playbackId}`);
         return;
       }
@@ -218,7 +243,7 @@ export class WebhooksController {
         [playbackId, passthrough],
       );
       if (rows.length > 0) {
-        await this.propagatePlayback(playbackId, rows[0]);
+        await this.propagatePlayback(playbackId, mediaAspect, rows[0]);
         return;
       }
     }
@@ -233,7 +258,7 @@ export class WebhooksController {
         [playbackId, assetId],
       );
       if (rows.length > 0) {
-        await this.propagatePlayback(playbackId, rows[0]);
+        await this.propagatePlayback(playbackId, mediaAspect, rows[0]);
         return;
       }
     }
@@ -245,15 +270,20 @@ export class WebhooksController {
 
   private async propagatePlayback(
     playbackId: string,
+    mediaAspect: number | null,
     pending: { post_id: string | null; story_id: string | null },
   ) {
     if (pending.post_id) {
       await this.dataSource.query(
-        `UPDATE public.posts SET video_mux_playback_id = $1, updated_at = now()
+        `UPDATE public.posts
+         SET video_mux_playback_id = $1,
+             transcode_status = 'ready',
+             media_aspect = COALESCE($3, media_aspect),
+             updated_at = now()
          WHERE id = $2`,
-        [playbackId, pending.post_id],
+        [playbackId, pending.post_id, mediaAspect],
       );
-      this.logger.log(`Asset ready: post ${pending.post_id} → playback ${playbackId}`);
+      this.logger.log(`Asset ready: post ${pending.post_id} → playback ${playbackId} aspect ${mediaAspect}`);
     }
     if (pending.story_id) {
       await this.dataSource.query(
@@ -272,6 +302,43 @@ export class WebhooksController {
     const uploadId = data?.upload_id;
     const key = passthrough ?? uploadId ?? assetId;
     if (!key) return;
+
+    // Flip any post linked to this failed upload to transcode_status='failed'
+    // so mobile's polling loop terminates instead of waiting forever.
+    if (passthrough) {
+      const pending = await this.dataSource.query(
+        `SELECT post_id FROM public.pending_video_uploads WHERE id = $1`,
+        [passthrough],
+      );
+      if (pending[0]?.post_id) {
+        await this.dataSource.query(
+          `UPDATE public.posts SET transcode_status = 'failed' WHERE id = $1`,
+          [pending[0].post_id],
+        );
+      }
+    } else if (uploadId) {
+      const pending = await this.dataSource.query(
+        `SELECT post_id FROM public.pending_video_uploads WHERE mux_upload_id = $1`,
+        [uploadId],
+      );
+      if (pending[0]?.post_id) {
+        await this.dataSource.query(
+          `UPDATE public.posts SET transcode_status = 'failed' WHERE id = $1`,
+          [pending[0].post_id],
+        );
+      }
+    } else if (assetId) {
+      const pending = await this.dataSource.query(
+        `SELECT post_id FROM public.pending_video_uploads WHERE mux_asset_id = $1`,
+        [assetId],
+      );
+      if (pending[0]?.post_id) {
+        await this.dataSource.query(
+          `UPDATE public.posts SET transcode_status = 'failed' WHERE id = $1`,
+          [pending[0].post_id],
+        );
+      }
+    }
 
     const where = passthrough
       ? 'id = $1'

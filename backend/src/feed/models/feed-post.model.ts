@@ -44,6 +44,12 @@ export class FeedPost {
   @Field(() => String, { nullable: true })
   videoMuxPlaybackId: string | null;
 
+  @Field(() => Number, { nullable: true })
+  mediaAspect: number | null;
+
+  @Field(() => String, { nullable: true })
+  transcodeStatus: 'pending' | 'ready' | 'failed' | null;
+
   @Field()
   createdAt: Date;
 

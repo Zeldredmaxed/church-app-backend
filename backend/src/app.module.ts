@@ -35,6 +35,7 @@ import { GivingModule } from './giving/giving.module';
 import { HealthModule } from './health/health.module';
 import { CustomThrottlerGuard } from './common/guards/custom-throttler.guard';
 import { PresenceInterceptor } from './common/interceptors/presence.interceptor';
+import { TenantMismatchInterceptor } from './common/interceptors/tenant-mismatch.interceptor';
 import { SupabaseAdminModule } from './common/services/supabase-admin.service';
 import { Transaction } from './giving/entities/transaction.entity';
 import { Follow } from './follows/entities/follow.entity';
@@ -346,6 +347,14 @@ import { NotificationPreference } from './notifications/entities/notification-pr
     {
       provide: APP_INTERCEPTOR,
       useClass: PresenceInterceptor,
+    },
+    // Global tenant-drift check — refuses requests where the mobile's
+    // X-Active-Tenant-Id header disagrees with the JWT's tenant claim.
+    // Triggers the mobile force-logout flow. See the interceptor docs
+    // for the skip-list (auth, public, webhooks, etc.).
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: TenantMismatchInterceptor,
     },
   ],
 })

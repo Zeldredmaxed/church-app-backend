@@ -213,6 +213,37 @@ export class NotificationsService {
     };
   }
 
+  /**
+   * Catalog × user-preferences merge. Returns the full NOTIFICATION_CATEGORIES
+   * list with the caller's current toggle state filled in (falls back to
+   * defaultPush/Email/Sms when the user has never set a preference for that
+   * type). Replaces the two-round-trip pattern of categories() + preferences()
+   * on the mobile preferences screen.
+   */
+  async getCategoriesWithPreferences(userId: string) {
+    const prefs = await this.dataSource.query(
+      `SELECT type, push_enabled, in_app_enabled, email_enabled
+       FROM public.notification_preferences
+       WHERE user_id = $1`,
+      [userId],
+    );
+    const prefByType = new Map<string, any>(prefs.map((p: any) => [p.type, p]));
+
+    const { NOTIFICATION_CATEGORIES } = require('./notifications.types');
+    return {
+      categories: NOTIFICATION_CATEGORIES.map((c: any) => {
+        const userPref = prefByType.get(c.key);
+        return {
+          ...c,
+          currentPushEnabled: userPref?.push_enabled ?? c.defaultPush,
+          currentInAppEnabled: userPref?.in_app_enabled ?? true, // in-app default is true
+          currentEmailEnabled: userPref?.email_enabled ?? c.defaultEmail,
+          isUserSet: userPref !== undefined,
+        };
+      }),
+    };
+  }
+
   async updatePreference(
     userId: string,
     type: string,
@@ -332,6 +363,33 @@ export class NotificationsService {
     });
 
     return { sent: recipientIds.length, broadcastId };
+  }
+
+  /**
+   * Record that a user opened a broadcast push.
+   *
+   * Tenant-scoped: broadcastId must belong to the caller's current
+   * tenant. Without this check any authenticated user from any tenant
+   * could inflate another church's read_count by guessing broadcast IDs.
+   *
+   * Idempotent via the composite PK on (broadcast_id, user_id) — second
+   * call is a no-op. The DB trigger fires only on first INSERT so
+   * broadcast_history.read_count increments exactly once per recipient.
+   */
+  async recordBroadcastOpen(broadcastId: string, userId: string, tenantId: string): Promise<void> {
+    const [exists] = await this.dataSource.query(
+      `SELECT 1 FROM public.broadcast_history WHERE id = $1 AND tenant_id = $2`,
+      [broadcastId, tenantId],
+    );
+    if (!exists) {
+      throw new NotFoundException('Broadcast not found');
+    }
+    await this.dataSource.query(
+      `INSERT INTO public.broadcast_opens (broadcast_id, user_id)
+       VALUES ($1, $2)
+       ON CONFLICT (broadcast_id, user_id) DO NOTHING`,
+      [broadcastId, userId],
+    );
   }
 
   /**

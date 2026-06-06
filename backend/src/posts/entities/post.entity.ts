@@ -66,6 +66,25 @@ export class Post {
   videoCropRect: any | null;
 
   /**
+   * width / height of the source media. Image posts get this on upload
+   * (sharp probe in /media/finalize-image); video posts get it from the
+   * Mux asset.ready webhook. Lets the mobile feed pre-allocate the
+   * right cell height and avoid the first-paint layout shift.
+   * NULL for text posts or before transcode completes.
+   */
+  @Column({ type: 'real', nullable: true, name: 'media_aspect' })
+  mediaAspect: number | null;
+
+  /**
+   * Video transcode state. NULL for text/image posts. Updated by Mux
+   * webhooks (video.asset.ready → 'ready', video.asset.errored or
+   * video.upload.errored → 'failed'). 'pending' is the initial state
+   * set when a post is created with a videoMuxUploadId.
+   */
+  @Column({ type: 'text', nullable: true, name: 'transcode_status' })
+  transcodeStatus: 'pending' | 'ready' | 'failed' | null;
+
+  /**
    * Badge definition this post is celebrating ("Share to feed" from the
    * mobile AchievementModal). The post's content still carries the user's
    * caption; the renderer overlays a badge card based on this FK. ON

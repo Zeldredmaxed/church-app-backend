@@ -13,6 +13,8 @@ export interface FeedPost {
   mediaType: string;
   mediaUrl: string | null;
   videoMuxPlaybackId: string | null;
+  mediaAspect: number | null;
+  transcodeStatus: 'pending' | 'ready' | 'failed' | null;
   createdAt: Date;
   author: { id: string; fullName: string | null; avatarUrl: string | null };
   latestComment: {
@@ -202,6 +204,8 @@ export class FeedService implements OnModuleDestroy {
         mediaType: p.mediaType,
         mediaUrl: p.mediaUrl,
         videoMuxPlaybackId: p.videoMuxPlaybackId,
+        mediaAspect: p.mediaAspect ?? null,
+        transcodeStatus: p.transcodeStatus ?? null,
         createdAt: p.createdAt,
         author: author
           ? { id: author.id, fullName: author.fullName, avatarUrl: author.avatarUrl }

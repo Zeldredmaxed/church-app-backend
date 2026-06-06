@@ -112,9 +112,21 @@ export class CheckinController {
   @Get('checkin/child/:securityCode/verify')
   @UseGuards(RoleGuard)
   @RequiresRole('admin', 'pastor', 'volunteer')
-  @Throttle({ default: { ttl: 60000, limit: 10 } })
-  @ApiOperation({ summary: 'Verify a child pickup security code (staff only, rate-limited: 10/min)' })
+  // Per dashboard team beta ask #6 + adversarial review #10: limit is
+  // 60 attempts per (tenant, IP) per 5 min — generous enough for 3
+  // volunteers behind a single church-WiFi NAT during a 600-kid Sunday
+  // pickup (each pulls ~20 codes in that window). Brute-force defense
+  // lives in (a) the mobile-side 3-attempt per-code lockout and (b)
+  // the 8-char alphanumeric code space (~3.4B combos). 60/5min is a
+  // runaway-script guard, not the primary defense.
+  @Throttle({ default: { ttl: 300_000, limit: 60 } })
+  @ApiOperation({
+    summary: 'Verify a child pickup security code (staff only, rate-limited 60/5min)',
+    description:
+      'Returns 429 with Retry-After header when the per-(tenant,IP) limit is exceeded. Mobile reads Retry-After for its visible cooldown.',
+  })
   @ApiResponse({ status: 200, description: 'Verification result with child info + authorized pickups' })
+  @ApiResponse({ status: 429, description: 'Too many verify attempts — Retry-After header set' })
   verifyPickupCode(
     @Param('securityCode') securityCode: string,
     @CurrentUser() user: SupabaseJwtPayload,

@@ -26,6 +26,10 @@ export interface PostWithMeta {
   mediaUrl: string | null;
   videoMuxPlaybackId: string | null;
   videoCropRect: { x: number; y: number; width: number; height: number; aspectRatio?: number } | null;
+  /** width / height of the media. NULL for text posts or pre-transcode video. */
+  mediaAspect: number | null;
+  /** Video transcode state. NULL for non-video posts. */
+  transcodeStatus: 'pending' | 'ready' | 'failed' | null;
   /** Badge this post is celebrating ("Share to feed" from AchievementModal). NULL for normal posts. */
   sharedBadge: {
     id: string;
@@ -127,6 +131,15 @@ export class PostsService {
       }
     }
 
+    // Initial transcode state: 'ready' if Mux already finished by the
+    // time the post lands (rare race-win), 'pending' if we're still
+    // waiting for the webhook, NULL for non-video posts. Mux webhooks
+    // (handleAssetReady / handleAssetErrored) flip this to 'ready' or
+    // 'failed' as appropriate.
+    const initialTranscodeStatus: 'pending' | 'ready' | null = isVideoPost
+      ? resolvedPlaybackId ? 'ready' : 'pending'
+      : null;
+
     const post = queryRunner.manager.create(Post, {
       tenantId: currentTenantId,
       authorId,
@@ -135,6 +148,12 @@ export class PostsService {
       mediaUrl: dto.mediaUrl ?? null,
       videoMuxPlaybackId: resolvedPlaybackId,
       videoCropRect: dto.videoCropRect ?? null,
+      transcodeStatus: initialTranscodeStatus,
+      // mediaAspect is filled later by the Mux webhook (video) or by
+      // POST /api/media/finalize-image (image). Image posts that ship
+      // the field on create can pass it via dto.mediaAspect (TODO: add
+      // to DTO when client wants to send it inline).
+      mediaAspect: null,
       sharedBadgeId: dto.sharedBadgeId ?? null,
       visibility: dto.visibility ?? 'public',
     });
@@ -241,6 +260,9 @@ export class PostsService {
     }
 
     const isVideoPost = Boolean(resolvedPlaybackId || dto.videoMuxUploadId);
+    const initialTranscodeStatus: 'pending' | 'ready' | null = isVideoPost
+      ? resolvedPlaybackId ? 'ready' : 'pending'
+      : null;
 
     const post = this.dataSource.manager.create(Post, {
       tenantId: undefined as any, // NULL — global post
@@ -250,6 +272,8 @@ export class PostsService {
       mediaUrl: dto.mediaUrl ?? null,
       videoMuxPlaybackId: resolvedPlaybackId,
       videoCropRect: dto.videoCropRect ?? null,
+      transcodeStatus: initialTranscodeStatus,
+      mediaAspect: null,
       sharedBadgeId: dto.sharedBadgeId ?? null,
       // Global posts are always public — private global posts make no
       // sense (the feed-tag is "everyone's feed"). Force the value.
@@ -328,6 +352,7 @@ export class PostsService {
     const rows: Array<{
       id: string; tenant_id: string; author_id: string; content: string;
       media_type: string; media_url: string | null; video_mux_playback_id: string | null; video_crop_rect: any | null;
+      media_aspect: number | null; transcode_status: 'pending' | 'ready' | 'failed' | null;
       visibility: 'public' | 'private';
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
@@ -339,7 +364,7 @@ export class PostsService {
     }> = await queryRunner.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.shared_badge_id, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.media_aspect, p.transcode_status, p.shared_badge_id, p.visibility,
          p.created_at, p.updated_at,
          u.id         AS u_id,
          u.full_name  AS u_full_name,
@@ -402,6 +427,8 @@ export class PostsService {
       mediaUrl: r.media_url,
       videoMuxPlaybackId: r.video_mux_playback_id,
       videoCropRect: r.video_crop_rect ?? null,
+      mediaAspect: r.media_aspect ?? null,
+      transcodeStatus: r.transcode_status ?? null,
       sharedBadge: r.sb_id
         ? {
             id: r.sb_id,
@@ -446,7 +473,7 @@ export class PostsService {
     const rows = await queryRunner.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.shared_badge_id, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.media_aspect, p.transcode_status, p.shared_badge_id, p.visibility,
          p.created_at, p.updated_at,
          u.id         AS u_id,
          u.full_name  AS u_full_name,
@@ -488,6 +515,8 @@ export class PostsService {
       mediaUrl: r.media_url,
       videoMuxPlaybackId: r.video_mux_playback_id,
       videoCropRect: r.video_crop_rect ?? null,
+      mediaAspect: r.media_aspect ?? null,
+      transcodeStatus: r.transcode_status ?? null,
       sharedBadge: r.sb_id
         ? {
             id: r.sb_id,
@@ -657,6 +686,7 @@ export class PostsService {
     const rows: Array<{
       id: string; tenant_id: string; author_id: string; content: string;
       media_type: string; media_url: string | null; video_mux_playback_id: string | null; video_crop_rect: any | null;
+      media_aspect: number | null; transcode_status: 'pending' | 'ready' | 'failed' | null;
       visibility: 'public' | 'private';
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
@@ -668,7 +698,7 @@ export class PostsService {
     }> = await queryRunner.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.shared_badge_id, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.media_aspect, p.transcode_status, p.shared_badge_id, p.visibility,
          p.created_at, p.updated_at,
          u.id         AS u_id,
          u.full_name  AS u_full_name,
@@ -714,6 +744,8 @@ export class PostsService {
       mediaUrl: r.media_url,
       videoMuxPlaybackId: r.video_mux_playback_id,
       videoCropRect: r.video_crop_rect ?? null,
+      mediaAspect: r.media_aspect ?? null,
+      transcodeStatus: r.transcode_status ?? null,
       sharedBadge: r.sb_id
         ? {
             id: r.sb_id,
@@ -861,6 +893,7 @@ export class PostsService {
     const rows: Array<{
       id: string; tenant_id: string; author_id: string; content: string;
       media_type: string; media_url: string | null; video_mux_playback_id: string | null; video_crop_rect: any | null;
+      media_aspect: number | null; transcode_status: 'pending' | 'ready' | 'failed' | null;
       visibility: 'public' | 'private';
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
@@ -872,10 +905,12 @@ export class PostsService {
     }> = await queryRunner.query(
       `SELECT
          p.id, p.tenant_id, p.author_id, p.content,
-         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.shared_badge_id, p.visibility,
+         p.media_type, p.media_url, p.video_mux_playback_id, p.video_crop_rect, p.media_aspect, p.transcode_status, p.shared_badge_id, p.visibility,
          p.created_at, p.updated_at,
          u.id AS u_id, u.full_name AS u_full_name, u.avatar_url AS u_avatar_url,
          ut.id AS u_church_id, ut.name AS u_church_name, ut.brand_color AS u_church_brand_color,
+         sb.id AS sb_id, sb.name AS sb_name, sb.description AS sb_description,
+         sb.icon AS sb_icon, sb.tier AS sb_tier, sb.category AS sb_category, sb.color AS sb_color,
          p.like_count,
          p.comment_count,
          EXISTS(SELECT 1 FROM public.post_likes WHERE post_id = p.id AND user_id = $1) AS is_liked_by_me,
@@ -905,6 +940,8 @@ export class PostsService {
       mediaUrl: r.media_url,
       videoMuxPlaybackId: r.video_mux_playback_id,
       videoCropRect: r.video_crop_rect ?? null,
+      mediaAspect: r.media_aspect ?? null,
+      transcodeStatus: r.transcode_status ?? null,
       sharedBadge: r.sb_id
         ? {
             id: r.sb_id,
