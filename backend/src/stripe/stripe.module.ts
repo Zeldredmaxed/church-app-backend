@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { StripeService } from './stripe.service';
 import { StripeConnectController } from './stripe-connect.controller';
 import { StripeWebhookController } from './stripe-webhook.controller';
@@ -7,6 +7,7 @@ import { StripePaymentMethodsController } from './stripe-payment-methods.control
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { RoleGuard } from '../common/guards/role.guard';
 import { AuditModule } from '../audit/audit.module';
+import { TenantsModule } from '../tenants/tenants.module';
 
 /**
  * StripeModule — Stripe Connect onboarding + plan-upgrade checkout +
@@ -14,9 +15,14 @@ import { AuditModule } from '../audit/audit.module';
  *
  * The StripeService is exported so GivingModule can use the Stripe client
  * for creating PaymentIntents.
+ *
+ * forwardRef(TenantsModule): the new-tenant signup flow has a two-way
+ * dep — TenantsService creates the Stripe Checkout session, and the
+ * webhook fires back into TenantsService.completeSignup. forwardRef
+ * is the canonical NestJS pattern for this.
  */
 @Module({
-  imports: [AuditModule],
+  imports: [AuditModule, forwardRef(() => TenantsModule)],
   controllers: [
     StripeConnectController,
     StripeCheckoutController,

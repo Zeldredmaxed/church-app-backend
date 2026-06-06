@@ -15,6 +15,7 @@ import { Tenant } from '../tenants/entities/tenant.entity';
 import { CreateMembershipDto } from './dto/create-membership.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { UpdatePermissionsDto } from './dto/update-permissions.dto';
+import { ALL_PERMISSION_KEYS } from '../common/config/permissions.config';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 import { getTierFeatures, TIER_DISPLAY_NAMES, TierName } from '../common/config/tier-features.config';
 import { AuditService } from '../audit/audit.service';
@@ -812,14 +813,12 @@ export class MembershipsService {
   ): Promise<TenantMemberDetail> {
     const { queryRunner } = this.getRlsContext();
 
-    // Validate allowed permission keys
-    const allowedKeys = [
-      'manage_finance',
-      'manage_content',
-      'manage_members',
-      'manage_worship',
-      'view_analytics',
-    ];
+    // Validate against the catalog (migration 100). The DTO already
+    // enforces this via class-validator, but keeping a service-level
+    // check makes the error message friendlier for any path that
+    // bypasses DTO validation (e.g. seed scripts, future internal
+    // callers). Kept in sync with common/config/permissions.config.ts.
+    const allowedKeys = ALL_PERMISSION_KEYS as readonly string[];
     const invalidKeys = Object.keys(dto.permissions).filter(
       k => !allowedKeys.includes(k),
     );

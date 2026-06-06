@@ -396,6 +396,120 @@ export class StripeService {
   }
 
   /**
+   * Creates a Stripe Checkout subscription session for a BRAND-NEW
+   * church signup (migration 100). Distinguished from plan-upgrade
+   * Checkout via `metadata.flow = 'new_tenant_signup'`. The tenant and
+   * founding admin do NOT exist yet — they're materialized server-side
+   * in the checkout.session.completed webhook handler. Pending signup
+   * data rides along on metadata + customer fields.
+   *
+   * Critical Stripe config (per the spec):
+   *   - `payment_method_collection: 'always'`  — captures a card EVEN
+   *     when a 100%-off promo code is entered. Without this, a
+   *     6-months-free coupon completes checkout without ever asking
+   *     for a card → month 7 silently fails to charge → involuntary
+   *     churn on every first customer. THIS IS THE BUG TO AVOID.
+   *   - `allow_promotion_codes: true`  — surfaces the promo-code box
+   *     on the hosted checkout page so the pastor can enter the
+   *     6-months-free coupon you'll create in the Stripe dashboard.
+   *   - `customer_email`  — pre-fills the email field so the pastor
+   *     doesn't retype it.
+   */
+  async createNewTenantSignupSession(params: {
+    tier: 'standard' | 'premium' | 'enterprise';
+    amountCents: number;
+    tierLabel: string;
+    successUrl: string;
+    cancelUrl: string;
+    adminEmail: string;
+    /**
+     * Pending tenant + admin details. Flattened into individual
+     * metadata keys (rather than a single JSON-stringified blob) so
+     * each gets its own 500-char budget — a long street address won't
+     * silently break the signup at Stripe's metadata-value cap.
+     */
+    signupMetadata: {
+      churchName: string;
+      adminFullName: string;
+      adminEmail: string;
+      tier: string;
+      addressStreet: string;
+      addressCity: string;
+      addressState: string;
+      addressPostalCode: string;
+      addressCountry: string;
+    };
+    /** Idempotency key — required; held by Stripe for 24h. */
+    idempotencyKey: string;
+  }): Promise<Stripe.Checkout.Session> {
+    const stripe = this.ensureStripe();
+
+    // Search for an existing Stripe Customer for this email before
+    // letting Checkout create a new one. Without this, every repeat
+    // signup attempt (abandoned then retried, double-tap, etc.) spawns
+    // a fresh orphan Stripe Customer with the same email — polluting
+    // the dashboard and breaking saved-payment-method reuse on later
+    // plan-upgrade flows.
+    let customerId: string | undefined;
+    try {
+      const existing = await stripe.customers.list({
+        email: params.adminEmail,
+        limit: 1,
+      });
+      customerId = existing.data[0]?.id;
+    } catch (err: any) {
+      // Soft-fail the lookup — Stripe Checkout can fall back to
+      // customer_email and create a fresh one. Log and continue.
+      this.logger.warn(`Stripe customer lookup failed for ${params.adminEmail}: ${err.message}`);
+    }
+
+    return stripe.checkout.sessions.create(
+      {
+        mode: 'subscription',
+        ...(customerId
+          ? { customer: customerId }
+          : { customer_email: params.adminEmail }),
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency: 'usd',
+              recurring: { interval: 'month' },
+              unit_amount: params.amountCents,
+              product_data: { name: `Shepard ${params.tierLabel} Plan` },
+            },
+          },
+        ],
+        success_url: params.successUrl,
+        cancel_url: params.cancelUrl,
+        // CRITICAL: capture a card even at 100% off (6-month coupon).
+        payment_method_collection: 'always',
+        allow_promotion_codes: true,
+        metadata: {
+          flow: 'new_tenant_signup',
+          churchName: params.signupMetadata.churchName,
+          adminFullName: params.signupMetadata.adminFullName,
+          adminEmail: params.signupMetadata.adminEmail,
+          tier: params.signupMetadata.tier,
+          addressStreet: params.signupMetadata.addressStreet,
+          addressCity: params.signupMetadata.addressCity,
+          addressState: params.signupMetadata.addressState,
+          addressPostalCode: params.signupMetadata.addressPostalCode,
+          addressCountry: params.signupMetadata.addressCountry,
+        },
+        subscription_data: {
+          metadata: {
+            flow: 'new_tenant_signup',
+            churchName: params.signupMetadata.churchName,
+            tier: params.signupMetadata.tier,
+          },
+        },
+      },
+      { idempotencyKey: params.idempotencyKey },
+    );
+  }
+
+  /**
    * Verifies a Stripe webhook signature and returns the parsed event.
    * Throws Stripe.errors.StripeSignatureVerificationError on failure.
    */

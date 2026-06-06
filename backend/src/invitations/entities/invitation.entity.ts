@@ -39,6 +39,15 @@ export class Invitation {
   @Column({ type: 'timestamptz', nullable: true, name: 'accepted_at' })
   acceptedAt: Date | null;
 
+  /**
+   * Migration 100: NULL = active. Set to NOW() when an admin cancels
+   * the invitation via DELETE /api/invitations/:id. Cancelled invites
+   * are kept (not hard-deleted) for audit history; the accept flow
+   * gates on cancelled_at IS NULL.
+   */
+  @Column({ type: 'timestamptz', nullable: true, name: 'cancelled_at' })
+  cancelledAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }

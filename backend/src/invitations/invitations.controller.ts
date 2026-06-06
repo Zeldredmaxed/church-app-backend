@@ -2,13 +2,16 @@ import {
   Controller,
   Get,
   Post,
+  Delete,
   Body,
   Param,
+  ParseUUIDPipe,
   UseGuards,
   UseInterceptors,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
+import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { InvitationsService } from './invitations.service';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
@@ -56,5 +59,26 @@ export class InvitationsController {
     @CurrentUser() user: SupabaseJwtPayload,
   ) {
     return this.invitationsService.acceptInvitation(token, user);
+  }
+
+  /**
+   * Cancel a pending invitation (migration 100). admin/pastor only.
+   * Soft-cancel via cancelled_at; the row is preserved for audit
+   * history and the accept flow refuses to use cancelled tokens.
+   */
+  @Delete(':id')
+  @UseGuards(JwtAuthGuard, RoleGuard)
+  @UseInterceptors(RlsContextInterceptor)
+  @RequiresRole('admin', 'pastor')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Cancel a pending invitation (admin/pastor only)' })
+  @ApiResponse({ status: 200, description: '{ cancelled: true }' })
+  @ApiResponse({ status: 404, description: 'Invitation not found in this tenant' })
+  @ApiResponse({ status: 409, description: 'Invitation already accepted (cannot cancel)' })
+  cancelInvitation(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    return this.invitationsService.cancelInvitation(id, user);
   }
 }

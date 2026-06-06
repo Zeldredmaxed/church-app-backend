@@ -2,17 +2,21 @@ import {
   Controller,
   Post,
   Req,
+  Inject,
+  forwardRef,
   HttpCode,
   HttpStatus,
   UnauthorizedException,
   Logger,
   RawBodyRequest,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ApiTags, ApiOperation, ApiResponse, ApiExcludeEndpoint } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { DataSource } from 'typeorm';
 import { StripeService } from './stripe.service';
+import { TenantsService } from '../tenants/tenants.service';
 import { Transaction } from '../giving/entities/transaction.entity';
 import { FundraiserDonation } from '../fundraisers/entities/fundraiser-donation.entity';
 import { Tenant } from '../tenants/entities/tenant.entity';
@@ -27,6 +31,9 @@ export class StripeWebhookController {
   constructor(
     private readonly stripeService: StripeService,
     private readonly dataSource: DataSource,
+    private readonly config: ConfigService,
+    @Inject(forwardRef(() => TenantsService))
+    private readonly tenantsService: TenantsService,
   ) {}
 
   @Post('stripe')
@@ -172,6 +179,16 @@ export class StripeWebhookController {
 
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session;
+
+        // Dispatch by metadata.flow (migration 100).
+        //   'new_tenant_signup' → public paid signup → materialize tenant + admin
+        //   undefined           → existing plan-upgrade flow (back-compat)
+        const flow = session.metadata?.flow;
+        if (flow === 'new_tenant_signup') {
+          await this.handleNewTenantSignupCompletion(session);
+          break;
+        }
+
         const tenantId = session.metadata?.tenantId ?? session.client_reference_id ?? null;
         const targetTier = session.metadata?.targetTier as
           | 'standard'
@@ -327,5 +344,99 @@ export class StripeWebhookController {
     }
 
     return { received: true };
+  }
+
+  /**
+   * Handler for checkout.session.completed when metadata.flow ===
+   * 'new_tenant_signup' (migration 100). Materializes the tenant +
+   * founding admin from session metadata; idempotent via the
+   * tenant_signup_completions dedupe table (PK = stripe_session_id),
+   * so Stripe webhook retries return the same tenant without
+   * double-creation.
+   *
+   * Reads the session metadata for the pending tenant fields and
+   * delegates to TenantsService.completeSignup which does the heavy
+   * lifting (Supabase user create, tenant insert, founding admin
+   * membership, magic-link email).
+   */
+  private async handleNewTenantSignupCompletion(
+    session: Stripe.Checkout.Session,
+  ): Promise<void> {
+    const m = session.metadata ?? {};
+
+    // Defensive parse: any missing field is a schema drift between
+    // our Checkout creation and this handler. THROW (not return) so
+    // Stripe retries — silently ACKing 200 means the customer paid,
+    // their subscription is active, no tenant was created, and the
+    // only signal is a log line. Retry storm > stranded paying customer.
+    const required = [
+      'churchName', 'adminFullName', 'adminEmail', 'tier',
+      'addressStreet', 'addressCity', 'addressState', 'addressPostalCode',
+    ];
+    for (const k of required) {
+      if (!m[k]) {
+        const msg = `new_tenant_signup webhook missing metadata.${k} (session ${session.id})`;
+        this.logger.error(msg);
+        throw new Error(msg);
+      }
+    }
+
+    const address = {
+      street: m.addressStreet as string,
+      city: m.addressCity as string,
+      state: m.addressState as string,
+      postalCode: m.addressPostalCode as string,
+      country: (m.addressCountry as string) || 'US',
+    };
+
+    const sessionCustomerId =
+      typeof session.customer === 'string' ? session.customer : session.customer?.id ?? null;
+    const subscriptionId =
+      typeof session.subscription === 'string'
+        ? session.subscription
+        : session.subscription?.id ?? null;
+
+    if (!sessionCustomerId) {
+      const msg = `new_tenant_signup webhook: session ${session.id} has no customer id — refusing (cannot bill later)`;
+      this.logger.error(msg);
+      throw new Error(msg);
+    }
+
+    // welcomeBaseUrl → admin dashboard (where /welcome consumes the
+    // Supabase magic-link hash). PUBLIC_SITE_URL is the marketing site
+    // and would land the founding admin on a 404.
+    const welcomeBaseUrl =
+      this.config.get<string>('ADMIN_DASHBOARD_URL') ?? 'https://admin.shepard.love';
+
+    try {
+      const result = await this.tenantsService.completeSignup({
+        stripeSessionId: session.id,
+        stripeCustomerId: sessionCustomerId,
+        stripeSubscriptionId: subscriptionId,
+        churchName: m.churchName as string,
+        adminFullName: m.adminFullName as string,
+        adminEmail: m.adminEmail as string,
+        tier: m.tier as 'standard' | 'premium' | 'enterprise',
+        address,
+        welcomeBaseUrl,
+      });
+      if (result.alreadyCompleted) {
+        this.logger.log(
+          `new_tenant_signup webhook: session ${session.id} retry — tenant ${result.tenantId} already created`,
+        );
+      } else {
+        this.logger.log(
+          `new_tenant_signup webhook: created tenant ${result.tenantId} + admin ${result.adminUserId} for ${m.adminEmail}`,
+        );
+      }
+    } catch (err: any) {
+      // Don't ack the webhook on failure — Stripe will retry, and the
+      // dedupe row only writes on success, so the retry will actually
+      // run the create path again.
+      this.logger.error(
+        `new_tenant_signup webhook FAILED for session ${session.id}: ${err.message}`,
+      );
+      throw err;
+    }
   }
 }

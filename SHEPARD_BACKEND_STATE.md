@@ -4,9 +4,10 @@
 > **Status:** Pre-launch, beta on Android via Expo Go, first church client imminent
 > **Last updated:** 2026-06-06 (Faith Walks extensions — gating, points, medals, leaderboard, missed-day cron)
 > **Live backend:** `https://church-app-backend-27hc.onrender.com/api`
-> **Latest migration applied:** `099_bible_self_hosted.sql`
+> **Latest migration applied:** `100_first_customer_signup.sql`
 > **Migration 097:** `097_groups_auto_tag.sql` — applied (additive cols for upcoming groups feature, not yet wired in services)
 > **Migration 099:** `099_bible_self_hosted.sql` — applied + seeded with 7 PD translations (~218k verses)
+> **Migration 100:** `100_first_customer_signup.sql` — applied. Adds tenants.country, invitations.cancelled_at, tenant_signup_completions dedupe table.
 
 This document supersedes EVERY prior `*_PROMPT.md`, `*_REPLY*.md`,
 `*_FIXES.md`, and `FRONTEND_HANDOFF*.md`. Going forward, ANY change to
@@ -145,7 +146,9 @@ Mobile reads + writes from these endpoints. Admin team should still skim this se
 | `GET` | `/api/tenants/public` | Public — no auth — lightweight list for the church-finder. |
 | `GET` | `/api/tenants/search?q=` | Public — fuzzy search by name. |
 | `GET` | `/api/tenants/:id/features` | Tier features + `tenant` block: `{ id, name, slug, tier, tierDisplayName, campusName, parentTenantId, brandColor, isGuest }` |
-| `POST` | `/api/tenants/register` | Public — admin signup creates a new tenant. |
+| `POST` | `/api/tenants/register` | Public — invite-key admin signup (legacy). Creates tenant + admin in one shot. |
+| `POST` | `/api/tenants/signup` | **PUBLIC (migration 100)** — paid new-church signup. Body: `{ churchName, adminFullName, adminEmail, tier: standard\|premium\|enterprise, address: { street, city, state, postalCode, country? } }`. Returns `{ checkoutUrl }`. Stripe Checkout session uses `payment_method_collection: 'always'` (captures card even at 100% off) + `allow_promotion_codes: true`. Tenant + admin materialized server-side on `checkout.session.completed` webhook; magic-link login email sent on completion. Idempotent via `tenant_signup_completions` dedupe table. Throttled 10/min/IP. |
+| `PATCH` | `/api/tenants/:id` | **admin/pastor only (migration 100)**, tenant-clamped — caller can only update THEIR own tenant. Partial body: `{ name?, address?: { street?, city?, state?, postalCode?, country? }, brandColor?, timezone?, monthlyGivingGoalCents? }`. Returns updated `Tenant`. |
 | `POST` | `/api/tenants/:tenantId/join` | Self-join after signup (used by ChurchProfileScreen "Join Church" button). |
 | `GET` | `/api/tenants/:tenantId/branches` | Multi-site sub-tenants. |
 
@@ -639,6 +642,32 @@ Required roles (`@RequiresRole(...)`) per major surface:
 | `POST /api/giving/batch` | `admin`, `pastor`, `accountant` |
 
 Use the **highest privilege in each row** as your screen gate.
+
+### Permission catalog (migration 100)
+
+Server-recognized permission keys for `tenant_memberships.permissions` JSONB. `admin` + `pastor` roles bypass all permission checks; all other roles are gated by their explicit key set.
+
+`GET /api/permissions/catalog` (public, no auth) returns `{ permissions: Array<{ key, label }> }` — admin UI uses this to render the permission matrix without hardcoding. The 27 canonical keys (see `backend/src/common/config/permissions.config.ts`):
+
+People + groups: `manage_members`, `manage_groups`, `manage_care`, `manage_volunteers`, `manage_onboarding`
+Finance + commerce: `manage_finance`, `view_reports`, `manage_fundraisers`, `manage_shop`
+Engagement: `manage_events`, `manage_attendance`, `manage_checkin`, `manage_tasks`, `manage_communications`, `manage_challenges`, `manage_badges`, `manage_leaderboard`, `manage_sermons`, `manage_streams`
+Operations: `manage_facilities`, `manage_campuses`, `manage_workflows`
+Safety + governance: `manage_moderation`, `manage_chat_moderation`, `view_audit_log`, `manage_gdpr`
+Settings: `manage_settings`
+
+Existing `@Permissions(...)` enforcement covers `manage_finance` and `manage_members` (per pre-100 work). Broader per-controller enforcement sweep across the other 25 keys is incremental — most controllers today gate via `@RequiresRole('admin','pastor')` which excludes non-admin roles entirely. Granular permission gating becomes load-bearing when a tenant has non-admin staff roles (accountant, etc.) that need partial access. Track this work as a follow-up; do not block first-customer launch on it.
+
+### Invitations (migration 100)
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/invitations` | admin/pastor: list pending invitations for current tenant. Each row carries `isExpired`. |
+| `POST` | `/api/invitations` | admin/pastor: create + send invitation. Body: `{ email, role }`. Email delivered via Resend (subject "{InviterName} invited you to join {Church} on Shepard"). Accept link: `${PUBLIC_SITE_URL}/invite?token=...`. Token expires in 24h. |
+| `POST` | `/api/invitations/:token/accept` | Authenticated invitee: accept by token. Validates email-match, expires_at, accepted_at, and `cancelled_at` (new in 100 — cancelled invites return 410 Gone). On success: creates `tenant_memberships` row + marks invitation accepted. Invitee must call `/auth/switch-tenant` + `/auth/refresh` to activate the new context. |
+| `DELETE` | `/api/invitations/:id` | **admin/pastor (migration 100)**: soft-cancel pending invite via `cancelled_at`. Returns `{ cancelled: true }`. Idempotent. Cancelled invites become unusable for accept but are preserved for audit. |
+
+
 
 ## §2.2 Dashboard KPIs
 

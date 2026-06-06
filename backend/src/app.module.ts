@@ -37,6 +37,8 @@ import { CustomThrottlerGuard } from './common/guards/custom-throttler.guard';
 import { PresenceInterceptor } from './common/interceptors/presence.interceptor';
 import { TenantMismatchInterceptor } from './common/interceptors/tenant-mismatch.interceptor';
 import { SupabaseAdminModule } from './common/services/supabase-admin.service';
+import { EmailModule } from './common/services/email.service';
+import { PermissionsCatalogModule } from './common/permissions-catalog.module';
 import { Transaction } from './giving/entities/transaction.entity';
 import { Follow } from './follows/entities/follow.entity';
 import { ChatChannel } from './chat/entities/chat-channel.entity';
@@ -302,6 +304,8 @@ import { ChallengeTaskCompletion } from './challenges/entities/challenge-task-co
 
     ScheduleModule.forRoot(),
     SupabaseAdminModule,
+    EmailModule,
+    PermissionsCatalogModule,
     AuthModule,
     LegalModule,
     AttendanceModule,

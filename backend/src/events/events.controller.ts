@@ -38,27 +38,27 @@ export class EventsController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Create an event (admin: manage_content)' })
+  @ApiOperation({ summary: 'Create an event (admin: manage_events)' })
   createEvent(@Body() dto: CreateEventDto, @CurrentUser() user: SupabaseJwtPayload) {
     return this.eventsService.createEvent(dto, user.sub);
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update an event (admin: manage_content)' })
+  @ApiOperation({ summary: 'Update an event (admin: manage_events)' })
   updateEvent(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CreateEventDto) {
     return this.eventsService.updateEvent(id, dto);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Delete an event (admin: manage_content)' })
+  @ApiOperation({ summary: 'Delete an event (admin: manage_events)' })
   deleteEvent(@Param('id', ParseUUIDPipe) id: string) {
     return this.eventsService.deleteEvent(id);
   }
 
   @Post(':id/cancel')
   @ApiOperation({
-    summary: 'Cancel an event (admin: manage_content)',
+    summary: 'Cancel an event (admin: manage_events)',
     description:
       'Marks the event cancelled (keeps it visible so RSVPs see what happened) and notifies all "going"/"interested" attendees. Distinct from DELETE which removes the event entirely.',
   })

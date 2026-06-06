@@ -3,10 +3,14 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   InternalServerErrorException,
+  Inject,
   Logger,
+  forwardRef,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { createHash } from 'crypto';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseAdminService } from '../common/services/supabase-admin.service';
 import { rlsStorage } from '../common/storage/rls.storage';
@@ -16,9 +20,13 @@ import { RegistrationKey } from './entities/registration-key.entity';
 import { User } from '../users/entities/user.entity';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { RegisterChurchDto } from './dto/register-church.dto';
+import { TenantSignupDto } from './dto/signup.dto';
+import { UpdateTenantDto } from './dto/update-tenant.dto';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
-import { getTierFeatures, TierFeatures, TIER_DISPLAY_NAMES, TierName } from '../common/config/tier-features.config';
+import { getTierFeatures, TierFeatures, TIER_DISPLAY_NAMES, TIER_MONTHLY_PRICE_CENTS, TierName } from '../common/config/tier-features.config';
 import { CacheService } from '../common/services/cache.service';
+import { StripeService } from '../stripe/stripe.service';
+import { EmailService } from '../common/services/email.service';
 
 @Injectable()
 export class TenantsService {
@@ -29,6 +37,9 @@ export class TenantsService {
     private readonly dataSource: DataSource,
     private readonly supabaseAdmin: SupabaseAdminService,
     private readonly cache: CacheService,
+    @Inject(forwardRef(() => StripeService))
+    private readonly stripe: StripeService,
+    private readonly email: EmailService,
   ) {
     this.supabase = supabaseAdmin.client;
   }
@@ -196,12 +207,15 @@ export class TenantsService {
           userId,
           tenantId: savedTenant.id,
           role: 'admin',
+          // Admin role bypasses permission checks (see PermissionsGuard),
+          // so this object is informational. Keys aligned with the
+          // post-migration-100 catalog.
           permissions: {
             manage_finance: true,
-            manage_content: true,
+            manage_communications: true,
             manage_members: true,
-            manage_worship: true,
-            view_analytics: true,
+            manage_sermons: true,
+            view_reports: true,
           },
         });
         await manager.save(TenantMembership, membership);
@@ -485,4 +499,392 @@ export class TenantsService {
       })),
     };
   }
+
+  // ════════════════════ First-customer signup (migration 100) ════════════════════
+
+  /**
+   * Public new-church signup. Creates a Stripe Checkout subscription
+   * session and returns the hosted URL. The tenant + founding admin
+   * do NOT exist yet — they're materialized by completeSignup() below,
+   * which fires from the checkout.session.completed webhook. This
+   * means a customer who bails out mid-payment never creates an
+   * orphan tenant row.
+   *
+   * Pending signup data rides along on the Stripe session's metadata.
+   * Stripe metadata values are strings ≤ 500 chars each, so the
+   * address goes as a JSON-stringified blob.
+   */
+  async startSignup(dto: TenantSignupDto, urls: { successUrlBase: string; cancelUrlBase: string }): Promise<{ checkoutUrl: string }> {
+    // No pre-flight existing-user check here. The previous version called
+    // supabase.auth.admin.listUsers() which (a) breaks silently past the
+    // default 50-user pagination cap (silent dedup miss → infinite
+    // webhook retry storm at the 51st platform user), and (b) turned
+    // this public endpoint into a PII enumeration oracle via timing /
+    // Stripe error responses. completeSignup() handles the get-or-create
+    // path idempotently via direct SQL — that's where the lookup belongs.
+
+    const tier = dto.tier;
+    const amountCents = TIER_MONTHLY_PRICE_CENTS[tier];
+    const tierLabel = TIER_DISPLAY_NAMES[tier];
+
+    // success_url → admin dashboard (where the magic-link consumer lives)
+    // cancel_url → marketing site pricing page
+    const successUrl = `${urls.successUrlBase.replace(/\/$/, '')}/welcome?session_id={CHECKOUT_SESSION_ID}`;
+    const cancelUrl = `${urls.cancelUrlBase.replace(/\/$/, '')}/pricing?checkout=cancelled`;
+
+    // Deterministic idempotency key — Stripe holds these for 24h. A
+    // double-tap / network retry within the human-attempt window
+    // returns the same Checkout session instead of creating a second
+    // one. Keyed on the inputs that should uniquely identify ONE
+    // intent (admin email + tier + church name).
+    const idempotencyKey = createHash('sha256')
+      .update(`signup:${dto.adminEmail.toLowerCase()}:${tier}:${dto.churchName}`)
+      .digest('hex')
+      .slice(0, 40);
+
+    const session = await this.stripe.createNewTenantSignupSession({
+      tier,
+      amountCents,
+      tierLabel,
+      successUrl,
+      cancelUrl,
+      adminEmail: dto.adminEmail,
+      signupMetadata: {
+        churchName: dto.churchName,
+        adminFullName: dto.adminFullName,
+        adminEmail: dto.adminEmail,
+        tier,
+        addressStreet: dto.address.street,
+        addressCity: dto.address.city,
+        addressState: dto.address.state,
+        addressPostalCode: dto.address.postalCode,
+        addressCountry: dto.address.country ?? 'US',
+      },
+      idempotencyKey,
+    });
+
+    if (!session.url) {
+      throw new InternalServerErrorException('Stripe did not return a checkout URL');
+    }
+    this.logger.log(`startSignup: created session ${session.id} for ${dto.adminEmail}`);
+    return { checkoutUrl: session.url };
+  }
+
+  /**
+   * Called by the checkout.session.completed webhook when
+   * metadata.flow === 'new_tenant_signup'. Idempotent via the
+   * tenant_signup_completions dedupe table (PK = stripe_session_id):
+   * webhook retries return the same tenant/admin without
+   * double-creation.
+   *
+   * Steps:
+   *   1. Dedupe check (return early if this session already produced)
+   *   2. Create or reuse Supabase auth user for adminEmail
+   *   3. Insert tenant + founding admin membership
+   *   4. Stamp Stripe billing IDs onto the tenant
+   *   5. Insert dedupe row
+   *   6. Send magic-link login email
+   *
+   * Everything runs on the service-role connection (no JWT context —
+   * called from the webhook). RLS is bypassed; tenant_id is set
+   * explicitly from the new row's id.
+   */
+  async completeSignup(args: {
+    stripeSessionId: string;
+    stripeCustomerId: string;
+    stripeSubscriptionId: string | null;
+    churchName: string;
+    adminFullName: string;
+    adminEmail: string;
+    tier: 'standard' | 'premium' | 'enterprise';
+    address: { street: string; city: string; state: string; postalCode: string; country?: string };
+    welcomeBaseUrl: string;
+  }): Promise<{ tenantId: string; adminUserId: string; alreadyCompleted: boolean }> {
+    // 1. Dedupe — webhook retries.
+    const [existing] = await this.dataSource.query(
+      `SELECT tenant_id, admin_user_id FROM public.tenant_signup_completions WHERE stripe_session_id = $1`,
+      [args.stripeSessionId],
+    );
+    if (existing) {
+      this.logger.log(`completeSignup: session ${args.stripeSessionId} already completed → tenant ${existing.tenant_id}`);
+      return { tenantId: existing.tenant_id, adminUserId: existing.admin_user_id, alreadyCompleted: true };
+    }
+
+    // 2. Get-or-create Supabase auth user.
+    //
+    // Direct SQL on auth.users keyed by email (case-insensitive) — the
+    // previous version used supabase.auth.admin.listUsers() which is
+    // unpaginated and breaks at the 51st platform user (the SDK default
+    // page size). Service-role connection can query the auth schema
+    // directly; safer + O(1) with the auth.users email index.
+    const [existingAuth] = await this.dataSource.query(
+      `SELECT id FROM auth.users WHERE lower(email) = lower($1) LIMIT 1`,
+      [args.adminEmail],
+    );
+    let adminUserId: string;
+    if (existingAuth?.id) {
+      adminUserId = existingAuth.id;
+    } else {
+      const { data: created, error: createErr } = await this.supabase.auth.admin.createUser({
+        email: args.adminEmail,
+        email_confirm: true, // pre-confirmed; we vetted them via paid checkout
+        user_metadata: { full_name: args.adminFullName },
+      });
+      if (createErr || !created?.user) {
+        throw new InternalServerErrorException(`Failed to create Supabase user: ${createErr?.message}`);
+      }
+      adminUserId = created.user.id;
+    }
+
+    // 3. Insert tenant + public.users row + membership in a transaction.
+    //
+    // pg_advisory_xact_lock keyed on the session id hash serializes
+    // concurrent webhook deliveries for the SAME session. Stripe
+    // occasionally double-delivers within ~50ms; without this lock both
+    // deliveries pass the dedupe SELECT, both insert tenants, only one
+    // wins the dedupe PK, but BOTH tenant rows survive (orphan billing).
+    // pg_advisory_xact_lock auto-releases at txn end.
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    let tenantId: string;
+    try {
+      await queryRunner.query(
+        `SELECT pg_advisory_xact_lock(hashtext($1))`,
+        [args.stripeSessionId],
+      );
+
+      // Re-check dedupe INSIDE the lock — another worker may have just
+      // completed it. Return early to caller via thrown signal pattern.
+      const [recheck] = await queryRunner.query(
+        `SELECT tenant_id, admin_user_id FROM public.tenant_signup_completions
+         WHERE stripe_session_id = $1`,
+        [args.stripeSessionId],
+      );
+      if (recheck) {
+        await queryRunner.commitTransaction();
+        await queryRunner.release();
+        this.logger.log(
+          `completeSignup: session ${args.stripeSessionId} completed by concurrent worker → tenant ${recheck.tenant_id}`,
+        );
+        return { tenantId: recheck.tenant_id, adminUserId: recheck.admin_user_id, alreadyCompleted: true };
+      }
+
+      // public.users row (handle_new_user trigger may have already
+      // created it via the Supabase auth event; ON CONFLICT idempotent).
+      await queryRunner.query(
+        `INSERT INTO public.users (id, email, full_name)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (id) DO UPDATE SET full_name = COALESCE(EXCLUDED.full_name, public.users.full_name)`,
+        [adminUserId, args.adminEmail, args.adminFullName],
+      );
+
+      // Tenant.
+      const [tenantRow] = await queryRunner.query(
+        `INSERT INTO public.tenants (name, tier, address, city, state, zip, country, stripe_billing_customer_id, stripe_billing_subscription_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id`,
+        [
+          args.churchName,
+          args.tier,
+          args.address.street,
+          args.address.city,
+          args.address.state,
+          args.address.postalCode,
+          args.address.country ?? 'US',
+          args.stripeCustomerId,
+          args.stripeSubscriptionId,
+        ],
+      );
+      tenantId = tenantRow.id;
+
+      // Founding admin membership. DO NOTHING (not DO UPDATE) — the
+      // tenant was just created on the line above so a pre-existing
+      // membership is impossible by construction; the DO NOTHING guards
+      // against accidentally demoting a higher role if this ever gets
+      // re-entered via a code-path change.
+      await queryRunner.query(
+        `INSERT INTO public.tenant_memberships (tenant_id, user_id, role, permissions)
+         VALUES ($1, $2, 'admin', $3::jsonb)
+         ON CONFLICT (tenant_id, user_id) DO NOTHING`,
+        [tenantId, adminUserId, JSON.stringify({})],
+      );
+
+      // Dedupe row (PK enforces idempotency on the webhook).
+      await queryRunner.query(
+        `INSERT INTO public.tenant_signup_completions (stripe_session_id, tenant_id, admin_user_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (stripe_session_id) DO NOTHING`,
+        [args.stripeSessionId, tenantId, adminUserId],
+      );
+
+      await queryRunner.commitTransaction();
+    } catch (err) {
+      await queryRunner.rollbackTransaction();
+      throw err;
+    } finally {
+      await queryRunner.release();
+    }
+
+    // 4. Set current_tenant_id on the Supabase user so their first
+    // login lands in the new church without a switch-tenant call.
+    try {
+      await this.supabase.auth.admin.updateUserById(adminUserId, {
+        app_metadata: { current_tenant_id: tenantId },
+      });
+    } catch (err: any) {
+      this.logger.warn(`completeSignup: failed to set current_tenant_id for ${adminUserId}: ${err.message}`);
+      // Non-fatal — they can switch in-app.
+    }
+
+    // 5. Magic-link email. Non-blocking — failure doesn't roll back
+    // tenant creation (we just log; user can request a reset link).
+    //
+    // welcomeBaseUrl arrives as the ADMIN dashboard URL (not the
+    // marketing site). The webhook controller resolves this from
+    // ADMIN_DASHBOARD_URL env (with PUBLIC_SITE_URL as fallback).
+    // The dashboard must have a /welcome route that consumes the
+    // Supabase magic-link hash and lands the user on the home screen
+    // — coordinate with the admin team.
+    try {
+      const { data: linkData, error: linkErr } = await this.supabase.auth.admin.generateLink({
+        type: 'magiclink',
+        email: args.adminEmail,
+        options: {
+          redirectTo: `${args.welcomeBaseUrl.replace(/\/$/, '')}/welcome`,
+        },
+      });
+      if (linkErr || !linkData?.properties?.action_link) {
+        // Elevated from warn → error so it surfaces in alerting (Render
+        // log stream + future Sentry). A founding admin who never gets
+        // their welcome link is locked out with no recovery.
+        this.logger.error(
+          `completeSignup: magic-link generation FAILED for ${args.adminEmail} (tenant created but admin cannot log in): ${linkErr?.message}`,
+        );
+      } else {
+        const actionLink = linkData.properties.action_link;
+        // Defense-in-depth: any URL embedded in HTML must be both URL-
+        // validated and HTML-attribute-escaped. action_link comes from
+        // Supabase (currently safe) but we don't want a future change
+        // to make redirectTo admin-supplied and silently introduce XSS.
+        if (!actionLink.startsWith('https://')) {
+          this.logger.error(
+            `completeSignup: refusing non-https magic link for ${args.adminEmail}: ${actionLink.slice(0, 80)}`,
+          );
+        } else {
+          const escapedLink = escapeHtml(actionLink);
+          const html = `
+            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; margin: 0 auto;">
+              <h1 style="color: #1a1a1a; margin-bottom: 8px;">Welcome to Shepard, ${escapeHtml(args.adminFullName)}!</h1>
+              <p style="color: #555;">Your church <strong>${escapeHtml(args.churchName)}</strong> is all set up. Click the button below to sign in for the first time — no password needed.</p>
+              <p style="margin: 32px 0;">
+                <a href="${escapedLink}" style="background: #1a73e8; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600;">Sign in to Shepard</a>
+              </p>
+              <p style="color: #888; font-size: 13px;">If the button doesn't work, copy this link into your browser:<br><code style="word-break: break-all;">${escapedLink}</code></p>
+              <p style="color: #888; font-size: 13px; margin-top: 32px;">This link expires in 1 hour. If you didn't sign up, you can ignore this email.</p>
+            </div>
+          `;
+          const result = await this.email.send({
+            to: args.adminEmail,
+            subject: `Welcome to Shepard — sign in to ${args.churchName}`,
+            html,
+            text: `Welcome to Shepard, ${args.adminFullName}! Sign in here: ${actionLink}`,
+            tags: [{ name: 'kind', value: 'welcome_magic_link' }],
+          });
+          if (result.error || result.id === null) {
+            this.logger.error(
+              `completeSignup: welcome email send FAILED for ${args.adminEmail}: ${result.error ?? 'dry-run (RESEND_API_KEY missing?)'}`,
+            );
+          }
+        }
+      }
+    } catch (err: any) {
+      this.logger.error(`completeSignup: magic-link email exception: ${err.message}`);
+    }
+
+    this.logger.log(`completeSignup: tenant ${tenantId} + admin ${adminUserId} created from session ${args.stripeSessionId}`);
+    return { tenantId, adminUserId, alreadyCompleted: false };
+  }
+
+  // ════════════════════ Church profile editing (migration 100) ════════════════════
+
+  /**
+   * PATCH /api/tenants/:id — partial update of church profile fields.
+   * Caller is admin/pastor for THIS tenant (guarded at controller +
+   * verified against live DB membership below — JWT role can be stale
+   * for up to 1 hour after a membership change, so we don't trust it
+   * for destructive operations).
+   * Only the listed fields are updatable; everything else is ignored.
+   */
+  /** Standard RLS-context helper (matches other service patterns). */
+  private getRlsContext() {
+    const ctx = rlsStorage.getStore();
+    if (!ctx) throw new InternalServerErrorException('RLS context unavailable');
+    return ctx;
+  }
+
+  async updateTenant(tenantId: string, userId: string, dto: UpdateTenantDto): Promise<Tenant> {
+    const { queryRunner } = this.getRlsContext();
+
+    // Live DB role check — defense against a stale JWT carrying an
+    // admin/pastor role that was revoked in the meantime. The RLS
+    // policy on tenants.UPDATE also gates on role via subquery, so
+    // this is belt-and-suspenders, but it gives a cleaner 403 error
+    // than the RLS-driven "0 rows affected" path that surfaces as
+    // NotFoundException.
+    const [membership] = await queryRunner.query(
+      `SELECT role FROM public.tenant_memberships
+       WHERE tenant_id = $1 AND user_id = $2 AND role IN ('admin','pastor')
+       LIMIT 1`,
+      [tenantId, userId],
+    );
+    if (!membership) {
+      throw new ForbiddenException(
+        'You are not an admin or pastor of this tenant',
+      );
+    }
+
+    const updates: string[] = [];
+    const params: any[] = [];
+    let i = 1;
+    const push = (col: string, val: any) => {
+      updates.push(`${col} = $${i++}`);
+      params.push(val);
+    };
+
+    if (dto.name !== undefined) push('name', dto.name);
+    if (dto.address?.street !== undefined) push('address', dto.address.street);
+    if (dto.address?.city !== undefined) push('city', dto.address.city);
+    if (dto.address?.state !== undefined) push('state', dto.address.state);
+    if (dto.address?.postalCode !== undefined) push('zip', dto.address.postalCode);
+    if (dto.address?.country !== undefined) push('country', dto.address.country);
+    if (dto.brandColor !== undefined) push('brand_color', dto.brandColor);
+    if (dto.timezone !== undefined) push('timezone', dto.timezone);
+    if (dto.monthlyGivingGoalCents !== undefined) push('monthly_giving_goal_cents', dto.monthlyGivingGoalCents);
+
+    if (updates.length === 0) {
+      // Nothing to update — return current state rather than error.
+      return this.findOne(tenantId);
+    }
+
+    params.push(tenantId);
+    const [row] = await queryRunner.query(
+      `UPDATE public.tenants SET ${updates.join(', ')}
+       WHERE id = $${i}
+       RETURNING *`,
+      params,
+    );
+    if (!row) throw new NotFoundException('Tenant not found');
+    return row as Tenant;
+  }
+}
+
+/** Minimal HTML escape for email body interpolation. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }

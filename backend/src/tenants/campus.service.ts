@@ -127,12 +127,16 @@ export class CampusService {
         userId: creatingUserId,
         tenantId: saved.id,
         role: 'admin',
+        // Admin role bypasses permission checks (see PermissionsGuard),
+        // so this object is informational. Keys aligned with the
+        // post-migration-100 catalog (was: manage_content,
+        // manage_worship, view_analytics — legacy keys not in catalog).
         permissions: {
           manage_finance: true,
-          manage_content: true,
+          manage_communications: true,
           manage_members: true,
-          manage_worship: true,
-          view_analytics: true,
+          manage_sermons: true,
+          view_reports: true,
         },
       });
       await manager.save(TenantMembership, membership);

@@ -8,6 +8,7 @@ import {
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { DataSource, IsNull } from 'typeorm';
 import { randomBytes } from 'crypto';
 import { rlsStorage } from '../common/storage/rls.storage';
@@ -17,6 +18,7 @@ import { Tenant } from '../tenants/entities/tenant.entity';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 import { AuditService } from '../audit/audit.service';
+import { EmailService } from '../common/services/email.service';
 
 const INVITATION_TTL_HOURS = 24;
 
@@ -27,6 +29,8 @@ export class InvitationsService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
+    private readonly email: EmailService,
+    private readonly config: ConfigService,
   ) {}
 
   /**
@@ -39,7 +43,7 @@ export class InvitationsService {
     const now = new Date();
 
     const invitations = await queryRunner.manager.find(Invitation, {
-      where: { acceptedAt: IsNull() },
+      where: { acceptedAt: IsNull(), cancelledAt: IsNull() },
       order: { createdAt: 'DESC' },
     });
 
@@ -147,10 +151,42 @@ export class InvitationsService {
       `Invitation created: ${saved.id} for ${dto.email} in tenant ${currentTenantId}`,
     );
 
-    // Phase 2 TODO: enqueue BullMQ 'notifications' job to send the invitation email.
-    // The job should include: recipientEmail, invitationToken, tenantName, role, expiresAt.
-    // The token must ONLY travel via email — remove it from the return value below.
-    // await this.notificationsQueue.add('INVITATION_EMAIL', { token, email: dto.email, ... });
+    // Migration 100: send the invitation email via Resend. Best-effort —
+    // a delivery failure is logged but doesn't roll back the persisted
+    // invitation row (admin can re-send by deleting + re-creating).
+    try {
+      const [tenant] = await this.dataSource.query(
+        `SELECT name FROM public.tenants WHERE id = $1`,
+        [currentTenantId],
+      );
+      const tenantName = tenant?.name ?? 'a Shepard church';
+      const inviterName = actor?.full_name ?? 'A pastor';
+      const baseUrl = this.config.get<string>('PUBLIC_SITE_URL') ?? 'https://shepard.love';
+      const acceptUrl = `${baseUrl.replace(/\/$/, '')}/invite?token=${encodeURIComponent(token)}`;
+      const html = `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; margin: 0 auto;">
+          <h1 style="color: #1a1a1a; margin-bottom: 8px;">You're invited to ${escapeHtml(tenantName)}</h1>
+          <p style="color: #555;">${escapeHtml(inviterName)} invited you to join <strong>${escapeHtml(tenantName)}</strong> on Shepard as <strong>${escapeHtml(dto.role)}</strong>.</p>
+          <p style="margin: 32px 0;">
+            <a href="${acceptUrl}" style="background: #1a73e8; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600;">Accept invitation</a>
+          </p>
+          <p style="color: #888; font-size: 13px;">If the button doesn't work, copy this link into your browser:<br><code style="word-break: break-all;">${acceptUrl}</code></p>
+          <p style="color: #888; font-size: 13px; margin-top: 32px;">This invitation expires ${expiresAt.toUTCString()}. If you weren't expecting this, you can ignore the email.</p>
+        </div>
+      `;
+      await this.email.send({
+        to: dto.email,
+        subject: `${inviterName} invited you to join ${tenantName} on Shepard`,
+        html,
+        text: `${inviterName} invited you to join ${tenantName} on Shepard as ${dto.role}. Accept: ${acceptUrl}`,
+        tags: [
+          { name: 'kind', value: 'invitation' },
+          { name: 'tenant_id', value: currentTenantId },
+        ],
+      });
+    } catch (err: any) {
+      this.logger.warn(`Invitation email send failed for ${dto.email}: ${err.message}`);
+    }
 
     // Strip the secret token from the response in production.
     // In development, include it for testing without an email service.
@@ -159,6 +195,56 @@ export class InvitationsService {
       return safeResponse as Invitation;
     }
     return saved;
+  }
+
+  /**
+   * Cancel a pending invitation (migration 100). Soft-cancel via
+   * UPDATE cancelled_at = now() so the audit trail survives. The
+   * accept flow gates on cancelled_at IS NULL, so cancelled invites
+   * become unusable.
+   *
+   * admin/pastor only (RLS on invitations enforces tenant scoping at
+   * the controller layer; this method just confirms the row exists
+   * within the caller's tenant). Idempotent — re-cancelling a
+   * cancelled invite is a no-op.
+   */
+  async cancelInvitation(invitationId: string, requestingUser: SupabaseJwtPayload): Promise<{ cancelled: true }> {
+    const { queryRunner, currentTenantId } = this.getRlsContext();
+
+    const [row] = await queryRunner.query(
+      `SELECT id, email, role, accepted_at, cancelled_at
+       FROM public.invitations
+       WHERE id = $1 AND tenant_id = $2`,
+      [invitationId, currentTenantId],
+    );
+    if (!row) throw new NotFoundException('Invitation not found');
+    if (row.accepted_at) {
+      throw new ConflictException('Cannot cancel an already-accepted invitation');
+    }
+
+    // Idempotent — if already cancelled, return success without re-writing.
+    if (row.cancelled_at) return { cancelled: true };
+
+    await queryRunner.query(
+      `UPDATE public.invitations SET cancelled_at = now() WHERE id = $1`,
+      [invitationId],
+    );
+
+    // Audit row so "we cancelled this person's invite" is in the trail.
+    const [actor] = await queryRunner.query(
+      `SELECT full_name FROM public.users WHERE id = $1`,
+      [requestingUser.sub],
+    );
+    await this.audit.log({
+      action: 'member.invitation_cancelled',
+      resourceType: 'user',
+      resourceId: invitationId,
+      summary: `${actor?.full_name ?? 'Admin'} cancelled invitation to ${row.email}`,
+      metadata: { invitationId, email: row.email, role: row.role },
+    });
+
+    this.logger.log(`Invitation ${invitationId} cancelled by ${requestingUser.sub}`);
+    return { cancelled: true };
   }
 
   /**
@@ -193,6 +279,13 @@ export class InvitationsService {
 
     if (invitation.acceptedAt !== null) {
       throw new ConflictException('This invitation has already been accepted');
+    }
+
+    // Migration 100: cancelled invitations are unusable.
+    if (invitation.cancelledAt !== null) {
+      throw new GoneException(
+        'This invitation was cancelled by an admin. Ask them to send a new one.',
+      );
     }
 
     if (invitation.expiresAt < new Date()) {
@@ -251,4 +344,14 @@ export class InvitationsService {
     }
     return context;
   }
+}
+
+/** Minimal HTML escape for email body interpolation. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
