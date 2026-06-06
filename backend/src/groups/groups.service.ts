@@ -9,10 +9,14 @@ import { UpdateGroupDto } from './dto/update-group.dto';
 import { SendGroupMessageDto } from './dto/send-group-message.dto';
 import { JoinRequestDto, DenyRequestDto } from './dto/join-request.dto';
 import { AuditService } from '../audit/audit.service';
+import { ProfileCompletenessService } from '../users/profile-completeness.service';
 
 @Injectable()
 export class GroupsService {
-  constructor(private readonly audit: AuditService) {}
+  constructor(
+    private readonly audit: AuditService,
+    private readonly completeness: ProfileCompletenessService,
+  ) {}
 
   private getRlsContext() {
     const ctx = rlsStorage.getStore();
@@ -115,6 +119,12 @@ export class GroupsService {
 
   async createGroup(dto: CreateGroupDto, userId: string) {
     const { queryRunner, currentTenantId } = this.getRlsContext();
+
+    // Creator becomes the group leader → must satisfy the group_leader
+    // completeness set. Returns 400 PROFILE_INCOMPLETE with the
+    // structured missing[] payload the mobile renders.
+    await this.completeness.require(userId, 'group_leader');
+
     const group = queryRunner.manager.create(Group, {
       tenantId: currentTenantId!,
       name: dto.name,

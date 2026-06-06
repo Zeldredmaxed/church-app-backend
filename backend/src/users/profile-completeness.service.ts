@@ -1,5 +1,10 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import {
+  PROFILE_INCOMPLETE_CODE,
+  RequirementSetKey,
+  MissingField,
+} from './profile-completeness.types';
 
 /**
  * Profile-completeness gating.
@@ -12,9 +17,13 @@ import { DataSource } from 'typeorm';
  * Requirement sets are hardcoded — the field list is product policy,
  * not per-tenant config. Adding a new set means editing this file +
  * adding a guard to the feature endpoint.
+ *
+ * Public contract (typed shape, mobile-facing): see
+ * ./profile-completeness.types.ts. The 400 body always includes
+ * `code: PROFILE_INCOMPLETE` so clients can stably match on it.
  */
 
-export type RequirementSet = 'core' | 'volunteer' | 'child_pickup' | 'group_leader';
+export type RequirementSet = RequirementSetKey;
 
 /**
  * A single requirement check. `field` is the dotted path or column we
@@ -111,11 +120,15 @@ export class ProfileCompletenessService {
   async require(userId: string, set: RequirementSet): Promise<void> {
     const result = await this.getOne(userId, set);
     if (!result.complete) {
+      // Shape matches ProfileIncompleteErrorBody in
+      // ./profile-completeness.types.ts. Keep these keys stable — the
+      // mobile + admin dashboards hard-match `code` and walk
+      // `missing[].field` / `missing[].label`.
       throw new BadRequestException({
         message: 'Profile incomplete',
-        code: 'PROFILE_INCOMPLETE',
+        code: PROFILE_INCOMPLETE_CODE,
         requirementSet: set,
-        missing: result.missing,
+        missing: result.missing as MissingField[],
       });
     }
   }

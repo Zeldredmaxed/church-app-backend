@@ -491,7 +491,16 @@ export class AttendanceService {
         body,
         // sourceId for dedupe: per-occurrence + recipient
         sourceId: occ.id,
-        data: { occurrenceId: occ.id, kind: 'auto_attendance_ping' },
+        // Canonical mobile payload schema. Keep keys stable — the
+        // mobile pings hard-validate kind === 'auto_attendance_ping'
+        // and branch on phase. tenantId lets a multi-church-member
+        // client confirm the push is for the right context.
+        data: {
+          kind: 'auto_attendance_ping',
+          phase: 'start' as const,
+          serviceOccurrenceId: occ.id,
+          tenantId: occ.tenant_id,
+        },
       });
       pushed += recipients.length;
       this.logger.log(`Auto-attendance push enqueued for occurrence ${occ.id} → ${recipients.length} recipients`);
@@ -549,7 +558,12 @@ export class AttendanceService {
         title: `${occ.service_name} — wrapping up`,
         body: 'Final attendance check. Thanks for being with us today.',
         sourceId: `end:${occ.id}`,
-        data: { occurrenceId: occ.id, kind: 'auto_attendance_ping', phase: 'end' },
+        data: {
+          kind: 'auto_attendance_ping',
+          phase: 'end' as const,
+          serviceOccurrenceId: occ.id,
+          tenantId: occ.tenant_id,
+        },
       });
       pushed += recipients.length;
     }
