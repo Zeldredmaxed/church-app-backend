@@ -13,6 +13,7 @@ import {
   UseInterceptors,
   ForbiddenException,
   BadRequestException,
+  UnauthorizedException,
   HttpCode,
   HttpStatus,
   Logger,
@@ -379,7 +380,11 @@ export class WorkflowWebhookController {
     @Body() payload: any,
     @Req() req: Request,
   ) {
-    // Look up the workflow (service-role — no RLS)
+    // Look up the workflow (service-role — no RLS). All "bad" branches
+    // throw the SAME generic error so an attacker can't enumerate which
+    // workflow IDs exist / are active / which secrets match. The specific
+    // reason is logged server-side for our own troubleshooting.
+    const GENERIC_REJECT = 'Unauthorized webhook';
     const [workflow] = await this.dataSource.query(
       `SELECT id, tenant_id, trigger_type, trigger_config, is_active
        FROM public.workflows WHERE id = $1`,
@@ -387,32 +392,53 @@ export class WorkflowWebhookController {
     );
 
     if (!workflow) {
-      throw new BadRequestException('Workflow not found');
+      this.logger.warn(`Inbound webhook: workflow ${workflowId} not found`);
+      throw new UnauthorizedException(GENERIC_REJECT);
     }
-
     if (workflow.trigger_type !== 'inbound_webhook') {
-      throw new BadRequestException('This workflow is not configured for inbound webhooks');
+      this.logger.warn(`Inbound webhook: workflow ${workflowId} wrong trigger_type=${workflow.trigger_type}`);
+      throw new UnauthorizedException(GENERIC_REJECT);
     }
-
     if (!workflow.is_active) {
-      this.logger.warn(`Inbound webhook received for inactive workflow ${workflowId}`);
-      return { received: true, message: 'Workflow is inactive', executionId: null };
+      this.logger.warn(`Inbound webhook: workflow ${workflowId} inactive`);
+      // Inactive workflows still 401 — don't leak existence either way.
+      throw new UnauthorizedException(GENERIC_REJECT);
     }
 
     // Webhook secret is MANDATORY — an unauthenticated URL that triggers 48+ node types
     // cannot be guarded by UUID obscurity alone.
     const secret: string | undefined = workflow.trigger_config?.secret;
     if (!secret) {
-      throw new BadRequestException('Webhook secret not configured on this workflow');
+      this.logger.warn(`Inbound webhook: workflow ${workflowId} has no secret configured`);
+      throw new UnauthorizedException(GENERIC_REJECT);
     }
     const providedSecret = req.headers['x-webhook-secret'] as string | undefined;
     if (!providedSecret) {
-      throw new BadRequestException('Missing x-webhook-secret header');
+      throw new UnauthorizedException(GENERIC_REJECT);
     }
     const a = Buffer.from(providedSecret);
     const b = Buffer.from(secret);
     if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-      throw new BadRequestException('Invalid webhook secret');
+      this.logger.warn(`Inbound webhook: secret mismatch for workflow ${workflowId}`);
+      throw new UnauthorizedException(GENERIC_REJECT);
+    }
+
+    // Optional idempotency: if the caller sends Idempotency-Key, dedupe
+    // via Redis (or in-memory if Redis isn't wired). Skips the heavy
+    // workflow execution path for replays. Without the header, behavior
+    // is unchanged — retries still execute again.
+    const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
+    if (idempotencyKey) {
+      const dedupe = await this.dataSource.query(
+        `INSERT INTO public.mux_processed_events (event_id)
+         VALUES ($1) ON CONFLICT (event_id) DO NOTHING
+         RETURNING event_id`,
+        [`workflow-webhook:${workflowId}:${idempotencyKey}`],
+      );
+      if (dedupe.length === 0) {
+        this.logger.log(`Inbound webhook ${workflowId} replay (key=${idempotencyKey}) — skipping`);
+        return { received: true, deduped: true, executionId: null };
+      }
     }
 
     this.logger.log(`Inbound webhook received for workflow ${workflowId}`);

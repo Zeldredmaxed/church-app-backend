@@ -130,6 +130,14 @@ export class AuditService {
       params.push(query.resourceType);
       conds.push(`a.resource_type = $${params.length}`);
     }
+    if (query.actorRole) {
+      params.push(query.actorRole);
+      conds.push(`a.actor_role = $${params.length}`);
+    }
+    if (query.summarySearch) {
+      params.push(`%${query.summarySearch}%`);
+      conds.push(`a.summary ILIKE $${params.length}`);
+    }
     if (query.since) {
       params.push(query.since);
       conds.push(`a.created_at >= $${params.length}::timestamptz`);

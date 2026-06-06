@@ -1,4 +1,4 @@
-import { IsDateString, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
+import { IsDateString, IsIn, IsInt, IsOptional, IsString, IsUUID, MaxLength, Max, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -7,6 +7,23 @@ export class ListAuditLogDto {
   @IsOptional()
   @IsUUID()
   actor?: string;
+
+  @ApiPropertyOptional({
+    description: 'Filter by actor role at time of action, e.g. admin / pastor / accountant',
+  })
+  @IsOptional()
+  @IsIn(['admin', 'pastor', 'accountant', 'volunteer_leader', 'member', 'unknown'])
+  actorRole?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Case-insensitive substring match on the summary text. Useful for finding 'donations from Jane' or 'removed by pastor X'.",
+    maxLength: 200,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  summarySearch?: string;
 
   @ApiPropertyOptional({ description: 'Filter by target user id' })
   @IsOptional()
