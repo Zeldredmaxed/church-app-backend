@@ -1,15 +1,15 @@
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
-import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 import * as fs from 'fs';
 import * as path from 'path';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
-  const app = await NestFactory.create(AppModule, {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     // rawBody: true makes the unmodified request body available as req.rawBody.
     // Required for webhook signature verification (Mux, Stripe) where the HMAC
     // must be computed over the exact bytes received, not the parsed JSON.
@@ -26,13 +26,21 @@ async function bootstrap() {
     }),
   );
 
-  // Per-route body-size override for the AI transcribe endpoint. Real
-  // voice notes are 300-700KB raw; base64 inflates ~33%; default
-  // express body-parser cap is 100KB. Without this override, every
-  // transcribe call 413s before the controller runs. The /api/ai/*
-  // namespace is admin-Premium only, so the larger limit is gated.
-  app.use('/api/ai/transcribe', json({ limit: '30mb' }));
-  app.use('/api/ai/transcribe', urlencoded({ limit: '30mb', extended: true }));
+  // Body parser limit bump. Default express body-parser cap is 100KB,
+  // which 413s every AI voice-transcribe request (300-700KB raw audio,
+  // +33% base64 inflation). Originally I used `app.use('/api/ai/transcribe',
+  // json({...}))` to scope the bump per-route — but that signals to
+  // NestJS that we're managing body parsing ourselves, and it disables
+  // its own default global parser. Result: every OTHER endpoint's JSON
+  // body silently became empty → all logins broke with "email must be
+  // an email, password missing" validation errors.
+  //
+  // The right API is NestExpressApplication.useBodyParser, which
+  // configures the default global parser with custom limits instead
+  // of replacing it. 30MB cap is the limit, not the default size —
+  // small bodies don't pay extra memory.
+  app.useBodyParser('json', { limit: '30mb' });
+  app.useBodyParser('urlencoded', { limit: '30mb', extended: true });
 
   // Global route prefix — all routes accessible at /api/*
   app.setGlobalPrefix('api');
