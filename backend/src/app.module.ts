@@ -5,6 +5,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { GraphQLModule } from '@nestjs/graphql';
 import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { RedisThrottlerStorage } from './common/storage/redis-throttler.storage';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { join } from 'path';
@@ -16,6 +17,7 @@ import { UserAppActivity } from './me-activity/entities/user-app-activity.entity
 import { AuditModule } from './audit/audit.module';
 import { AuditLogEntry } from './audit/entities/audit-log-entry.entity';
 import { LegalModule } from './legal/legal.module';
+import { AttendanceModule } from './attendance/attendance.module';
 import { ChurchOnlyGuard } from './common/guards/church-only.guard';
 import { MembershipsModule } from './memberships/memberships.module';
 import { PostsModule } from './posts/posts.module';
@@ -270,9 +272,11 @@ import { NotificationPreference } from './notifications/entities/notification-pr
       context: ({ req }: { req: any }) => ({ req }),
     }),
 
+    ScheduleModule.forRoot(),
     SupabaseAdminModule,
     AuthModule,
     LegalModule,
+    AttendanceModule,
     TenantsModule,
     UsersModule,
     MeActivityModule,
