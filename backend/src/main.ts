@@ -76,7 +76,12 @@ async function bootstrap() {
       cb(ok ? null : new Error(`CORS: origin ${origin} not allowed`), ok);
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
-    allowedHeaders: ['Authorization', 'Content-Type', 'Accept', 'X-Requested-With', 'X-Tenant-Id'],
+    // X-Active-Tenant-Id is read by TenantMismatchInterceptor on every
+    // authenticated request to detect client-side tenant drift. Mobile +
+    // admin both send it unconditionally — must be in the preflight
+    // allowlist or browsers block the actual request before it ever
+    // reaches us. X-Tenant-Id kept for back-compat with legacy clients.
+    allowedHeaders: ['Authorization', 'Content-Type', 'Accept', 'X-Requested-With', 'X-Tenant-Id', 'X-Active-Tenant-Id'],
     credentials: true,
     maxAge: 86400,
   });
