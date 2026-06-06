@@ -35,6 +35,14 @@ export class ChallengeTaskCompletion {
   @Column({ type: 'boolean', name: 'timer_satisfied', default: true })
   timerSatisfied: boolean;
 
+  /** Migration 098: completed past the task's anchored day. Late completions are accepted but score 0 points. */
+  @Column({ type: 'boolean', name: 'is_late', default: false })
+  isLate: boolean;
+
+  /** Migration 098: 0-100 by tenant-local hour of completion. 0 if isLate. */
+  @Column({ type: 'int', name: 'points_earned', default: 0 })
+  pointsEarned: number;
+
   @CreateDateColumn({ name: 'completed_at' })
   completedAt: Date;
 }

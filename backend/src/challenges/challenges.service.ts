@@ -106,7 +106,134 @@ export class ChallengesService {
       currentStreak: r.current_streak,
       longestStreak: r.longest_streak,
       lastCompletedDate: this.toDateString(r.last_completed_date),
+      // Migration 098 — Faith Walks extensions
+      missedCount: r.missed_count ?? 0,
+      totalPoints: r.total_points ?? 0,
+      badgeTier: (r.badge_tier ?? 'none') as 'none' | 'bronze' | 'silver' | 'gold' | 'mythic',
     };
+  }
+
+  // ─────────── Faith Walks helpers (migration 098) ───────────
+
+  /**
+   * Points awarded for a completion based on the tenant-local hour.
+   * Tiered curve (the user's spec): earlier = more, late = zero.
+   *   00-02 → 100   |   03-05 → 90    |   06-08 → 80
+   *   09-11 → 70    |   12-14 → 60    |   15-17 → 50
+   *   18-20 → 40    |   21-23 → 30    |   late  → 0
+   * Tiers (not per-minute) so we never argue over seconds and never
+   * award negatives.
+   */
+  private pointsForHour(hour: number, isLate: boolean): number {
+    if (isLate) return 0;
+    if (hour < 3) return 100;
+    if (hour < 6) return 90;
+    if (hour < 9) return 80;
+    if (hour < 12) return 70;
+    if (hour < 15) return 60;
+    if (hour < 18) return 50;
+    if (hour < 21) return 40;
+    return 30;
+  }
+
+  /**
+   * Derive medal tier given an enrollment's stats + total task count +
+   * whether the viewer is in the top 5 by points on the leaderboard.
+   *   Mythic = perfect AND top-5 by points
+   *   Gold   = perfect (zero missed, 100% on-time)
+   *   Silver = ≥67% on-time
+   *   Bronze = ≥33% on-time
+   *   None   = otherwise
+   * Mythic locks if anyone passes them on the leaderboard, so it's a
+   * read-time computation, not a denorm.
+   */
+  private deriveBadgeTier(
+    missedCount: number,
+    onTimeCount: number,
+    totalTasks: number,
+    inTopFiveByPoints: boolean,
+  ): 'none' | 'bronze' | 'silver' | 'gold' | 'mythic' {
+    if (totalTasks === 0) return 'none';
+    // Integer comparison for perfect — float (N/N)*100 happens to be
+    // exact 100.0 in IEEE 754 for now, but using integer equality
+    // makes the intent obvious and survives any future refactor that
+    // introduces fractional counts.
+    const perfect = missedCount === 0 && onTimeCount === totalTasks;
+    const pct = (onTimeCount / totalTasks) * 100;
+    if (perfect && inTopFiveByPoints) return 'mythic';
+    if (perfect) return 'gold';
+    if (pct >= 67) return 'silver';
+    if (pct >= 33) return 'bronze';
+    return 'none';
+  }
+
+  /**
+   * Pull the top-5 user IDs by total_points for a challenge. Used to
+   * decide whether the viewer's own enrollment qualifies for Mythic.
+   *
+   * SERVICE-ROLE BYPASS (documented per CLAUDE.md): this is a
+   * cross-user aggregate read. The RLS policy on challenge_enrollments
+   * is `user_id = auth.uid()`, so running this through the request
+   * queryRunner would return ONLY the viewer — making Mythic trivially
+   * granted (1-row top-5 always contains the viewer). Service-role with
+   * explicit tenant + challenge pinning in the WHERE is the correct
+   * pattern for leaderboard-style work.
+   *
+   * Ordering matches getLeaderboard's byPoints sort EXACTLY — both
+   * paths must agree on top-5 membership or Enrollment.badgeTier
+   * can disagree with the leaderboard endpoint. No total_points > 0
+   * filter so 0-point users can still be in the top-5 (matches the
+   * leaderboard spec: ranked by points, ties by completion count).
+   */
+  private async topFiveByPointsIds(tenantId: string, challengeId: string): Promise<Set<string>> {
+    const rows = await this.dataSource.query(
+      `SELECT e.user_id
+       FROM public.challenge_enrollments e
+       WHERE e.tenant_id = $1
+         AND e.challenge_id = $2
+         AND e.status != 'abandoned'
+       ORDER BY e.total_points DESC,
+                (SELECT COUNT(*) FROM public.challenge_task_completions
+                 WHERE enrollment_id = e.id) DESC
+       LIMIT 5`,
+      [tenantId, challengeId],
+    );
+    return new Set(rows.map((r: any) => r.user_id));
+  }
+
+  /**
+   * On-time completion count for an enrollment. Used to compute the
+   * medal tier from missed_count + on-time pct. Excludes late
+   * completions (which score 0 and don't count toward streak either).
+   */
+  private async onTimeCompletionCount(enrollmentId: string): Promise<number> {
+    const { queryRunner } = this.getRlsContext();
+    const [r] = await queryRunner.query(
+      `SELECT COUNT(*)::int AS n FROM public.challenge_task_completions
+       WHERE enrollment_id = $1 AND is_late = false`,
+      [enrollmentId],
+    );
+    return r?.n ?? 0;
+  }
+
+  /**
+   * Compute the live badge tier for the viewer's own enrollment.
+   * Pass the eager-loaded total task count if you have it (else 0
+   * will return 'none'). Use sparingly — every call does a LIMIT-5
+   * leaderboard probe; only call for the viewer's own enrollment, not
+   * for other members shown in lists.
+   */
+  private async resolveViewerBadgeTier(
+    tenantId: string,
+    challengeId: string,
+    enrollmentId: string,
+    userId: string,
+    missedCount: number,
+    totalTasks: number,
+  ): Promise<'none' | 'bronze' | 'silver' | 'gold' | 'mythic'> {
+    const onTime = await this.onTimeCompletionCount(enrollmentId);
+    const top5 = await this.topFiveByPointsIds(tenantId, challengeId);
+    return this.deriveBadgeTier(missedCount, onTime, totalTasks, top5.has(userId));
   }
 
   // ═══════════════════════ ADMIN (pastor) ═══════════════════════
@@ -498,9 +625,18 @@ export class ChallengesService {
       `SELECT * FROM public.challenge_enrollments WHERE challenge_id = $1 AND user_id = $2`,
       [id, userId],
     );
+    let myEnrollment = enrollment ? this.mapEnrollment(enrollment) : null;
+    // Mythic eligibility is leaderboard-dependent; recompute the
+    // viewer's own badgeTier at read so it can't go stale when another
+    // member passes them on the points board.
+    if (myEnrollment) {
+      myEnrollment.badgeTier = await this.resolveViewerBadgeTier(
+        tenantId, id, enrollment.id, userId, myEnrollment.missedCount, c.task_count ?? 0,
+      );
+    }
     return {
       ...this.mapChallenge(c),
-      myEnrollment: enrollment ? this.mapEnrollment(enrollment) : null,
+      myEnrollment,
     };
   }
 
@@ -551,13 +687,25 @@ export class ChallengesService {
     return diff + 1; // may be <1 (not started) or >durationDays (finished); caller clamps
   }
 
-  /** Tasks for a given day of a challenge, annotated with my completion. */
-  private async tasksForDay(challengeId: string, userId: string, dayIndex: number) {
+  /**
+   * Tasks for a given day of a challenge, annotated with my completion +
+   * gating booleans (migration 098). Pass `currentDayIndex` (tenant-local
+   * "today" mapped to the enrollment's day) so the gating can be
+   * server-authoritative. If null, gating fields are still set as
+   * best-effort using the dayIndex alone (e.g. for admin previews).
+   */
+  private async tasksForDay(
+    challengeId: string,
+    userId: string,
+    dayIndex: number,
+    currentDayIndex: number | null = null,
+  ) {
     const { queryRunner } = this.getRlsContext();
     const rows = await queryRunner.query(
       `SELECT t.*,
               comp.id AS completion_id, comp.completed_at, comp.reflection_text,
-              comp.seconds_spent, comp.timer_satisfied
+              comp.seconds_spent, comp.timer_satisfied,
+              comp.is_late, comp.points_earned
        FROM public.challenge_tasks t
        LEFT JOIN public.challenge_task_completions comp
          ON comp.task_id = t.id AND comp.user_id = $2
@@ -565,18 +713,31 @@ export class ChallengesService {
        ORDER BY t.position ASC`,
       [challengeId, userId, dayIndex],
     );
-    return rows.map((r: any) => ({
-      ...this.mapTask(r),
-      completion: r.completion_id
-        ? {
-            id: r.completion_id,
-            completedAt: r.completed_at,
-            reflectionText: r.reflection_text,
-            secondsSpent: r.seconds_spent,
-            timerSatisfied: r.timer_satisfied,
-          }
-        : null,
-    }));
+    return rows.map((r: any) => {
+      const isCompleted = r.completion_id != null;
+      // Per the mobile spec:
+      //   isLocked = dayIndex > currentLocalDayIndex AND not completed
+      //   isLate   = dayIndex < currentLocalDayIndex AND not completed
+      // Once completed, both flags are false (the deed is done).
+      const isLocked = currentDayIndex != null && dayIndex > currentDayIndex && !isCompleted;
+      const isLate   = currentDayIndex != null && dayIndex < currentDayIndex && !isCompleted;
+      return {
+        ...this.mapTask(r),
+        isLocked,
+        isLate,
+        completion: isCompleted
+          ? {
+              id: r.completion_id,
+              completedAt: r.completed_at,
+              reflectionText: r.reflection_text,
+              secondsSpent: r.seconds_spent,
+              timerSatisfied: r.timer_satisfied,
+              isLate: !!r.is_late,
+              pointsEarned: r.points_earned ?? 0,
+            }
+          : null,
+      };
+    });
   }
 
   /** Today's to-do across all of my active enrollments, grouped by challenge. */
@@ -598,7 +759,15 @@ export class ChallengesService {
       const started = rawDay >= 1;
       const finished = rawDay > e.duration_days;
       const dayIndex = Math.min(Math.max(rawDay, 1), e.duration_days);
-      const tasks = started && !finished ? await this.tasksForDay(e.challenge_id, userId, rawDay) : [];
+      // Pass rawDay so isLocked/isLate are stamped relative to "today".
+      const tasks = started && !finished ? await this.tasksForDay(e.challenge_id, userId, rawDay, rawDay) : [];
+      const enrollment = this.mapEnrollment(e);
+      // Resolve live badge tier for the viewer's own enrollment (Mythic
+      // depends on the leaderboard so it can't trust the denormalized
+      // value alone).
+      enrollment.badgeTier = await this.resolveViewerBadgeTier(
+        tenantId, e.challenge_id, e.id, userId, enrollment.missedCount, await this.totalTaskCount(e.challenge_id),
+      );
       data.push({
         challenge: {
           id: e.challenge_id,
@@ -606,7 +775,7 @@ export class ChallengesService {
           coverImageUrl: e.cover_image_url,
           durationDays: e.duration_days,
         },
-        enrollment: this.mapEnrollment(e),
+        enrollment,
         dayIndex,
         started,
         finished,
@@ -616,12 +785,24 @@ export class ChallengesService {
     return { date: today, data };
   }
 
+  /** Total task count for a challenge (used by badge tier derivation). */
+  private async totalTaskCount(challengeId: string): Promise<number> {
+    const { queryRunner } = this.getRlsContext();
+    const [r] = await queryRunner.query(
+      `SELECT COUNT(*)::int AS n FROM public.challenge_tasks WHERE challenge_id = $1`,
+      [challengeId],
+    );
+    return r?.n ?? 0;
+  }
+
   async getChallengeToday(tenantId: string, userId: string, challengeId: string) {
     const { queryRunner } = this.getRlsContext();
+    // Filter abandoned — consistent with getDay/completeTask. Without
+    // this filter, an unenrolled user could still pull today's tasks.
     const [e] = await queryRunner.query(
       `SELECT e.*, c.duration_days FROM public.challenge_enrollments e
        JOIN public.challenges c ON c.id = e.challenge_id
-       WHERE e.challenge_id = $1 AND e.user_id = $2`,
+       WHERE e.challenge_id = $1 AND e.user_id = $2 AND e.status != 'abandoned'`,
       [challengeId, userId],
     );
     if (!e) throw new BadRequestException('Not enrolled in this challenge');
@@ -629,20 +810,42 @@ export class ChallengesService {
     const rawDay = this.dayIndexFor(e.started_on, today, e.duration_days);
     const started = rawDay >= 1;
     const finished = rawDay > e.duration_days;
-    const tasks = started && !finished ? await this.tasksForDay(challengeId, userId, rawDay) : [];
+    const tasks = started && !finished ? await this.tasksForDay(challengeId, userId, rawDay, rawDay) : [];
+    const enrollment = this.mapEnrollment(e);
+    enrollment.badgeTier = await this.resolveViewerBadgeTier(
+      tenantId, challengeId, e.id, userId, enrollment.missedCount, await this.totalTaskCount(challengeId),
+    );
     return {
       date: today,
       dayIndex: Math.min(Math.max(rawDay, 1), e.duration_days),
       started,
       finished,
-      enrollment: this.mapEnrollment(e),
+      enrollment,
       tasks,
     };
   }
 
   async getDay(tenantId: string, userId: string, challengeId: string, dayIndex: number) {
     await this.assertEnrolled(challengeId, userId);
-    const tasks = await this.tasksForDay(challengeId, userId, dayIndex);
+    // Compute the enrollment's current day so isLocked/isLate are correct.
+    const { queryRunner } = this.getRlsContext();
+    const [e] = await queryRunner.query(
+      `SELECT started_on, c.duration_days FROM public.challenge_enrollments e
+       JOIN public.challenges c ON c.id = e.challenge_id
+       WHERE e.challenge_id = $1 AND e.user_id = $2`,
+      [challengeId, userId],
+    );
+    // Reject out-of-range dayIndex with a real 400 rather than silently
+    // returning an empty tasks array (which mobile would render as a
+    // blank "Day 99999" page).
+    if (dayIndex < 1 || dayIndex > e.duration_days) {
+      throw new BadRequestException(
+        `Day ${dayIndex} is out of range — this plan has ${e.duration_days} day(s).`,
+      );
+    }
+    const today = await this.tenantToday(tenantId);
+    const currentDay = this.dayIndexFor(e.started_on, today, e.duration_days);
+    const tasks = await this.tasksForDay(challengeId, userId, dayIndex, currentDay);
     return { dayIndex, tasks };
   }
 
@@ -658,9 +861,13 @@ export class ChallengesService {
   }
 
   /**
-   * Complete a task. Validates task-type requirements (reflection text,
-   * scripture read-timer), records the completion, bumps the day-granular
-   * streak, and flips the enrollment to 'completed' once every task is done.
+   * Complete a task. Validates task-type requirements, applies the
+   * Faith Walks gating rules (migration 098):
+   *   - Future days (dayIndex > today): 400 TASK_LOCKED
+   *   - Past missed days (dayIndex < today): accept, mark isLate,
+   *     award 0 points, do NOT bump streak, clear any matching
+   *     missed_tasks row.
+   *   - Today: accept, award tier-based points, bump streak.
    */
   async completeTask(tenantId: string, userId: string, taskId: string, dto: CompleteTaskDto) {
     const { queryRunner } = this.getRlsContext();
@@ -672,8 +879,9 @@ export class ChallengesService {
     if (!task) throw new NotFoundException('Task not found');
 
     const [enrollment] = await queryRunner.query(
-      `SELECT * FROM public.challenge_enrollments
-       WHERE challenge_id = $1 AND user_id = $2 AND status != 'abandoned'`,
+      `SELECT e.*, c.duration_days FROM public.challenge_enrollments e
+       JOIN public.challenges c ON c.id = e.challenge_id
+       WHERE e.challenge_id = $1 AND e.user_id = $2 AND e.status != 'abandoned'`,
       [task.challenge_id, userId],
     );
     if (!enrollment) throw new BadRequestException('Not enrolled in this challenge');
@@ -687,8 +895,14 @@ export class ChallengesService {
       });
     }
     if (task.task_type === 'scripture' && task.timer_seconds && task.timer_seconds > 0) {
-      const enoughTime = dto.secondsSpent == null || dto.secondsSpent >= task.timer_seconds;
-      if (dto.timerSatisfied === false || !enoughTime) {
+      // Server-authoritative timer gate. Both fields are required and
+      // both must affirm: secondsSpent must be a number >= timerSeconds
+      // AND timerSatisfied must be true. Missing fields are treated as
+      // not-satisfied (a buggy or malicious client that omits both can't
+      // silently bypass the gate).
+      const enoughTime = typeof dto.secondsSpent === 'number' && dto.secondsSpent >= task.timer_seconds;
+      const affirmed = dto.timerSatisfied === true;
+      if (!affirmed || !enoughTime) {
         throw new BadRequestException({
           statusCode: 400,
           code: 'TIMER_NOT_SATISFIED',
@@ -699,15 +913,66 @@ export class ChallengesService {
     }
 
     const today = await this.tenantToday(tenantId);
+    const currentDayIndex = this.dayIndexFor(enrollment.started_on, today, enrollment.duration_days);
 
-    await queryRunner.query(
+    // ── Faith Walks gating (migration 098) ──
+    // Future day: hard-stop with TASK_LOCKED.
+    if (task.day_index > currentDayIndex) {
+      // unlocksOn = enrollment.started_on + (task.day_index - 1) days,
+      // formatted as YYYY-MM-DD in the tenant timezone.
+      const [u] = await queryRunner.query(
+        `SELECT to_char(($1::date + ($2::int - 1) * INTERVAL '1 day')::date, 'YYYY-MM-DD') AS unlocks_on`,
+        [this.toDateString(enrollment.started_on), task.day_index],
+      );
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'TASK_LOCKED',
+        message: "This task isn't unlocked yet.",
+        unlocksOn: u?.unlocks_on,
+      });
+    }
+
+    // Past-day completion → late; today's → on-time. Late means:
+    //   - is_late = true on the completion row
+    //   - points_earned = 0
+    //   - no streak bump
+    //   - no completion_pct bump (excluded from on-time count)
+    const isLate = task.day_index < currentDayIndex;
+
+    // Tenant-local hour for points tier. Late = 0 points regardless.
+    const [hourRow] = await queryRunner.query(
+      `SELECT EXTRACT(HOUR FROM (now() AT TIME ZONE timezone))::int AS hour
+       FROM public.tenants WHERE id = $1`,
+      [tenantId],
+    );
+    const localHour = hourRow?.hour ?? 12;
+    const pointsEarned = this.pointsForHour(localHour, isLate);
+
+    // Insert/upsert the completion. ON CONFLICT updates everything
+    // EXCEPT is_late/points_earned — those are set on first insert and
+    // shouldn't flip if the user edits their reflection text later.
+    //
+    // RETURNING (xmax = 0) AS inserted is the canonical Postgres trick
+    // to distinguish "newly inserted" from "existing row updated" in
+    // an ON CONFLICT clause. xmax is 0 on a fresh INSERT, non-zero on
+    // an UPDATE. We gate the side-effects (total_points bump, streak
+    // update, missed_count decrement, completion status flip) on this
+    // flag so re-POSTing a completion (double-tap, retry, reflection
+    // edit) doesn't double-count points or drift missed_count.
+    //
+    // We also return the EXISTING is_late/points_earned so the response
+    // reports the truth — not what would have been awarded had this
+    // been a fresh completion.
+    const [upsertResult] = await queryRunner.query(
       `INSERT INTO public.challenge_task_completions
-         (enrollment_id, task_id, user_id, tenant_id, completed_on, reflection_text, seconds_spent, timer_satisfied)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         (enrollment_id, task_id, user_id, tenant_id, completed_on,
+          reflection_text, seconds_spent, timer_satisfied, is_late, points_earned)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        ON CONFLICT (enrollment_id, task_id) DO UPDATE SET
          reflection_text = EXCLUDED.reflection_text,
          seconds_spent   = EXCLUDED.seconds_spent,
-         timer_satisfied = EXCLUDED.timer_satisfied`,
+         timer_satisfied = EXCLUDED.timer_satisfied
+       RETURNING (xmax = 0) AS inserted, is_late AS row_is_late, points_earned AS row_points_earned`,
       [
         enrollment.id,
         taskId,
@@ -717,30 +982,88 @@ export class ChallengesService {
         dto.reflectionText?.trim() || null,
         dto.secondsSpent ?? null,
         dto.timerSatisfied ?? true,
+        isLate,
+        pointsEarned,
       ],
     );
+    const wasInserted: boolean = upsertResult.inserted === true;
+    // Use the row's stored values for the response (so re-completions
+    // report what the user actually got, not what they'd get fresh).
+    const effectiveIsLate: boolean = !!upsertResult.row_is_late;
+    const effectivePointsEarned: number = upsertResult.row_points_earned ?? 0;
 
-    // Day-granular streak. Only the first completion of a given local day
-    // moves the streak; subsequent same-day completions leave it unchanged.
-    const [streak] = await queryRunner.query(
-      `WITH calc AS (
-         SELECT CASE
-                  WHEN last_completed_date = $2::date THEN current_streak
-                  WHEN last_completed_date = $2::date - 1 THEN current_streak + 1
-                  ELSE 1
-                END AS new_streak
-         FROM public.challenge_enrollments WHERE id = $1
-       )
-       UPDATE public.challenge_enrollments e SET
-         current_streak = calc.new_streak,
-         longest_streak = GREATEST(e.longest_streak, calc.new_streak),
-         last_completed_date = $2::date,
-         updated_at = now()
-       FROM calc
-       WHERE e.id = $1
-       RETURNING e.current_streak, e.longest_streak, e.last_completed_date`,
-      [enrollment.id, today],
-    );
+    // ── Side-effects only fire on a fresh insert. Re-POSTs are no-ops
+    // for points/streak/missed_count drift. ──
+
+    // Late completion → clear the matching missed_tasks row + decrement
+    // missed_count. Couple the decrement to whether the DELETE actually
+    // removed a row (defends against repeat-decrement if the dedupe row
+    // was already gone).
+    if (wasInserted && isLate) {
+      const deleted = await queryRunner.query(
+        `WITH d AS (
+           DELETE FROM public.challenge_enrollment_missed_tasks
+           WHERE enrollment_id = $1 AND task_id = $2
+           RETURNING 1
+         )
+         UPDATE public.challenge_enrollments
+         SET missed_count = GREATEST(missed_count - (SELECT COUNT(*)::int FROM d), 0),
+             updated_at = now()
+         WHERE id = $1
+         RETURNING missed_count`,
+        [enrollment.id, taskId],
+      );
+      // Note: GREATEST floor protects against rare drift (e.g. cron
+      // didn't pick up the task yet but user is completing it late);
+      // the COUNT-coupled subquery means a repeat decrement after the
+      // dedupe row is gone resolves to 0 anyway.
+      void deleted;
+    }
+
+    // Streak only moves on FRESH on-time completions. Re-POSTs are no-ops.
+    let streak: { current_streak: number; longest_streak: number; last_completed_date: any };
+    if (wasInserted && !isLate) {
+      const [s] = await queryRunner.query(
+        `WITH calc AS (
+           SELECT CASE
+                    WHEN last_completed_date = $2::date THEN current_streak
+                    WHEN last_completed_date = $2::date - 1 THEN current_streak + 1
+                    ELSE 1
+                  END AS new_streak
+           FROM public.challenge_enrollments WHERE id = $1
+         )
+         UPDATE public.challenge_enrollments e SET
+           current_streak = calc.new_streak,
+           longest_streak = GREATEST(e.longest_streak, calc.new_streak),
+           last_completed_date = $2::date,
+           updated_at = now()
+         FROM calc
+         WHERE e.id = $1
+         RETURNING e.current_streak, e.longest_streak, e.last_completed_date`,
+        [enrollment.id, today],
+      );
+      streak = s;
+    } else {
+      // Late OR repeat completion: don't touch streak; reflect current values.
+      streak = {
+        current_streak: enrollment.current_streak,
+        longest_streak: enrollment.longest_streak,
+        last_completed_date: enrollment.last_completed_date,
+      };
+    }
+
+    // total_points bump ONLY on fresh insert (gated by wasInserted).
+    // Re-POSTs are intentional no-ops here — the row already has its
+    // points stored from the first insert, and we don't want a refresh
+    // or reflection edit to farm more points.
+    if (wasInserted) {
+      await queryRunner.query(
+        `UPDATE public.challenge_enrollments
+         SET total_points = total_points + $2, updated_at = now()
+         WHERE id = $1`,
+        [enrollment.id, pointsEarned],
+      );
+    }
 
     // Flip to completed when every task in the plan has a completion row.
     const [counts] = await queryRunner.query(
@@ -760,19 +1083,245 @@ export class ChallengesService {
       status = 'completed';
     }
 
+    // Re-read enrollment to get the updated missed_count + total_points
+    // for the response payload (mobile renders the medal ribbon off this).
+    const [updated] = await queryRunner.query(
+      `SELECT * FROM public.challenge_enrollments WHERE id = $1`,
+      [enrollment.id],
+    );
+    const mappedEnrollment = this.mapEnrollment(updated);
+    mappedEnrollment.badgeTier = await this.resolveViewerBadgeTier(
+      tenantId, task.challenge_id, enrollment.id, userId, mappedEnrollment.missedCount, counts.total,
+    );
+
     return {
       recorded: true,
       taskId,
       completedOn: today,
+      // Report the row's actual stored values, not the just-computed ones.
+      // On re-POST these reflect what the user originally got, not a
+      // fresh recomputation against the current hour.
+      isLate: effectiveIsLate,
+      pointsEarned: effectivePointsEarned,
       enrollment: {
-        id: enrollment.id,
+        ...mappedEnrollment,
         status,
         currentStreak: streak.current_streak,
         longestStreak: streak.longest_streak,
-        lastCompletedDate: streak.last_completed_date,
+        lastCompletedDate: this.toDateString(streak.last_completed_date),
       },
       progress: { completedTaskCount: counts.done, totalTaskCount: counts.total },
     };
+  }
+
+  // ─────────────────── Leaderboard (migration 098) ───────────────────
+
+  /**
+   * Per-challenge leaderboard with both orderings + the viewer's own
+   * ranks. Filters out users blocked by or blocking the viewer. Cache
+   * is the responsibility of the caller (mobile wraps in useQuery
+   * with staleTime: 60s).
+   *
+   * SERVICE-ROLE BYPASS (documented per CLAUDE.md): this is a
+   * cross-user aggregate read. The SELECT policies on
+   * challenge_enrollments and challenge_task_completions are both
+   * `user_id = auth.uid()`, so the request queryRunner would return
+   * ONLY the viewer's own enrollment + completion count of 0 for
+   * every other user. Service-role with tenant + challenge pinned in
+   * the WHERE is the correct pattern. user_blocks is also queried
+   * service-role so both directions of block (viewer blocked X, X
+   * blocked viewer) are visible — the RLS policy on user_blocks is
+   * `blocker_id = auth.uid()` and would hide the reciprocal direction.
+   *
+   * Tenant scope is enforced by the explicit `e.tenant_id = $1`
+   * pin (the tenantId argument comes from the verified JWT —
+   * never from user-controlled input), so no cross-tenant data
+   * can leak.
+   */
+  async getLeaderboard(tenantId: string, viewerId: string, challengeId: string, limit: number = 50) {
+    // Validate the challenge belongs to this tenant via the RLS path
+    // (cheap viewer-scoped read; gives a friendlier 404 than the
+    // service-role query returning [] for an out-of-tenant challenge).
+    const { queryRunner } = this.getRlsContext();
+    const [c] = await queryRunner.query(
+      `SELECT id FROM public.challenges WHERE id = $1 AND tenant_id = $2`,
+      [challengeId, tenantId],
+    );
+    if (!c) throw new NotFoundException('Challenge not found');
+
+    const cap = Math.min(Math.max(limit, 1), 100);
+
+    // Service-role: pull enrollments + completion counts (both kinds).
+    // on_time_count drives badge tier derivation honestly; using the
+    // full completed count would inflate medals for users who only have
+    // late completions.
+    const rows = await this.dataSource.query(
+      `SELECT
+         e.id           AS enrollment_id,
+         e.user_id,
+         e.total_points,
+         e.missed_count,
+         e.current_streak,
+         e.badge_tier,
+         u.full_name,
+         u.avatar_url,
+         (SELECT COUNT(*)::int FROM public.challenge_task_completions
+          WHERE enrollment_id = e.id) AS completed_task_count,
+         (SELECT COUNT(*)::int FROM public.challenge_task_completions
+          WHERE enrollment_id = e.id AND is_late = false) AS on_time_count
+       FROM public.challenge_enrollments e
+       JOIN public.users u ON u.id = e.user_id
+       WHERE e.challenge_id = $1
+         AND e.tenant_id = $2
+         AND e.status != 'abandoned'
+         AND NOT EXISTS (
+           SELECT 1 FROM public.user_blocks ub
+           WHERE (ub.blocker_id = $3 AND ub.blocked_id = e.user_id)
+              OR (ub.blocker_id = e.user_id AND ub.blocked_id = $3)
+         )`,
+      [challengeId, tenantId, viewerId],
+    );
+
+    // Compute total task count once for medal derivation.
+    const totalTasks = await this.totalTaskCount(challengeId);
+
+    // Sort copies — same source data, two orderings. Tie-breakers
+    // per the spec:
+    //   byCompletion → ties resolved by higher totalPoints
+    //   byPoints     → ties resolved by higher completedTaskCount
+    const byCompletion = [...rows].sort((a, b) => {
+      const dc = (b.completed_task_count ?? 0) - (a.completed_task_count ?? 0);
+      return dc !== 0 ? dc : (b.total_points ?? 0) - (a.total_points ?? 0);
+    });
+    const byPoints = [...rows].sort((a, b) => {
+      const dp = (b.total_points ?? 0) - (a.total_points ?? 0);
+      return dp !== 0 ? dp : (b.completed_task_count ?? 0) - (a.completed_task_count ?? 0);
+    });
+
+    // Top-5 by points = Mythic eligibility set. MUST match the ordering
+    // used by topFiveByPointsIds (called by /today, /:id, /complete) or
+    // Enrollment.badgeTier disagrees with the leaderboard endpoint.
+    const top5Ids = new Set(byPoints.slice(0, 5).map((r: any) => r.user_id));
+
+    const toEntry = (rank: number, r: any) => ({
+      rank,
+      userId: r.user_id,
+      fullName: r.full_name,
+      avatarUrl: r.avatar_url,
+      completedTaskCount: r.completed_task_count ?? 0,
+      totalPoints: r.total_points ?? 0,
+      badgeTier: this.deriveBadgeTier(
+        r.missed_count ?? 0,
+        r.on_time_count ?? 0,
+        totalTasks,
+        top5Ids.has(r.user_id),
+      ),
+      isMe: r.user_id === viewerId,
+    });
+
+    // Ranks are 1-indexed. Capped by `limit`.
+    const byCompletionEntries = byCompletion.slice(0, cap).map((r, i) => toEntry(i + 1, r));
+    const byPointsEntries     = byPoints.slice(0, cap).map((r, i) => toEntry(i + 1, r));
+
+    // myRanks: viewer's position in the FULL sort (not capped by limit).
+    const myByCompletionIdx = byCompletion.findIndex((r: any) => r.user_id === viewerId);
+    const myByPointsIdx     = byPoints.findIndex((r: any) => r.user_id === viewerId);
+
+    return {
+      byCompletion: byCompletionEntries,
+      byPoints: byPointsEntries,
+      myRanks: {
+        byCompletion: myByCompletionIdx === -1 ? null : myByCompletionIdx + 1,
+        byPoints:     myByPointsIdx === -1     ? null : myByPointsIdx + 1,
+      },
+    };
+  }
+
+  // ─────────── Missed-day cron sweep (migration 098) ───────────
+
+  /**
+   * Sweeps a single tenant. For every active enrollment, finds tasks
+   * whose anchored day is in the past, are NOT completed, and haven't
+   * already been counted as missed (via the dedupe table). Increments
+   * enrollments.missed_count and inserts a dedupe row. Idempotent.
+   * Service-role (called from the scheduler, not from a request).
+   */
+  async sweepMissedTasksForTenant(tenantId: string): Promise<{ tenantId: string; tasksMissed: number; enrollmentsTouched: number }> {
+    // Use the service-role DataSource (cron has no JWT context).
+    const today = (await this.dataSource.query(
+      `SELECT to_char((now() AT TIME ZONE timezone)::date, 'YYYY-MM-DD') AS today
+       FROM public.tenants WHERE id = $1`,
+      [tenantId],
+    ))[0]?.today;
+    if (!today) return { tenantId, tasksMissed: 0, enrollmentsTouched: 0 };
+
+    // Find (enrollment, task) pairs where:
+    //   - the task's anchored date (enrollment.started_on + (day_index - 1)) < today
+    //   - there's no completion row for that pair
+    //   - there's no dedupe row already
+    const missed = await this.dataSource.query(
+      `SELECT e.id AS enrollment_id, t.id AS task_id
+       FROM public.challenge_enrollments e
+       JOIN public.challenges c ON c.id = e.challenge_id
+       JOIN public.challenge_tasks t ON t.challenge_id = c.id
+       WHERE e.tenant_id = $1
+         AND e.status = 'active'
+         AND (e.started_on + (t.day_index - 1) * INTERVAL '1 day')::date < $2::date
+         AND NOT EXISTS (
+           SELECT 1 FROM public.challenge_task_completions ctc
+           WHERE ctc.enrollment_id = e.id AND ctc.task_id = t.id
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM public.challenge_enrollment_missed_tasks m
+           WHERE m.enrollment_id = e.id AND m.task_id = t.id
+         )`,
+      [tenantId, today],
+    );
+
+    if (missed.length === 0) return { tenantId, tasksMissed: 0, enrollmentsTouched: 0 };
+
+    // Insert dedupe rows + bump missed_count per enrollment in one txn.
+    // Group by enrollment to do one UPDATE per enrollment instead of N.
+    const perEnrollment = new Map<string, number>();
+    for (const row of missed) {
+      perEnrollment.set(row.enrollment_id, (perEnrollment.get(row.enrollment_id) ?? 0) + 1);
+    }
+
+    // Insert all dedupe rows.
+    const values = missed.map((_: any, i: number) => `($${i * 3 + 1}, $${i * 3 + 2}, $${i * 3 + 3})`).join(',');
+    const params = missed.flatMap((r: any) => [r.enrollment_id, r.task_id, tenantId]);
+    await this.dataSource.query(
+      `INSERT INTO public.challenge_enrollment_missed_tasks (enrollment_id, task_id, tenant_id)
+       VALUES ${values}
+       ON CONFLICT (enrollment_id, task_id) DO NOTHING`,
+      params,
+    );
+
+    // Bump missed_count per enrollment.
+    for (const [enrollmentId, count] of perEnrollment.entries()) {
+      await this.dataSource.query(
+        `UPDATE public.challenge_enrollments
+         SET missed_count = missed_count + $2, updated_at = now()
+         WHERE id = $1`,
+        [enrollmentId, count],
+      );
+    }
+
+    return { tenantId, tasksMissed: missed.length, enrollmentsTouched: perEnrollment.size };
+  }
+
+  /**
+   * Service-role helper for the scheduler — find tenants whose local
+   * time is currently in the just-past-midnight window (00:00-00:59).
+   * The scheduler runs hourly globally; on each fire we identify
+   * tenants that just crossed local midnight and sweep them.
+   */
+  async findTenantsAtMidnight(): Promise<string[]> {
+    const rows = await this.dataSource.query(
+      `SELECT id FROM public.tenants
+       WHERE EXTRACT(HOUR FROM (now() AT TIME ZONE timezone)) = 0`,
+    );
+    return rows.map((r: any) => r.id);
   }
 
   /** My progress on a challenge: per-day completion + streaks. */
@@ -808,8 +1357,16 @@ export class ChallengesService {
     const totalTasks = totals?.total ?? 0;
     const doneTasks = totals?.done ?? 0;
 
+    // Recompute the viewer's badge tier so Mythic doesn't go stale
+    // between leaderboard shifts. Same pattern as getTodayAll +
+    // getChallengeToday + getChallengeMember.
+    const mappedEnrollment = this.mapEnrollment(e);
+    mappedEnrollment.badgeTier = await this.resolveViewerBadgeTier(
+      tenantId, challengeId, e.id, userId, mappedEnrollment.missedCount, totalTasks,
+    );
+
     return {
-      enrollment: this.mapEnrollment(e),
+      enrollment: mappedEnrollment,
       dayIndex: Math.min(Math.max(this.dayIndexFor(e.started_on, today, e.duration_days), 1), e.duration_days),
       totalDays: e.duration_days,
       completedTaskCount: doneTasks,

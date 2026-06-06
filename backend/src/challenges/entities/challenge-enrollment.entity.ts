@@ -43,6 +43,22 @@ export class ChallengeEnrollment {
   @Column({ type: 'date', name: 'last_completed_date', nullable: true })
   lastCompletedDate: string | null;
 
+  /** Migration 098: cron-tracked count of past-day tasks not completed on-time. */
+  @Column({ type: 'int', name: 'missed_count', default: 0 })
+  missedCount: number;
+
+  /** Migration 098: SUM(points_earned) across this user's completions in this challenge. */
+  @Column({ type: 'int', name: 'total_points', default: 0 })
+  totalPoints: number;
+
+  /**
+   * Migration 098: denormalized medal tier. Recomputed at read time for
+   * the viewer's own enrollment when Mythic is in play (read-path wins
+   * over denorm freshness for the leaderboard-dependent tier).
+   */
+  @Column({ type: 'text', name: 'badge_tier', default: 'none' })
+  badgeTier: 'none' | 'bronze' | 'silver' | 'gold' | 'mythic';
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

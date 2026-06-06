@@ -2,9 +2,10 @@
 
 > **For:** Admin Dashboard Team (Next.js) **AND** Mobile App Team (React Native)
 > **Status:** Pre-launch, beta on Android via Expo Go, first church client imminent
-> **Last updated:** 2026-06-06 (Challenges & Reading Plans)
+> **Last updated:** 2026-06-06 (Faith Walks extensions — gating, points, medals, leaderboard, missed-day cron)
 > **Live backend:** `https://church-app-backend-27hc.onrender.com/api`
-> **Latest migration applied:** `096_challenges_reading_plans.sql`
+> **Latest migration applied:** `098_challenges_gating_points_medals.sql`
+> **Migration 097:** `097_groups_auto_tag.sql` — applied (additive cols for upcoming groups feature, not yet wired in services)
 
 This document supersedes EVERY prior `*_PROMPT.md`, `*_REPLY*.md`,
 `*_FIXES.md`, and `FRONTEND_HANDOFF*.md`. Going forward, ANY change to
@@ -444,16 +445,46 @@ Translations: `kjv, web, asv, bbe, darby, dra, wbt, ylt`. **ESV is NOT available
 | `POST` | `/api/leaderboard/app-open` | Fire-and-forget streak ping. |
 | `POST` | `/api/badges/check` | Returns rich AchievementModal payload. 60s cache per user. |
 
-## §1.21 Challenges & Reading Plans
+## §1.21 Challenges / Faith Walks
 
-Bible.com-style multi-day reading plans, fully in-app (no external redirect). Pastors author plans (admin §2.21); members enroll, get a daily to-do list, complete tasks, and we track streaks + completion. All endpoints `@UseGuards(JwtAuthGuard)`, tenant-scoped, mounted at `/api/challenges`.
+Bible.com-style multi-day reading plans (UI label "Faith Walks"; backend identifier stays `challenges`), fully in-app (no external redirect). Pastors author plans (admin §2.21); members enroll, get a daily to-do list, complete tasks. Backend tracks streaks, points, missed days, medal tier, and a per-challenge leaderboard. All endpoints `@UseGuards(JwtAuthGuard)`, tenant-scoped, mounted at `/api/challenges`.
 
 **Task types** (`taskType`):
 - `scripture` — a passage to read. Optional `timerSeconds` (0–3600) gates the Done button: keep a client-side countdown, then send `secondsSpent` + `timerSatisfied: true`. Carries `scriptureReference`, `scriptureTranslation`, `body` (verse snapshot or instructions).
 - `reflection` — `reflectionPrompt` shown above a free-text box; the member's answer goes in `reflectionText` (required).
 - `checkin` — a single confirm/Done, no extra input.
 
-**"Today" + streaks.** Day bucketing is tenant-local (`tenants.timezone`). A challenge with `startsOn = null` is **self-paced** (the enrollee's day 1 = enroll date); a `startsOn` date is a **fixed cohort** (everyone's day 1 anchored to it). `dayIndex = (today_local − started_on) + 1`. Streaks are day-granular: the first task completed on a new local day bumps `currentStreak` (consecutive days), same-day repeats don't.
+**"Today" + streaks.** Day bucketing is tenant-local (`tenants.timezone`). A challenge with `startsOn = null` is **self-paced** (the enrollee's day 1 = enroll date); a `startsOn` date is a **fixed cohort** (everyone's day 1 anchored to it). `dayIndex = (today_local − started_on) + 1`. Streaks are day-granular: the first **on-time** completion of a new local day bumps `currentStreak` (consecutive days); same-day repeats don't; **late completions never bump the streak**.
+
+**Day-of-day gating (migration 098).** Members can VIEW any day but can only COMPLETE on-time within today's anchored day.
+- `dayIndex > currentDayIndex` (future): tasks return `isLocked: true`; `POST /complete` returns `400 TASK_LOCKED` with `unlocksOn: "YYYY-MM-DD"`.
+- `dayIndex < currentDayIndex` (past): tasks return `isLate: true`; `POST /complete` accepts but stamps the completion `isLate: true`, awards `pointsEarned: 0`, doesn't bump streak, and decrements `missedCount` (the late completion moves the task from "missed" to "late-completed").
+- `dayIndex === currentDayIndex` (today): normal flow; points awarded by tenant-local hour (see Points tier).
+
+**Points tier (migration 098).** On every successful on-time completion, server computes points based on the tenant-local hour of completion:
+
+| Local hour | Points |
+|---|---|
+| 00:00–02:59 | 100 |
+| 03:00–05:59 | 90 |
+| 06:00–08:59 | 80 |
+| 09:00–11:59 | 70 |
+| 12:00–14:59 | 60 |
+| 15:00–17:59 | 50 |
+| 18:00–20:59 | 40 |
+| 21:00–23:59 | 30 |
+| Late completion | 0 |
+
+`enrollments.total_points = SUM(points_earned)`. Updated atomically on every `POST /complete`.
+
+**Medal tier (migration 098).** Server-derived on every `Enrollment` response:
+- `mythic` — perfect (zero missed, 100% on-time) AND viewer is in top-5 by `total_points` for this challenge. Locks if anyone passes them on the leaderboard (recomputed at read).
+- `gold` — perfect (zero missed, 100% on-time).
+- `silver` — ≥67% on-time completion.
+- `bronze` — ≥33% on-time completion.
+- `none` — otherwise.
+
+`missedCount` is updated by a cron sweep (hourly globally; processes tenants whose local time is in the 00:00–00:59 window). Late completions clear the matching dedupe row and decrement `missedCount`. Idempotency via the `challenge_enrollment_missed_tasks (enrollment_id, task_id)` composite PK.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -465,6 +496,7 @@ Bible.com-style multi-day reading plans, fully in-app (no external redirect). Pa
 | `GET` | `/api/challenges/:id/today` | Today's tasks for one plan. `{ date, dayIndex, started, finished, enrollment, tasks: Task[] }`. |
 | `GET` | `/api/challenges/:id/progress` | Per-day completion + streaks (see below). |
 | `GET` | `/api/challenges/:id/days/:dayIndex` | Tasks for a specific day (catch-up / browse-ahead). `{ dayIndex, tasks: Task[] }`. |
+| `GET` | `/api/challenges/:id/leaderboard?limit=50` | Per-challenge leaderboard. `{ byCompletion[], byPoints[], myRanks }` — see below. |
 | `POST` | `/api/challenges/tasks/:taskId/complete` | Complete a task. Body + response below. |
 
 **`Challenge`** (member shape):
@@ -480,13 +512,23 @@ Bible.com-style multi-day reading plans, fully in-app (no external redirect). Pa
 { id, challengeId, dayIndex, position, taskType,
   title, scriptureReference, scriptureTranslation, body,
   timerSeconds /* null when no gate */, reflectionPrompt,
-  completion: { id, completedAt, reflectionText, secondsSpent, timerSatisfied } | null }
+  isLocked,    // migration 098: dayIndex > today AND not completed
+  isLate,      // migration 098: dayIndex < today AND not completed
+  completion: {
+    id, completedAt, reflectionText, secondsSpent, timerSatisfied,
+    isLate,      // migration 098: was this completion past its anchored day?
+    pointsEarned // migration 098: 0-100, 0 if isLate
+  } | null }
 ```
 
-**`Enrollment`**:
+**`Enrollment`** (migration 098 adds `missedCount`, `totalPoints`, `badgeTier`):
 ```ts
 { id, challengeId, userId, startedOn, status /* active|completed|abandoned */,
-  completedAt, currentStreak, longestStreak, lastCompletedDate }
+  completedAt, currentStreak, longestStreak, lastCompletedDate,
+  missedCount,   // cron-tracked count of past-day tasks not completed on-time
+  totalPoints,   // SUM(pointsEarned) for this user/challenge
+  badgeTier      // 'none' | 'bronze' | 'silver' | 'gold' | 'mythic'
+}
 ```
 
 **`GET /api/challenges/today`** → `TodayGroup[]`:
@@ -508,10 +550,17 @@ Bible.com-style multi-day reading plans, fully in-app (no external redirect). Pa
   timerSatisfied?: boolean }  // scripture timer: must not be false
 // 200 →
 { recorded: true, taskId, completedOn: "YYYY-MM-DD",
-  enrollment: { id, status, currentStreak, longestStreak, lastCompletedDate },
+  isLate,        // migration 098: was this past its anchored day?
+  pointsEarned,  // migration 098: tier-based, 0 if isLate
+  enrollment: Enrollment,  // includes missedCount, totalPoints, badgeTier
   progress: { completedTaskCount, totalTaskCount } }
 ```
-Errors: `400 REFLECTION_REQUIRED` (reflection task, blank text), `400 TIMER_NOT_SATISFIED` (`{ ..., requiredSeconds }`). Completing the last remaining task flips the enrollment to `completed`. Re-completing an already-done task is idempotent (updates reflection/seconds, no double streak).
+Errors:
+- `400 REFLECTION_REQUIRED` — reflection task, blank text.
+- `400 TIMER_NOT_SATISFIED` — `{ ..., requiredSeconds }`.
+- `400 TASK_LOCKED` (migration 098) — `{ statusCode: 400, code: "TASK_LOCKED", message: "This task isn't unlocked yet.", unlocksOn: "YYYY-MM-DD" }`.
+
+Completing the last remaining task flips the enrollment to `completed`. Re-completing an already-done task is idempotent (updates reflection/seconds; `isLate`/`pointsEarned` are set on first insert and don't flip).
 
 **`GET /api/challenges/:id/progress`**:
 ```ts
@@ -520,6 +569,30 @@ Errors: `400 REFLECTION_REQUIRED` (reflection task, blank text), `400 TIMER_NOT_
   currentStreak, longestStreak,
   days: [ { dayIndex, total, completed, isComplete } ] }
 ```
+
+**`GET /api/challenges/:id/leaderboard?limit=50`** (migration 098):
+```ts
+{
+  byCompletion: LeaderboardEntry[], // sorted by completedTaskCount DESC, ties by totalPoints DESC
+  byPoints:     LeaderboardEntry[], // sorted by totalPoints DESC, ties by completedTaskCount DESC
+  myRanks: {
+    byCompletion: number | null,    // viewer's 1-indexed rank in full sort, null if not enrolled
+    byPoints:     number | null
+  }
+}
+
+interface LeaderboardEntry {
+  rank: number;
+  userId: string;
+  fullName: string | null;
+  avatarUrl: string | null;
+  completedTaskCount: number;
+  totalPoints: number;
+  badgeTier: 'none' | 'bronze' | 'silver' | 'gold' | 'mythic';
+  isMe: boolean;  // true only on viewer's own row
+}
+```
+Filters mutually-blocked users (per `user_blocks`). Caching is client-side (mobile uses `useQuery staleTime: 60s`). `limit` clamped 1..100, default 50.
 
 ---
 

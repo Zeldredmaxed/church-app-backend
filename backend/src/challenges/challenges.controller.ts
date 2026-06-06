@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  DefaultValuePipe,
   Get,
   HttpCode,
   HttpStatus,
@@ -9,6 +10,7 @@ import {
   ParseIntPipe,
   ParseUUIDPipe,
   Post,
+  Query,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
@@ -114,5 +116,20 @@ export class ChallengesController {
     @CurrentUser() user: SupabaseJwtPayload,
   ) {
     return this.challenges.getDay(this.tenantId(user), user.sub, id, dayIndex);
+  }
+
+  @Get(':id/leaderboard')
+  @ApiOperation({
+    summary: 'Per-challenge leaderboard (Faith Walks, migration 098)',
+    description:
+      'Returns { byCompletion[], byPoints[], myRanks } for ranking by completed task count OR total points. Tie-breakers documented in §1.21. Filters blocked users. Mobile caches client-side; no server cache needed.',
+  })
+  @ApiResponse({ status: 200, description: '{ byCompletion: LeaderboardEntry[], byPoints: LeaderboardEntry[], myRanks: { byCompletion: number|null, byPoints: number|null } }' })
+  getLeaderboard(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    return this.challenges.getLeaderboard(this.tenantId(user), user.sub, id, limit);
   }
 }
