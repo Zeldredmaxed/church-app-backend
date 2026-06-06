@@ -234,6 +234,9 @@ export class ChatService {
     const qb = queryRunner.manager
       .createQueryBuilder(ChatMessage, 'msg')
       .where('msg.channel_id = :channelId', { channelId })
+      // Hide messages an admin soft-deleted (migration 075). Forensic
+      // context still readable via /api/admin/chat/threads/.../context.
+      .andWhere('msg.deleted_at IS NULL')
       .orderBy('msg.created_at', 'DESC')
       .take(limit + 1); // fetch one extra to determine if there are more
 

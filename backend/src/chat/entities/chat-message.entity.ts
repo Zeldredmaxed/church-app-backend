@@ -29,4 +29,18 @@ export class ChatMessage {
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
+
+  /**
+   * Soft-delete columns (migration 075). Set by an admin via the chat
+   * moderation endpoint. Render queries should filter deleted_at IS NULL;
+   * the original content is preserved for forensic review.
+   */
+  @Column({ type: 'timestamptz', nullable: true, name: 'deleted_at' })
+  deletedAt: Date | null;
+
+  @Column({ type: 'uuid', nullable: true, name: 'deleted_by' })
+  deletedBy: string | null;
+
+  @Column({ type: 'text', nullable: true, name: 'deleted_reason' })
+  deletedReason: string | null;
 }

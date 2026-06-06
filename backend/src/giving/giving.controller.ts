@@ -18,6 +18,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { DataSource } from 'typeorm';
 import { GivingService } from './giving.service';
 import { DonateDto } from './dto/donate.dto';
+import { RefundTransactionDto } from './dto/refund-transaction.dto';
 import { CreateFundDto } from './dto/create-fund.dto';
 import { CreateBatchDto } from './dto/create-batch.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -116,6 +117,30 @@ export class GivingController {
   ) {
     const parsedLimit = Math.min(Math.max(parseInt(limit ?? '20', 10) || 20, 1), 100);
     return this.givingService.getTenantTransactions(tenantId, cursor, parsedLimit);
+  }
+
+  @Post('giving/transactions/:id/refund')
+  @UseGuards(PermissionsGuard)
+  @Permissions('manage_finance')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Refund a donation (manage_finance permission)',
+    description:
+      'Calls Stripe Refunds API and updates transactions.refund_status / refunded_amount / refunded_at / stripe_refund_id. Audits finance.donation_refunded. Body amount in CENTS; omit for full refund. Idempotency-Key supported on the Stripe call so retries are safe.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '{ refundId, amountCents, status }',
+  })
+  @ApiResponse({ status: 403, description: 'manage_finance permission required' })
+  @ApiResponse({ status: 404, description: 'Transaction not found in this tenant' })
+  @ApiResponse({ status: 409, description: 'Transaction already fully refunded' })
+  refundTransaction(
+    @Param('id', ParseUUIDPipe) transactionId: string,
+    @Body() dto: RefundTransactionDto,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    return this.givingService.refundTransaction(transactionId, dto, user.sub);
   }
 
   // ─── Batch Entry (Cash/Check) ───

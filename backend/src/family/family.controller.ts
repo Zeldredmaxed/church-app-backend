@@ -6,6 +6,7 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   ParseUUIDPipe,
   UseGuards,
   UseInterceptors,
@@ -13,10 +14,11 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
-import { IsBoolean, IsString, IsUUID } from 'class-validator';
+import { IsBoolean, IsString, IsUUID, MaxLength } from 'class-validator';
 import { FamilyService } from './family.service';
 import { SendFamilyRequestDto } from './dto/send-family-request.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
@@ -146,5 +148,60 @@ export class FamilyController {
     const tenantId = user.app_metadata?.current_tenant_id!;
     // Look up the connection to get both user IDs
     return this.familyService.removeConnectionById(tenantId, user.sub, relationshipId);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Admin family controller — separate so RoleGuard sits at class level
+// and the routes group cleanly under /api/admin/family/*.
+// ════════════════════════════════════════════════════════════════════
+
+class AdminRemoveFamilyDto {
+  @IsString()
+  @MaxLength(500)
+  reason: string;
+}
+
+@ApiTags('Admin Family')
+@ApiBearerAuth()
+@Controller('admin/family')
+@UseGuards(JwtAuthGuard, RoleGuard)
+@RequiresRole('admin', 'pastor')
+@UseInterceptors(RlsContextInterceptor)
+export class AdminFamilyController {
+  constructor(private readonly familyService: FamilyService) {}
+
+  @Get('relationships')
+  @ApiOperation({
+    summary: 'List family relationships for the current tenant (admin/pastor)',
+    description:
+      'Returns confirmed + inferred relationships with provenance. Filter by ?userId= to scope to one member; useful for child check-in safety reviews.',
+  })
+  @ApiResponse({ status: 200, description: '{ relationships: [...] }' })
+  listRelationships(
+    @CurrentUser() user: SupabaseJwtPayload,
+    @Query('userId') userId?: string,
+  ) {
+    const tenantId = user.app_metadata?.current_tenant_id!;
+    return this.familyService.adminListRelationships(tenantId, userId);
+  }
+
+  @Delete('relationships/:relationshipId')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Admin override: remove a family relationship (audited with reason)',
+    description:
+      'For correcting incorrect inferred siblings, divorces, or misidentified parent-child links. Reason is mandatory and surfaces in the audit log + targetUserId.',
+  })
+  @ApiResponse({ status: 200, description: '{ removed: true }' })
+  @ApiResponse({ status: 404, description: 'Relationship not found in this tenant' })
+  async adminRemove(
+    @Param('relationshipId', ParseUUIDPipe) relationshipId: string,
+    @Body() dto: AdminRemoveFamilyDto,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    const tenantId = user.app_metadata?.current_tenant_id!;
+    await this.familyService.adminRemoveConnection(tenantId, relationshipId, user.sub, dto.reason);
+    return { removed: true };
   }
 }

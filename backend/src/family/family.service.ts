@@ -304,6 +304,24 @@ export class FamilyService {
       })
       .catch(err => this.logger.warn(`family_accepted push failed: ${err.message}`));
 
+    // Audit. Drives the child-check-in safety trail — every accepted
+    // family relationship is a potential pickup-authorization claim.
+    await this.audit.log({
+      action: 'family.relationship_created',
+      resourceType: 'family',
+      resourceId: requestId,
+      targetUserId: req.user_id,
+      summary: `${accepterName} accepted family relationship (${forwardLabel})`,
+      metadata: {
+        requestId,
+        requesterId: req.user_id,
+        accepterId: req.related_user_id,
+        relationship: rel,
+        relationshipLabel: forwardLabel,
+        inverseRelationship: inverseRel,
+      },
+    });
+
     return { status: 'accepted' };
   }
 
@@ -498,10 +516,15 @@ export class FamilyService {
     return this.removeConnection(tenantId, conn.user_id, conn.related_user_id);
   }
 
-  async removeConnection(tenantId: string, userId: string, familyMemberId: string) {
+  async removeConnection(
+    tenantId: string,
+    userId: string,
+    familyMemberId: string,
+    actorUserId?: string,
+  ) {
     // Find the forward row
     const [fwd] = await this.dataSource.query(
-      `SELECT id FROM public.family_connections
+      `SELECT id, relationship FROM public.family_connections
        WHERE tenant_id = $1 AND user_id = $2 AND related_user_id = $3 AND status = 'accepted'`,
       [tenantId, userId, familyMemberId],
     );
@@ -509,7 +532,7 @@ export class FamilyService {
 
     // Find the reverse row
     const [rev] = await this.dataSource.query(
-      `SELECT id FROM public.family_connections
+      `SELECT id, relationship FROM public.family_connections
        WHERE tenant_id = $1 AND user_id = $2 AND related_user_id = $3 AND status = 'accepted'`,
       [tenantId, familyMemberId, userId],
     );
@@ -527,6 +550,109 @@ export class FamilyService {
        )`,
       [tenantId, userId, familyMemberId],
     );
+
+    // Audit. Drives the child-check-in safety review trail — an incorrect
+    // inferred sibling deletion previously left no record. actorUserId
+    // defaults to userId for self-initiated deletes (mobile DELETE
+    // /family/:id); for the admin endpoint we pass the admin's id.
+    const actor = actorUserId ?? userId;
+    const [actorRow] = await this.dataSource.query(
+      `SELECT full_name FROM public.users WHERE id = $1`,
+      [actor],
+    );
+    await this.audit.log({
+      action: 'family.relationship_removed',
+      resourceType: 'family',
+      resourceId: fwd.id,
+      targetUserId: actor === userId ? familyMemberId : userId,
+      summary: `${actorRow?.full_name ?? 'Member'} removed family relationship (${fwd.relationship})`,
+      metadata: {
+        userId,
+        familyMemberId,
+        relationship: fwd.relationship,
+        reverseRelationship: rev?.relationship,
+        viaAdmin: actorUserId !== undefined && actorUserId !== userId,
+      },
+    });
+  }
+
+  /**
+   * Admin: list family relationships for review (child-safety reviews,
+   * correcting bad inferences). Optionally scope to one userId. Returns
+   * the raw rows joined with names; pagination intentionally omitted —
+   * a single family tree maxes out at <100 connections.
+   */
+  async adminListRelationships(tenantId: string, userId?: string) {
+    const params: any[] = [tenantId];
+    let scope = '';
+    if (userId) {
+      params.push(userId);
+      scope = ` AND (fc.user_id = $2 OR fc.related_user_id = $2)`;
+    }
+    const rows = await this.dataSource.query(
+      `SELECT fc.id, fc.user_id, fc.related_user_id, fc.relationship,
+              fc.relationship_label, fc.is_inferred, fc.inferred_from,
+              fc.status, fc.created_at, fc.accepted_at,
+              u1.full_name AS user_name,
+              u2.full_name AS related_user_name
+       FROM public.family_connections fc
+       JOIN public.users u1 ON u1.id = fc.user_id
+       JOIN public.users u2 ON u2.id = fc.related_user_id
+       WHERE fc.tenant_id = $1 ${scope}
+       ORDER BY fc.created_at DESC LIMIT 500`,
+      params,
+    );
+    return {
+      relationships: rows.map((r: any) => ({
+        id: r.id,
+        userId: r.user_id,
+        userFullName: r.user_name,
+        relatedUserId: r.related_user_id,
+        relatedUserFullName: r.related_user_name,
+        relationship: r.relationship,
+        relationshipLabel: r.relationship_label,
+        isInferred: r.is_inferred,
+        inferredFrom: r.inferred_from,
+        status: r.status,
+        createdAt: r.created_at,
+        acceptedAt: r.accepted_at,
+      })),
+    };
+  }
+
+  /**
+   * Admin: remove a family connection regardless of who the caller is.
+   * Required for correcting bad inferences (incorrect inferred sibling
+   * etc.) that could otherwise authorize unauthorized child pickup. Both
+   * directions of the relationship are deleted; audit log captures the
+   * mandatory reason.
+   */
+  async adminRemoveConnection(
+    tenantId: string,
+    relationshipId: string,
+    adminUserId: string,
+    reason: string,
+  ) {
+    const [conn] = await this.dataSource.query(
+      `SELECT user_id, related_user_id FROM public.family_connections WHERE id = $1 AND tenant_id = $2`,
+      [relationshipId, tenantId],
+    );
+    if (!conn) throw new NotFoundException('Relationship not found');
+
+    // Reuse the existing two-direction deletion + cascade logic. Pass
+    // adminUserId so the audit row reflects who actually acted.
+    await this.removeConnection(tenantId, conn.user_id, conn.related_user_id, adminUserId);
+
+    // Append the mandatory reason as a separate audit row (the
+    // removeConnection audit doesn't carry a reason field).
+    await this.audit.log({
+      action: 'family.relationship_force_removed',
+      resourceType: 'family',
+      resourceId: relationshipId,
+      targetUserId: conn.user_id,
+      summary: `Admin force-removed family relationship`,
+      metadata: { reason, userId: conn.user_id, familyMemberId: conn.related_user_id },
+    });
   }
 
   // ════════════════════════════════════════════════════════

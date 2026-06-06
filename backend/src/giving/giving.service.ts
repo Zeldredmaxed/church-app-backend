@@ -1,7 +1,9 @@
 import {
   Injectable,
   BadRequestException,
+  ConflictException,
   Logger,
+  NotFoundException,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import * as crypto from 'crypto';
@@ -490,6 +492,116 @@ export class GivingService {
       donationCount: donations.length + fundraiserDonations.length,
       byFund: Object.entries(byFund).map(([fund, total]) => ({ fund, total })),
       taxStatement: `No goods or services were provided in exchange for these contributions. ${tenant?.name ?? 'This church'} is a tax-exempt organization under Section 501(c)(3) of the Internal Revenue Code. Your contributions are tax-deductible to the extent allowed by law.`,
+    };
+  }
+
+  /**
+   * Refund a donation (admin / accountant only). Calls Stripe Refunds
+   * API on the original PaymentIntent, then writes refund_status /
+   * refunded_amount / refunded_at / stripe_refund_id on the transaction
+   * row and a finance.donation_refunded audit entry.
+   *
+   * Idempotency: amount + reason flow into Stripe; the API key generates
+   * its own idempotency key per call (Stripe handles dedupe via PI ID).
+   * We refuse with 409 if the transaction is already 'full' refunded.
+   */
+  async refundTransaction(
+    transactionId: string,
+    body: { amountCents?: number; reason?: 'duplicate' | 'fraudulent' | 'requested_by_customer'; note?: string },
+    actorUserId: string,
+  ) {
+    const ctx = rlsStorage.getStore();
+    if (!ctx) throw new BadRequestException('RLS context unavailable');
+    const { queryRunner, currentTenantId } = ctx;
+
+    const [tx] = await queryRunner.query(
+      `SELECT id, user_id, tenant_id, amount, currency, stripe_payment_intent_id,
+              refund_status, refunded_amount
+       FROM public.transactions
+       WHERE id = $1 AND tenant_id = $2`,
+      [transactionId, currentTenantId],
+    );
+    if (!tx) throw new NotFoundException('Transaction not found');
+    if (!tx.stripe_payment_intent_id) {
+      throw new BadRequestException('Transaction has no Stripe PaymentIntent — cannot refund via Stripe');
+    }
+    if (tx.refund_status === 'full') {
+      throw new ConflictException('Transaction is already fully refunded');
+    }
+
+    // Amount in cents — Stripe SDK expects an integer in the currency's
+    // smallest unit. transactions.amount on this codebase is stored as a
+    // float in major units (e.g. 100.00 = $100); the donate path passes
+    // Math.round(amount * 100) when creating the PI. Mirror that here.
+    const originalCents = Math.round(Number(tx.amount) * 100);
+    const requestedCents = body.amountCents ?? originalCents;
+    if (requestedCents > originalCents) {
+      throw new BadRequestException(`Cannot refund more than the original $${tx.amount}`);
+    }
+    if (requestedCents <= 0) {
+      throw new BadRequestException('Refund amount must be positive');
+    }
+
+    const refund = await this.stripeService.refundPaymentIntent(tx.stripe_payment_intent_id, {
+      amount: requestedCents,
+      reason: body.reason,
+    });
+
+    // Update transactions row. 'pending' covers Stripe's async settlement
+    // window; the webhook will flip to 'full' / 'partial' / 'failed' once
+    // charge.refunded fires. For an immediate-status refund (Stripe
+    // returns 'succeeded' here) we can set the final state right away.
+    const finalStatus =
+      refund.status === 'succeeded'
+        ? requestedCents === originalCents
+          ? 'full'
+          : 'partial'
+        : 'pending';
+
+    await queryRunner.query(
+      `UPDATE public.transactions
+       SET refund_status = $2,
+           refunded_amount = COALESCE(refunded_amount, 0) + $3,
+           refunded_at = now(),
+           stripe_refund_id = $4,
+           refund_reason = $5
+       WHERE id = $1`,
+      [
+        transactionId,
+        finalStatus,
+        requestedCents,
+        refund.id,
+        body.note ?? body.reason ?? null,
+      ],
+    );
+
+    const [actor] = await queryRunner.query(
+      `SELECT full_name FROM public.users WHERE id = $1`,
+      [actorUserId],
+    );
+    await this.audit.log({
+      action: 'finance.donation_refunded',
+      resourceType: 'transaction',
+      resourceId: transactionId,
+      targetUserId: tx.user_id,
+      summary: `${actor?.full_name ?? 'Admin'} refunded $${(requestedCents / 100).toFixed(2)} from a ${tx.currency?.toUpperCase() ?? 'USD'} donation`,
+      metadata: {
+        transactionId,
+        paymentIntentId: tx.stripe_payment_intent_id,
+        refundId: refund.id,
+        amountCents: requestedCents,
+        originalCents,
+        currency: tx.currency,
+        reason: body.reason ?? null,
+        note: body.note ?? null,
+      },
+    });
+
+    return {
+      refundId: refund.id,
+      amountCents: requestedCents,
+      status: finalStatus,
+      stripeStatus: refund.status,
     };
   }
 }
