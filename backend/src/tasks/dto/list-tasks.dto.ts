@@ -16,4 +16,15 @@ export class ListTasksDto {
   @IsOptional()
   @IsISO8601()
   dueBefore?: string;
+
+  /**
+   * Cursor for pagination — an ISO-8601 created_at timestamp from the
+   * last row of the previous page. Validating it here turns garbage
+   * cursors into a clean 400 instead of a 500 from the failed
+   * `::timestamptz` cast in the service.
+   */
+  @ApiPropertyOptional({ description: 'ISO-8601 timestamp — pagination cursor (created_at of the last row seen)' })
+  @IsOptional()
+  @IsISO8601()
+  cursor?: string;
 }

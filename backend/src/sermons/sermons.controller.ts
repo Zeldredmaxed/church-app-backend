@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { SermonsService } from './sermons.service';
 import { CreateSermonDto } from './dto/create-sermon.dto';
 import { UpdateSermonDto } from './dto/update-sermon.dto';
+import { RecordViewProgressDto } from './dto/record-view-progress.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { ChurchOnly } from '../common/guards/church-only.guard';
 import { RlsContextInterceptor } from '../common/interceptors/rls-context.interceptor';
@@ -44,9 +45,43 @@ export class SermonsController {
   }
 
   @Get('series')
-  @ApiOperation({ summary: 'Get distinct sermon series with counts' })
+  @ApiOperation({
+    summary: 'Distinct sermon series with thumbnails + sermon counts',
+    description:
+      'Returns { data: [{ id (slug), name, sermonCount, thumbnailUrl, latestSpeaker, mostRecentAt }] }. Use `id` to call /sermons/series/:id/sermons.',
+  })
   getSeries(@CurrentUser() user: SupabaseJwtPayload) {
     return this.sermonsService.getSeries(this.getTenantId(user));
+  }
+
+  @Get('series/:id/sermons')
+  @ApiOperation({
+    summary: 'Sermons inside one series',
+    description: ':id is the slug from GET /sermons/series. Returns { seriesName, data: Sermon[] } newest first.',
+  })
+  getSeriesSermons(
+    @Param('id') seriesId: string,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    return this.sermonsService.getSeriesSermons(this.getTenantId(user), seriesId);
+  }
+
+  @Get('pastors')
+  @ApiOperation({
+    summary: 'Distinct speakers (pastors) with sermon counts',
+    description: 'Returns { data: [{ name, sermonCount, thumbnailUrl, mostRecentAt }] }.',
+  })
+  getPastors(@CurrentUser() user: SupabaseJwtPayload) {
+    return this.sermonsService.getPastors(this.getTenantId(user));
+  }
+
+  @Get('continue-watching')
+  @ApiOperation({
+    summary: 'Sermons the caller started but did not finish',
+    description: 'User-scoped. Returns { data: Sermon[] } sorted by most-recent view, each with lastWatchedSeconds + viewUpdatedAt. Cap 20.',
+  })
+  getContinueWatching(@CurrentUser() user: SupabaseJwtPayload) {
+    return this.sermonsService.getContinueWatching(this.getTenantId(user), user.sub);
   }
 
   @Get('stats')
@@ -109,13 +144,33 @@ export class SermonsController {
 
   @Post(':id/view')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Record a sermon view' })
+  @ApiOperation({ summary: 'Record a sermon view (bumps view_count)' })
   recordView(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: SupabaseJwtPayload,
   ) {
-    // Fire-and-forget with error logging
     this.sermonsService.recordView(this.getTenantId(user), id)
       .catch(err => this.logger.error('Failed to record sermon view', err));
+  }
+
+  @Post(':id/progress')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Update the caller\'s watch progress on a sermon',
+    description:
+      'UPSERT into sermon_views. last_watched_seconds is monotonically increasing — a lower value never rolls position back (GREATEST guard). Set completed=true when the user reaches the end so the sermon disappears from continue-watching.',
+  })
+  recordProgress(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RecordViewProgressDto,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    return this.sermonsService.upsertView(
+      this.getTenantId(user),
+      user.sub,
+      id,
+      dto.lastWatchedSeconds,
+      dto.completed,
+    );
   }
 }

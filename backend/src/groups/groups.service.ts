@@ -74,7 +74,12 @@ export class GroupsService {
     throw new ForbiddenException('Only the group creator or a tenant admin/pastor can do that.');
   }
 
-  async getGroups(userId: string, limit: number, cursor?: string) {
+  async getGroups(
+    userId: string,
+    limit: number,
+    cursor?: string,
+    type?: 'small_group' | 'discipleship' | 'ministry' | 'class' | 'other',
+  ) {
     const { queryRunner } = this.getRlsContext();
     const params: any[] = [userId, limit + 1];
     let sql = `
@@ -83,12 +88,17 @@ export class GroupsService {
         EXISTS(SELECT 1 FROM public.group_members WHERE group_id = g.id AND user_id = $1) AS is_member
       FROM public.groups g
     `;
+    const where: string[] = [];
 
+    if (type) {
+      params.push(type);
+      where.push(`g.type = $${params.length}`);
+    }
     if (cursor) {
       params.push(cursor);
-      sql += ` WHERE g.id < $${params.length}`;
+      where.push(`g.id < $${params.length}`);
     }
-
+    if (where.length) sql += ` WHERE ${where.join(' AND ')}`;
     sql += ` ORDER BY g.created_at DESC LIMIT $2`;
 
     const rows = await queryRunner.query(sql, params);

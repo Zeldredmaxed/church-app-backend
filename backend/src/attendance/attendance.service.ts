@@ -476,7 +476,7 @@ export class AttendanceService {
        WHERE so.is_cancelled = false
          AND so.start_push_sent_at IS NULL
          AND so.starts_at - (s.start_push_lead_minutes::text || ' minutes')::interval <= now() + interval '60 seconds'
-         AND so.starts_at - (s.start_push_lead_minutes::text || ' minutes')::interval >= now() - interval '5 minutes'`,
+         AND so.starts_at - (s.start_push_lead_minutes::text || ' minutes')::interval >= now() - interval '30 minutes'`,
     );
     if (occurrences.length === 0) return { pushed: 0 };
 
@@ -556,7 +556,7 @@ export class AttendanceService {
          AND so.end_push_sent_at IS NULL
          AND so.start_push_sent_at IS NOT NULL
          AND so.ends_at - (s.end_push_lead_minutes::text || ' minutes')::interval <= now() + interval '60 seconds'
-         AND so.ends_at - (s.end_push_lead_minutes::text || ' minutes')::interval >= now() - interval '5 minutes'`,
+         AND so.ends_at - (s.end_push_lead_minutes::text || ' minutes')::interval >= now() - interval '30 minutes'`,
     );
     if (occurrences.length === 0) return { pushed: 0 };
 

@@ -225,15 +225,17 @@ export class SermonsService {
     let avgWatchSeconds: number | null = null;
     if (hasViewsTable[0]?.reg) {
       try {
+        // Migration 095 ships `last_watched_seconds` — average of
+        // the furthest-watched position per view. NULLIF(...,0) skips
+        // bare "started but no progress recorded" rows so the average
+        // isn't dragged down by zero-second pings.
         const [avgRow] = await queryRunner.query(
-          `SELECT AVG(watch_seconds)::float AS avg_watch
+          `SELECT AVG(NULLIF(last_watched_seconds, 0))::float AS avg_watch
            FROM public.sermon_views WHERE tenant_id = $1`,
           [tenantId],
         );
         avgWatchSeconds = avgRow?.avg_watch != null ? Math.round(Number(avgRow.avg_watch)) : null;
       } catch {
-        // watch_seconds column might not exist on a partial sermon_views
-        // implementation — stay null instead of crashing the tile.
         avgWatchSeconds = null;
       }
     }
@@ -246,13 +248,194 @@ export class SermonsService {
     };
   }
 
+  /**
+   * Slugify a series name into a URL-safe id. The same algorithm runs
+   * in `getSeriesSermons` to map :id back to the original string for
+   * the WHERE clause. Strips diacritics, lowercases, collapses
+   * non-alphanumerics to single hyphens. No DB schema for series —
+   * series live as a TEXT column on sermons.
+   */
+  private slugifySeries(name: string): string {
+    return name
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
+  }
+
   async getSeries(tenantId: string) {
     const { queryRunner } = this.getRlsContext();
+    // LATERAL JOIN picks the latest sermon per series so the UI can
+    // render a representative thumbnail + speaker for the series card.
     const rows = await queryRunner.query(
-      `SELECT DISTINCT series_name, COUNT(*)::int as count FROM public.sermons WHERE tenant_id = $1 AND series_name IS NOT NULL GROUP BY series_name ORDER BY series_name`,
+      `SELECT s.series_name,
+              COUNT(*)::int AS count,
+              latest.thumbnail_url AS latest_thumbnail_url,
+              latest.speaker       AS latest_speaker,
+              MAX(s.created_at)    AS most_recent_at
+       FROM public.sermons s
+       LEFT JOIN LATERAL (
+         SELECT thumbnail_url, speaker
+         FROM public.sermons
+         WHERE tenant_id = s.tenant_id AND series_name = s.series_name
+         ORDER BY created_at DESC LIMIT 1
+       ) latest ON true
+       WHERE s.tenant_id = $1 AND s.series_name IS NOT NULL AND s.series_name <> ''
+       GROUP BY s.series_name, latest.thumbnail_url, latest.speaker
+       ORDER BY most_recent_at DESC`,
       [tenantId],
     );
-    return rows.map((r: any) => ({ seriesName: r.series_name, count: r.count }));
+    return {
+      data: rows.map((r: any) => ({
+        id: this.slugifySeries(r.series_name),
+        name: r.series_name,
+        sermonCount: r.count,
+        thumbnailUrl: r.latest_thumbnail_url ?? null,
+        latestSpeaker: r.latest_speaker ?? null,
+        mostRecentAt: r.most_recent_at,
+      })),
+    };
+  }
+
+  /**
+   * Sermons within a series. The :id is the slug from getSeries; we
+   * fan out to the source series_name by matching every distinct
+   * series in the tenant whose slug matches. Wildcard tenant scope
+   * is enforced by the WHERE.
+   */
+  async getSeriesSermons(tenantId: string, seriesId: string) {
+    const { queryRunner } = this.getRlsContext();
+    // Look up the actual series_name from the slug.
+    const candidates = await queryRunner.query(
+      `SELECT DISTINCT series_name FROM public.sermons
+       WHERE tenant_id = $1 AND series_name IS NOT NULL AND series_name <> ''`,
+      [tenantId],
+    );
+    const match = candidates.find((c: any) => this.slugifySeries(c.series_name) === seriesId);
+    if (!match) throw new NotFoundException('Series not found');
+
+    const rows = await queryRunner.query(
+      `SELECT s.*,
+        (SELECT COUNT(*)::int FROM public.comments c
+           JOIN public.posts p ON p.id = c.post_id
+           WHERE p.linked_sermon_id = s.id AND p.tenant_id = s.tenant_id) AS comment_count,
+        (SELECT COUNT(*)::int FROM public.posts p
+           WHERE p.linked_sermon_id = s.id AND p.tenant_id = s.tenant_id) AS discussion_post_count
+       FROM public.sermons s
+       WHERE s.tenant_id = $1 AND s.series_name = $2
+       ORDER BY s.created_at DESC`,
+      [tenantId, match.series_name],
+    );
+    return {
+      seriesName: match.series_name,
+      data: rows.map((r: any) => this.mapSermon(r)),
+    };
+  }
+
+  /**
+   * Distinct speakers ("pastors") with sermon counts, latest
+   * thumbnail, and most recent sermon date. Used by the pastors
+   * filter on SermonLibraryScreen.
+   */
+  async getPastors(tenantId: string) {
+    const { queryRunner } = this.getRlsContext();
+    const rows = await queryRunner.query(
+      `SELECT s.speaker AS name,
+              COUNT(*)::int AS sermon_count,
+              latest.thumbnail_url AS latest_thumbnail_url,
+              MAX(s.created_at)    AS most_recent_at
+       FROM public.sermons s
+       LEFT JOIN LATERAL (
+         SELECT thumbnail_url
+         FROM public.sermons
+         WHERE tenant_id = s.tenant_id AND speaker = s.speaker
+         ORDER BY created_at DESC LIMIT 1
+       ) latest ON true
+       WHERE s.tenant_id = $1 AND s.speaker IS NOT NULL AND s.speaker <> ''
+       GROUP BY s.speaker, latest.thumbnail_url
+       ORDER BY most_recent_at DESC`,
+      [tenantId],
+    );
+    return {
+      data: rows.map((r: any) => ({
+        name: r.name,
+        sermonCount: r.sermon_count,
+        thumbnailUrl: r.latest_thumbnail_url ?? null,
+        mostRecentAt: r.most_recent_at,
+      })),
+    };
+  }
+
+  /**
+   * Continue-watching feed: sermons the user started but didn't
+   * complete, newest progress first. Caps at 20 to keep the response
+   * small; mobile shows a horizontal carousel.
+   */
+  async getContinueWatching(tenantId: string, userId: string) {
+    const { queryRunner } = this.getRlsContext();
+    const rows = await queryRunner.query(
+      `SELECT s.*,
+              v.last_watched_seconds, v.updated_at AS view_updated_at,
+              (SELECT COUNT(*)::int FROM public.comments c
+                 JOIN public.posts p ON p.id = c.post_id
+                 WHERE p.linked_sermon_id = s.id AND p.tenant_id = s.tenant_id) AS comment_count,
+              (SELECT COUNT(*)::int FROM public.posts p
+                 WHERE p.linked_sermon_id = s.id AND p.tenant_id = s.tenant_id) AS discussion_post_count
+       FROM public.sermon_views v
+       JOIN public.sermons s ON s.id = v.sermon_id
+       WHERE v.user_id = $1 AND v.tenant_id = $2 AND v.completed_at IS NULL
+         AND v.last_watched_seconds > 0
+       ORDER BY v.updated_at DESC
+       LIMIT 20`,
+      [userId, tenantId],
+    );
+    return {
+      data: rows.map((r: any) => ({
+        ...this.mapSermon(r),
+        lastWatchedSeconds: r.last_watched_seconds,
+        viewUpdatedAt: r.view_updated_at,
+      })),
+    };
+  }
+
+  /**
+   * Records / updates the caller's progress on a sermon. Idempotent
+   * via UPSERT on (user_id, sermon_id). last_watched_seconds is
+   * monotonically increasing — a stale ping with a lower value
+   * doesn't roll the position back (GREATEST guard). completed=true
+   * snaps the completed_at timestamp.
+   */
+  async upsertView(
+    tenantId: string,
+    userId: string,
+    sermonId: string,
+    lastWatchedSeconds: number,
+    completed?: boolean,
+  ) {
+    const { queryRunner } = this.getRlsContext();
+    // Verify sermon belongs to the tenant — without this, a user could
+    // bump someone else's church's view count by guessing sermon ids.
+    const sermon = await queryRunner.query(
+      `SELECT id FROM public.sermons WHERE id = $1 AND tenant_id = $2`,
+      [sermonId, tenantId],
+    );
+    if (sermon.length === 0) throw new NotFoundException('Sermon not found');
+
+    await queryRunner.query(
+      `INSERT INTO public.sermon_views
+         (user_id, sermon_id, tenant_id, last_watched_seconds, completed_at, updated_at)
+       VALUES ($1, $2, $3, $4,
+               CASE WHEN $5 = true THEN now() ELSE NULL END,
+               now())
+       ON CONFLICT (user_id, sermon_id) DO UPDATE SET
+         last_watched_seconds = GREATEST(sermon_views.last_watched_seconds, EXCLUDED.last_watched_seconds),
+         completed_at = COALESCE(sermon_views.completed_at,
+                                  CASE WHEN $5 = true THEN now() ELSE NULL END),
+         updated_at = now()`,
+      [userId, sermonId, tenantId, lastWatchedSeconds, completed ?? false],
+    );
+    return { recorded: true };
   }
 
   async getEngagement(tenantId: string, id: string) {

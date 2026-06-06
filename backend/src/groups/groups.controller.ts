@@ -22,13 +22,28 @@ export class GroupsController {
   constructor(private readonly groupsService: GroupsService) {}
 
   @Get()
-  @ApiOperation({ summary: 'List groups (cursor-paginated)' })
+  @ApiOperation({
+    summary: 'List groups (cursor-paginated)',
+    description:
+      'Optional ?type= filter against groups.type (small_group | discipleship | ministry | class | other). When present, mobile tab queries narrow to the corresponding group bucket — no client-side filter needed.',
+  })
   getGroups(
     @CurrentUser() user: SupabaseJwtPayload,
     @Query('limit') limit?: string,
     @Query('cursor') cursor?: string,
+    @Query('type') type?: string,
   ) {
-    return this.groupsService.getGroups(user.sub, Math.min(parseInt(limit ?? '20', 10) || 20, 100), cursor);
+    const VALID = ['small_group', 'discipleship', 'ministry', 'class', 'other'] as const;
+    const safeType =
+      type && (VALID as readonly string[]).includes(type)
+        ? (type as (typeof VALID)[number])
+        : undefined;
+    return this.groupsService.getGroups(
+      user.sub,
+      Math.min(parseInt(limit ?? '20', 10) || 20, 100),
+      cursor,
+      safeType,
+    );
   }
 
   @Get(':id')
