@@ -151,6 +151,11 @@ import { FundraiserUpdate } from './fundraisers/entities/fundraiser-update.entit
 import { FundraiserBookmark } from './fundraisers/entities/fundraiser-bookmark.entity';
 import { DeviceToken } from './notifications/entities/device-token.entity';
 import { NotificationPreference } from './notifications/entities/notification-preference.entity';
+import { ChallengesModule } from './challenges/challenges.module';
+import { Challenge } from './challenges/entities/challenge.entity';
+import { ChallengeTask } from './challenges/entities/challenge-task.entity';
+import { ChallengeEnrollment } from './challenges/entities/challenge-enrollment.entity';
+import { ChallengeTaskCompletion } from './challenges/entities/challenge-task-completion.entity';
 
 @Module({
   imports: [
@@ -203,6 +208,10 @@ import { NotificationPreference } from './notifications/entities/notification-pr
           NotificationPreference,
           UserAppActivity,
           AuditLogEntry,
+          Challenge,
+          ChallengeTask,
+          ChallengeEnrollment,
+          ChallengeTaskCompletion,
         ],
 
         // CRITICAL: synchronize must ALWAYS be false.
@@ -347,6 +356,7 @@ import { NotificationPreference } from './notifications/entities/notification-pr
     StreamsModule,
     BibleModule,
     AiModule,
+    ChallengesModule,
 
     // GraphQL — Apollo Driver (code-first approach)
     // The FeedModule provides the FeedResolver which registers the globalFeed query.

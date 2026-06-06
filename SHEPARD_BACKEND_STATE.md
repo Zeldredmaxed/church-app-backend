@@ -2,9 +2,9 @@
 
 > **For:** Admin Dashboard Team (Next.js) **AND** Mobile App Team (React Native)
 > **Status:** Pre-launch, beta on Android via Expo Go, first church client imminent
-> **Last updated:** 2026-06-06 (commit `151c923`)
+> **Last updated:** 2026-06-06 (Challenges & Reading Plans)
 > **Live backend:** `https://church-app-backend-27hc.onrender.com/api`
-> **Latest migration applied:** `095_sermon_views.sql`
+> **Latest migration applied:** `096_challenges_reading_plans.sql`
 
 This document supersedes EVERY prior `*_PROMPT.md`, `*_REPLY*.md`,
 `*_FIXES.md`, and `FRONTEND_HANDOFF*.md`. Going forward, ANY change to
@@ -444,6 +444,83 @@ Translations: `kjv, web, asv, bbe, darby, dra, wbt, ylt`. **ESV is NOT available
 | `POST` | `/api/leaderboard/app-open` | Fire-and-forget streak ping. |
 | `POST` | `/api/badges/check` | Returns rich AchievementModal payload. 60s cache per user. |
 
+## §1.21 Challenges & Reading Plans
+
+Bible.com-style multi-day reading plans, fully in-app (no external redirect). Pastors author plans (admin §2.21); members enroll, get a daily to-do list, complete tasks, and we track streaks + completion. All endpoints `@UseGuards(JwtAuthGuard)`, tenant-scoped, mounted at `/api/challenges`.
+
+**Task types** (`taskType`):
+- `scripture` — a passage to read. Optional `timerSeconds` (0–3600) gates the Done button: keep a client-side countdown, then send `secondsSpent` + `timerSatisfied: true`. Carries `scriptureReference`, `scriptureTranslation`, `body` (verse snapshot or instructions).
+- `reflection` — `reflectionPrompt` shown above a free-text box; the member's answer goes in `reflectionText` (required).
+- `checkin` — a single confirm/Done, no extra input.
+
+**"Today" + streaks.** Day bucketing is tenant-local (`tenants.timezone`). A challenge with `startsOn = null` is **self-paced** (the enrollee's day 1 = enroll date); a `startsOn` date is a **fixed cohort** (everyone's day 1 anchored to it). `dayIndex = (today_local − started_on) + 1`. Streaks are day-granular: the first task completed on a new local day bumps `currentStreak` (consecutive days), same-day repeats don't.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/challenges` | Browse published plans. `{ data: Challenge[] }`, each with `myEnrollment: { id, status, currentStreak } \| null`. |
+| `GET` | `/api/challenges/today` | To-do across all my active enrollments. `{ date, data: TodayGroup[] }` (see below). |
+| `GET` | `/api/challenges/:id` | Single plan detail + `myEnrollment`. |
+| `POST` | `/api/challenges/:id/enroll` | Idempotent; re-activates an abandoned enrollment. Returns `Enrollment`. |
+| `POST` | `/api/challenges/:id/unenroll` | `{ id, status: "abandoned" }`. Preserves completion history. |
+| `GET` | `/api/challenges/:id/today` | Today's tasks for one plan. `{ date, dayIndex, started, finished, enrollment, tasks: Task[] }`. |
+| `GET` | `/api/challenges/:id/progress` | Per-day completion + streaks (see below). |
+| `GET` | `/api/challenges/:id/days/:dayIndex` | Tasks for a specific day (catch-up / browse-ahead). `{ dayIndex, tasks: Task[] }`. |
+| `POST` | `/api/challenges/tasks/:taskId/complete` | Complete a task. Body + response below. |
+
+**`Challenge`** (member shape):
+```ts
+{ id, tenantId, title, description, coverImageUrl, category,
+  durationDays, startsOn /* null=self-paced */, isPublished,
+  createdBy, createdAt, updatedAt, taskCount, enrolledCount,
+  myEnrollment: { id, status, currentStreak } | null }
+```
+
+**`Task`** (member shape — completion annotated):
+```ts
+{ id, challengeId, dayIndex, position, taskType,
+  title, scriptureReference, scriptureTranslation, body,
+  timerSeconds /* null when no gate */, reflectionPrompt,
+  completion: { id, completedAt, reflectionText, secondsSpent, timerSatisfied } | null }
+```
+
+**`Enrollment`**:
+```ts
+{ id, challengeId, userId, startedOn, status /* active|completed|abandoned */,
+  completedAt, currentStreak, longestStreak, lastCompletedDate }
+```
+
+**`GET /api/challenges/today`** → `TodayGroup[]`:
+```ts
+{ date: "YYYY-MM-DD",
+  data: [ { challenge: { id, title, coverImageUrl, durationDays },
+            enrollment: Enrollment,
+            dayIndex,            // clamped 1..durationDays
+            started,             // false if a fixed-cohort plan hasn't begun
+            finished,            // true once past the last day
+            tasks: Task[] } ] }  // [] when not started / finished
+```
+
+**`POST /api/challenges/tasks/:taskId/complete`**:
+```ts
+// request body (all optional, but conditionally required by task type)
+{ reflectionText?: string,   // required for reflection tasks
+  secondsSpent?: number,     // scripture timer: must be >= timerSeconds
+  timerSatisfied?: boolean }  // scripture timer: must not be false
+// 200 →
+{ recorded: true, taskId, completedOn: "YYYY-MM-DD",
+  enrollment: { id, status, currentStreak, longestStreak, lastCompletedDate },
+  progress: { completedTaskCount, totalTaskCount } }
+```
+Errors: `400 REFLECTION_REQUIRED` (reflection task, blank text), `400 TIMER_NOT_SATISFIED` (`{ ..., requiredSeconds }`). Completing the last remaining task flips the enrollment to `completed`. Re-completing an already-done task is idempotent (updates reflection/seconds, no double streak).
+
+**`GET /api/challenges/:id/progress`**:
+```ts
+{ enrollment: Enrollment, dayIndex, totalDays,
+  completedTaskCount, totalTaskCount, completionPct,
+  currentStreak, longestStreak,
+  days: [ { dayIndex, total, completed, isComplete } ] }
+```
+
 ---
 
 # §2 — Admin Dashboard team section
@@ -465,6 +542,7 @@ Required roles (`@RequiresRole(...)`) per major surface:
 | `/api/admin/family/relationships` | `admin`, `pastor` |
 | `/api/admin/account-deletions` | `admin`, `pastor` |
 | `/api/admin/shop` | `admin`, `pastor` |
+| `/api/admin/challenges/*` | `admin`, `pastor` |
 | `/api/admin/fundraisers/*` | `admin`, `pastor` |
 | `/api/services/*` (services CRUD) | `admin`, `pastor` |
 | `/api/streams` POST/PUT/DELETE | `admin`, `pastor` |
@@ -740,6 +818,57 @@ All filters stack.
 
 `GET /api/admin/family/relationships?userId=<uuid>` returns `{ relationships: [...] }` — confirmed + inferred relationships with provenance for child-safety audits.
 
+## §2.21 Challenges & Reading Plans (builder + participation)
+
+Pastor/admin authoring of the reading plans members consume (member surface in §1.21). All endpoints `@RequiresRole('admin','pastor')`, mounted at `/api/admin/challenges`. Member shapes (`Challenge`, `Task`, `Enrollment`) are defined in §1.21; admin adds task CRUD + a participation dashboard.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/admin/challenges` | Create plan, optionally with inline `tasks[]`. `201 →` full plan with `tasks[]`. |
+| `GET` | `/api/admin/challenges` | List all plans incl. drafts. `{ data: Challenge[] }` with `taskCount` + `enrolledCount`. |
+| `GET` | `/api/admin/challenges/:id` | Full plan + ordered `tasks[]`. |
+| `PATCH` | `/api/admin/challenges/:id` | Update metadata + publish state. |
+| `DELETE` | `/api/admin/challenges/:id` | `{ id, deleted: true }`. Cascades tasks + enrollments. |
+| `GET` | `/api/admin/challenges/:id/participation` | Dashboard (see below). |
+| `POST` | `/api/admin/challenges/:id/tasks` | Add one task. `201 →` Task. |
+| `PUT` | `/api/admin/challenges/:id/tasks` | Replace the entire task set (builder save). Returns full plan. |
+| `PATCH` | `/api/admin/challenges/:id/tasks/:taskId` | Update one task. |
+| `DELETE` | `/api/admin/challenges/:id/tasks/:taskId` | `{ id, deleted: true }`. |
+
+**Create plan body** (`POST /api/admin/challenges`):
+```ts
+{ title: string,                  // 1–200 chars, required
+  description?: string,           // <= 8000
+  coverImageUrl?: string,
+  category?: string,
+  durationDays: number,           // 1–366, required
+  startsOn?: string | null,       // "YYYY-MM-DD" fixed cohort, or null/omit = self-paced
+  isPublished?: boolean,          // default false (draft)
+  tasks?: TaskInput[] }           // optional inline task set
+```
+
+**`TaskInput`** (also the body of `POST .../tasks`; `PUT .../tasks` takes `{ tasks: TaskInput[] }`):
+```ts
+{ dayIndex: number,               // >= 1, required
+  position?: number,              // >= 0, order within the day, default 0
+  taskType: "scripture" | "reflection" | "checkin",
+  title?: string,                 // <= 200
+  scriptureReference?: string,    // scripture: reference OR body required
+  scriptureTranslation?: string,
+  body?: string,                  // <= 8000 (verse snapshot or instructions)
+  timerSeconds?: number,          // scripture read-gate, 0–3600
+  reflectionPrompt?: string }     // reflection: required, <= 2000
+```
+Validation `400`: scripture tasks need `scriptureReference` or `body`; reflection tasks need `reflectionPrompt`. `(dayIndex, position)` is unique per plan. `PATCH .../:id` and `PATCH .../tasks/:taskId` are partial — send only changed fields.
+
+**`GET /api/admin/challenges/:id/participation`**:
+```ts
+{ enrolledCount, activeCount, completedCount,
+  totalTasks, avgCompletionPct,        // 0–100 across all enrollees
+  completionsByDay: [ { dayIndex, taskCount, completionCount, memberCount } ],
+  topStreaks: [ { userId, fullName, avatarUrl, currentStreak, longestStreak, status } ] }  // top 20 by longestStreak
+```
+
 ---
 
 # §3 — Cross-cutting
@@ -752,6 +881,8 @@ Stable error codes — clients should hard-match on `code`, not `message`:
 |---|---|---|
 | `TENANT_MISMATCH` | `X-Active-Tenant-Id` header disagrees with JWT | `{ statusCode: 409, code, message, jwtTenantId, headerTenantId }` |
 | `PROFILE_INCOMPLETE` | Caller fails a profile-completeness gate | `{ statusCode: 400, code, message, requirementSet, missing: [{field, label}] }` |
+| `REFLECTION_REQUIRED` | Completing a reflection challenge task with blank text | `{ statusCode: 400, code, message }` |
+| `TIMER_NOT_SATISFIED` | Completing a timer-gated scripture task too early | `{ statusCode: 400, code, message, requiredSeconds }` |
 
 The TypeScript shape of `PROFILE_INCOMPLETE` lives in `backend/src/users/profile-completeness.types.ts` — copy into your shared types.
 
@@ -778,7 +909,7 @@ The TypeScript shape of `PROFILE_INCOMPLETE` lives in `backend/src/users/profile
 | `GET /api/volunteer/hours/pending` | `{ pending, count }` |
 | `GET /api/admin/audit-log` | `{ entries, nextCursor }` |
 | `GET /api/users/admin/account-deletions` | `{ data }` |
-| `GET /api/shop`, `/api/streams`, `/api/sermons/series`, `/api/sermons/pastors`, `/api/sermons/continue-watching`, `/api/fundraisers`, `/api/stripe/payment-methods`, `/api/admin/chat-moderation/flags` | `{ data, ... }` |
+| `GET /api/shop`, `/api/streams`, `/api/sermons/series`, `/api/sermons/pastors`, `/api/sermons/continue-watching`, `/api/fundraisers`, `/api/stripe/payment-methods`, `/api/admin/chat-moderation/flags`, `/api/challenges`, `/api/admin/challenges` | `{ data, ... }` |
 
 All NEW endpoints standardize on `{ data, ... }`. Legacy endpoints will migrate when we have a free sprint — we'll ping before any cutover so client normalizers can drop.
 
@@ -799,6 +930,7 @@ Every admin-impactful write goes through `AuditService.log({ action, resourceTyp
 - `stream.created`
 - `shop.item_created`, `shop.item_updated`, `shop.item_deleted`, `shop.purchase`
 - `sermon.published`, `sermon.updated`, `sermon.deleted`
+- `challenge.created`, `challenge.updated`, `challenge.deleted`
 
 The audit log viewer renders `summary` directly — backend always writes a sentence the admin can read.
 
@@ -860,33 +992,44 @@ Every backend change ships with an updated section of this document in the SAME 
 
 ---
 
-# Cross-team inbox (sibling project, not in this repo)
+# Cross-team coordination (Paperclip orchestrator)
 
-Lives at `D:/shepard-team-inbox/` (separate from this backend repo). A
-file-watcher daemon ferries requests between the three Shepard Claude
-Code sessions on this machine (backend, mobile, admin) without the
-human in the middle copy-pasting.
+The three Shepard Claude Code sessions on this machine coordinate via
+**Paperclip** ([paperclip.ing](https://paperclip.ing/)) — an autonomous
+multi-agent orchestrator. UI runs at `http://localhost:3100`; state
+lives in `D:/paperclip/`.
 
-**How a request flows:**
-1. Mobile or admin Claude writes a request file to
-   `D:/shepard-team-inbox/to-backend/<team>--<slug>.md` per
-   `D:/shepard-team-inbox/PROTOCOL.md`
-2. The daemon (running in a background terminal — `cd D:/shepard-team-inbox && npm start`)
-   sees the new file within ~1 second and spawns a headless
-   `claude -p` session inside the backend project
-3. That cold-start Claude reads the request, does the work (edits
-   code, runs `npx tsc --noEmit`, commits, etc.), and writes a reply
-   to `D:/shepard-team-inbox/to-<sender>/<original>--reply.md`
-4. The originating team's daemon picks up the reply and spawns their
-   Claude with "read the reply and take any follow-up action"
+**Org chart:**
+- **backend** — tech lead. Files tickets to mobile/admin when a
+  contract changes.
+- **mobile** — direct report. Implements the mobile-side change,
+  replies on the ticket.
+- **admin** — direct report. Implements the admin-dashboard side,
+  replies on the ticket.
 
-**For interactive sessions** (someone at the keyboard), asking "any
-new asks?" prompts Claude to scan `D:/shepard-team-inbox/to-<self>/`
-and process pending requests.
+**How a typical cross-team change flows:**
+1. Human asks backend agent for a feature (e.g. "build discount-codes
+   for shop")
+2. Backend agent designs, builds, runs adversarial review, commits,
+   pushes
+3. Backend agent files a Paperclip ticket to mobile + admin with the
+   new endpoint contract pasted in, referencing this document (§1 for
+   mobile, §2 for admin)
+4. Paperclip's heartbeat wakes mobile + admin agents; each reads the
+   ticket, implements its side, replies
+5. Backend agent reviews replies, files follow-up tickets if needed,
+   marks the parent ticket done when everyone's green
+6. All three agents idle until the next human request
 
-**Anything that changes a contract MUST update this document in the
-same commit** — that's how the other team finds out without a
-follow-up round-trip.
+**Anything that changes a contract MUST update the relevant section
+of this document in the SAME commit as the backend code change** —
+that's the canonical reference both teams' agents read. The Paperclip
+ticket is the work item; this document is the API surface.
 
-See `D:/shepard-team-inbox/README.md` for setup + `PROTOCOL.md` for
-the request/reply file schema.
+**Rules of thumb for the backend agent when filing tickets:**
+- Cross-reference the SHEPARD_BACKEND_STATE.md section number
+- Include the request/response shape verbatim, not just "see the docs"
+- Be generous with "decisions you can make without asking me" so
+  mobile/admin can iterate without round-tripping back
+- For breaking changes, explicitly note migration path / deprecation
+  timeline
