@@ -69,12 +69,19 @@ export const PRIVACY_POLICY_HTML = `<!DOCTYPE html>
     <li><strong>Expo Push Service</strong> — delivery of push notifications to your device.</li>
     <li><strong>Mux</strong> — video upload, transcoding, and playback.</li>
     <li><strong>Anthropic</strong> — AI assistant features (see Section 3b).</li>
+    <li><strong>OpenAI</strong> — voice transcription via the Whisper API (see Section 3c).</li>
     <li><strong>Resend</strong> — transactional email delivery.</li>
     <li><strong>Twilio</strong> — SMS delivery for verification and notifications.</li>
   </ul>
 
   <h3>3b. AI assistant (Anthropic)</h3>
   <p>Certain optional features (such as the in-app AI assistant, sermon summarization, and admin productivity tools) send prompt content to <strong>Anthropic, PBC</strong> for processing by its Claude large language models. Anthropic acts as our sub-processor and is contractually prohibited from training its models on inputs or outputs originating from the Shepard service, per Anthropic's <a href="https://www.anthropic.com/legal/commercial-terms">Commercial Terms of Service</a>. Inputs may include the text of messages or documents you explicitly submit to an AI feature; they do not include unrelated personal data.</p>
+
+  <h3>3c. Voice transcription (OpenAI Whisper)</h3>
+  <p>When you use the in-app voice-to-text feature inside the AI assistant, the audio you record is sent to <strong>OpenAI, L.L.C.</strong> for transcription via the Whisper API. Per OpenAI's <a href="https://openai.com/policies/api-data-usage-policies">API data usage policies</a>, content submitted through the API is <strong>not used to train OpenAI's models</strong> and is retained for up to <strong>30 days</strong> for abuse-monitoring purposes before being deleted. OpenAI acts as our sub-processor for this feature. Audio is sent only when you explicitly tap the microphone in the AI assistant — no background or always-listening capture occurs.</p>
+
+  <h3>3d. AI conversation retention</h3>
+  <p>Conversations with the in-app AI assistant are stored on our servers so you can revisit prior threads. We delete inactive AI conversations <strong>90 days after the last message</strong>; the timer resets every time you send or receive a new message in the conversation. You may delete any AI conversation immediately from within the app.</p>
 
   <h2>4. Your rights</h2>
   <p>Depending on your jurisdiction, you may have the following rights with respect to your personal data. Shepard honors these rights for all users worldwide, regardless of residency.</p>
@@ -121,6 +128,8 @@ export const PRIVACY_POLICY_HTML = `<!DOCTYPE html>
       <tr><td>Database backups</td><td>30 days, then automatically purged</td></tr>
       <tr><td>Push notification device tokens</td><td>Deleted on logout or token invalidation</td></tr>
       <tr><td>Auto-attendance raw location pings (lat/lng)</td><td>90 days, then permanently deleted</td></tr>
+      <tr><td>AI assistant conversations</td><td>90 days from the last message; resets on activity. Deleted immediately if you remove the conversation in-app.</td></tr>
+      <tr><td>Voice transcription audio (OpenAI Whisper)</td><td>Up to 30 days at OpenAI for abuse-monitoring, then deleted by OpenAI. We do not retain the audio after the transcription completes.</td></tr>
       <tr><td>Aggregated service-attendance records (anonymized)</td><td>7 years, in anonymized form, for church historical reporting</td></tr>
       <tr><td>Donation records</td><td>7 years (US IRS recordkeeping requirement); donor identity may be anonymized after account deletion while preserving amount, date, and church</td></tr>
       <tr><td>All other personal data on account deletion</td><td>Permanently deleted within 30 days of the deletion request</td></tr>

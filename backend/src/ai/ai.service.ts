@@ -160,6 +160,15 @@ export class AiService {
       content,
     });
     const saved = await queryRunner.manager.save(AiMessage, msg);
+    // Slide the TTL forward on activity so an actively-used
+    // conversation isn't purged by the daily retention cron (migration
+    // 094 default = 90 days from now()).
+    await queryRunner.query(
+      `UPDATE public.ai_conversations
+       SET updated_at = now(), expires_at = now() + interval '90 days'
+       WHERE id = $1`,
+      [conversationId],
+    );
     return { messageId: saved.id, conversationId };
   }
 
@@ -305,7 +314,9 @@ export class AiService {
     const savedAssistant = await queryRunner.manager.save(AiMessage, assistantMsg);
 
     await queryRunner.query(
-      `UPDATE public.ai_conversations SET updated_at = now() WHERE id = $1`,
+      `UPDATE public.ai_conversations
+       SET updated_at = now(), expires_at = now() + interval '90 days'
+       WHERE id = $1`,
       [conversationId],
     );
 
@@ -368,6 +379,31 @@ export class AiService {
 
     const data: any = await res.json();
     return { text: String(data.text ?? '') };
+  }
+
+  /**
+   * Retention cron entry — honors the migration 094 TTL by purging
+   * expired conversations. ai_messages cascade-deletes via FK.
+   * Batched so a backlog of millions doesn't lock the table.
+   */
+  async purgeExpired(): Promise<{ deleted: number }> {
+    let total = 0;
+    while (true) {
+      const result = await this.dataSource.query(
+        `WITH victims AS (
+           SELECT id FROM public.ai_conversations
+           WHERE expires_at < now()
+           LIMIT 2000
+         )
+         DELETE FROM public.ai_conversations c
+         USING victims v WHERE c.id = v.id
+         RETURNING c.id`,
+      );
+      const batch = result.length;
+      total += batch;
+      if (batch < 2000) break;
+    }
+    return { deleted: total };
   }
 
   // ── Helpers ──
