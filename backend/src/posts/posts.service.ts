@@ -49,8 +49,21 @@ export interface PostWithMeta {
     id: string;
     fullName: string | null;
     avatarUrl: string | null;
-    /** Author's home church (their last_accessed_tenant_id resolved). NULL if they have no tenant or are a guest. */
-    church: { id: string; name: string; brandColor: string | null } | null;
+    /**
+     * Author's church — sourced from the post's tenant_id (where it was
+     * authored), not the author's currently-active tenant. Stable per-post.
+     * Mig 109: Enterprise branding fields (brandPrimary, brandPillColor,
+     * brandDisplayName) populated only when the author's tenant is on
+     * Enterprise tier; null otherwise. Mobile's fallback chain handles nulls.
+     */
+    church: {
+      id: string;
+      name: string;
+      brandColor: string | null;
+      brandPrimary: string | null;
+      brandPillColor: string | null;
+      brandDisplayName: string | null;
+    } | null;
   } | null;
   likeCount: number;
   commentCount: number;
@@ -404,6 +417,10 @@ export class PostsService {
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
       p_tenant_id: string | null; p_tenant_name: string | null; p_tenant_brand_color: string | null;
+      // Mig 109: enrich post.author.church with Enterprise branding fields.
+      // Tier-gated in the mapper — only emitted when p_tenant_tier === 'enterprise'.
+      p_tenant_tier: string | null; p_tenant_brand_primary: string | null;
+      p_tenant_brand_pill_color: string | null; p_tenant_brand_display_name: string | null;
       sb_id: string | null; sb_name: string | null; sb_description: string | null;
       sb_icon: string | null; sb_tier: string | null; sb_category: string | null; sb_color: string | null;
       like_count: string; comment_count: string;
@@ -419,6 +436,10 @@ export class PostsService {
          pt.id        AS p_tenant_id,
          pt.name      AS p_tenant_name,
          pt.brand_color AS p_tenant_brand_color,
+         pt.tier        AS p_tenant_tier,
+         pt.brand_primary       AS p_tenant_brand_primary,
+         pt.brand_pill_color    AS p_tenant_brand_pill_color,
+         pt.brand_display_name  AS p_tenant_brand_display_name,
          sb.id        AS sb_id,
          sb.name      AS sb_name,
          sb.description AS sb_description,
@@ -503,7 +524,17 @@ export class PostsService {
             fullName: r.u_full_name,
             avatarUrl: r.u_avatar_url,
             church: r.p_tenant_id
-              ? { id: r.p_tenant_id, name: r.p_tenant_name!, brandColor: r.p_tenant_brand_color }
+              ? {
+                  id: r.p_tenant_id,
+                  name: r.p_tenant_name!,
+                  brandColor: r.p_tenant_brand_color,
+                  // Mig 109: Enterprise branding tier-gated by AUTHOR'S tenant
+                  // (the church paying for branding gets it shown wherever
+                  // their posts appear). Null for non-Enterprise authors.
+                  brandPrimary: r.p_tenant_tier === 'enterprise' ? r.p_tenant_brand_primary : null,
+                  brandPillColor: r.p_tenant_tier === 'enterprise' ? r.p_tenant_brand_pill_color : null,
+                  brandDisplayName: r.p_tenant_tier === 'enterprise' ? r.p_tenant_brand_display_name : null,
+                }
               : null,
           }
         : null,
@@ -535,6 +566,10 @@ export class PostsService {
          pt.id        AS p_tenant_id,
          pt.name      AS p_tenant_name,
          pt.brand_color AS p_tenant_brand_color,
+         pt.tier        AS p_tenant_tier,
+         pt.brand_primary       AS p_tenant_brand_primary,
+         pt.brand_pill_color    AS p_tenant_brand_pill_color,
+         pt.brand_display_name  AS p_tenant_brand_display_name,
          sb.id        AS sb_id,
          sb.name      AS sb_name,
          sb.description AS sb_description,
@@ -592,7 +627,17 @@ export class PostsService {
             fullName: r.u_full_name,
             avatarUrl: r.u_avatar_url,
             church: r.p_tenant_id
-              ? { id: r.p_tenant_id, name: r.p_tenant_name!, brandColor: r.p_tenant_brand_color }
+              ? {
+                  id: r.p_tenant_id,
+                  name: r.p_tenant_name!,
+                  brandColor: r.p_tenant_brand_color,
+                  // Mig 109: Enterprise branding tier-gated by AUTHOR'S tenant
+                  // (the church paying for branding gets it shown wherever
+                  // their posts appear). Null for non-Enterprise authors.
+                  brandPrimary: r.p_tenant_tier === 'enterprise' ? r.p_tenant_brand_primary : null,
+                  brandPillColor: r.p_tenant_tier === 'enterprise' ? r.p_tenant_brand_pill_color : null,
+                  brandDisplayName: r.p_tenant_tier === 'enterprise' ? r.p_tenant_brand_display_name : null,
+                }
               : null,
           }
         : null,
@@ -747,6 +792,10 @@ export class PostsService {
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
       p_tenant_id: string | null; p_tenant_name: string | null; p_tenant_brand_color: string | null;
+      // Mig 109: enrich post.author.church with Enterprise branding fields.
+      // Tier-gated in the mapper — only emitted when p_tenant_tier === 'enterprise'.
+      p_tenant_tier: string | null; p_tenant_brand_primary: string | null;
+      p_tenant_brand_pill_color: string | null; p_tenant_brand_display_name: string | null;
       sb_id: string | null; sb_name: string | null; sb_description: string | null;
       sb_icon: string | null; sb_tier: string | null; sb_category: string | null; sb_color: string | null;
       like_count: string; comment_count: string;
@@ -762,6 +811,10 @@ export class PostsService {
          pt.id        AS p_tenant_id,
          pt.name      AS p_tenant_name,
          pt.brand_color AS p_tenant_brand_color,
+         pt.tier        AS p_tenant_tier,
+         pt.brand_primary       AS p_tenant_brand_primary,
+         pt.brand_pill_color    AS p_tenant_brand_pill_color,
+         pt.brand_display_name  AS p_tenant_brand_display_name,
          sb.id        AS sb_id,
          sb.name      AS sb_name,
          sb.description AS sb_description,
@@ -823,7 +876,17 @@ export class PostsService {
             fullName: r.u_full_name,
             avatarUrl: r.u_avatar_url,
             church: r.p_tenant_id
-              ? { id: r.p_tenant_id, name: r.p_tenant_name!, brandColor: r.p_tenant_brand_color }
+              ? {
+                  id: r.p_tenant_id,
+                  name: r.p_tenant_name!,
+                  brandColor: r.p_tenant_brand_color,
+                  // Mig 109: Enterprise branding tier-gated by AUTHOR'S tenant
+                  // (the church paying for branding gets it shown wherever
+                  // their posts appear). Null for non-Enterprise authors.
+                  brandPrimary: r.p_tenant_tier === 'enterprise' ? r.p_tenant_brand_primary : null,
+                  brandPillColor: r.p_tenant_tier === 'enterprise' ? r.p_tenant_brand_pill_color : null,
+                  brandDisplayName: r.p_tenant_tier === 'enterprise' ? r.p_tenant_brand_display_name : null,
+                }
               : null,
           }
         : null,
@@ -956,6 +1019,10 @@ export class PostsService {
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
       p_tenant_id: string | null; p_tenant_name: string | null; p_tenant_brand_color: string | null;
+      // Mig 109: enrich post.author.church with Enterprise branding fields.
+      // Tier-gated in the mapper — only emitted when p_tenant_tier === 'enterprise'.
+      p_tenant_tier: string | null; p_tenant_brand_primary: string | null;
+      p_tenant_brand_pill_color: string | null; p_tenant_brand_display_name: string | null;
       sb_id: string | null; sb_name: string | null; sb_description: string | null;
       sb_icon: string | null; sb_tier: string | null; sb_category: string | null; sb_color: string | null;
       like_count: string; comment_count: string;
@@ -1021,7 +1088,17 @@ export class PostsService {
             fullName: r.u_full_name,
             avatarUrl: r.u_avatar_url,
             church: r.p_tenant_id
-              ? { id: r.p_tenant_id, name: r.p_tenant_name!, brandColor: r.p_tenant_brand_color }
+              ? {
+                  id: r.p_tenant_id,
+                  name: r.p_tenant_name!,
+                  brandColor: r.p_tenant_brand_color,
+                  // Mig 109: Enterprise branding tier-gated by AUTHOR'S tenant
+                  // (the church paying for branding gets it shown wherever
+                  // their posts appear). Null for non-Enterprise authors.
+                  brandPrimary: r.p_tenant_tier === 'enterprise' ? r.p_tenant_brand_primary : null,
+                  brandPillColor: r.p_tenant_tier === 'enterprise' ? r.p_tenant_brand_pill_color : null,
+                  brandDisplayName: r.p_tenant_tier === 'enterprise' ? r.p_tenant_brand_display_name : null,
+                }
               : null,
           }
         : null,
