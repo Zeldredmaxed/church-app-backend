@@ -131,6 +131,8 @@ import { OnboardingForm } from './onboarding/entities/onboarding-form.entity';
 import { OnboardingResponse } from './onboarding/entities/onboarding-response.entity';
 import { FeedbackModule } from './feedback/feedback.module';
 import { Feedback } from './feedback/entities/feedback.entity';
+import { IosWaitlistModule } from './ios-waitlist/ios-waitlist.module';
+import { IosWaitlistEntry } from './ios-waitlist/entities/ios-waitlist.entity';
 import { FamilyModule } from './family/family.module';
 import { FamilyConnection } from './family/entities/family-relationship.entity';
 import { StorageModule } from './storage/storage.module';
@@ -193,6 +195,7 @@ import { ChallengeTaskCompletion } from './challenges/entities/challenge-task-co
           LeaderboardSettings, CheckinConfig, DailyAppOpen,
           OnboardingForm, OnboardingResponse,
           Feedback,
+          IosWaitlistEntry,
           FamilyConnection,
           TenantStorageUsage,
           StorageFile,
@@ -353,6 +356,7 @@ import { ChallengeTaskCompletion } from './challenges/entities/challenge-task-co
     LeaderboardModule,
     OnboardingModule,
     FeedbackModule,
+    IosWaitlistModule,
     FamilyModule,
     StorageModule,
     FundraisersModule,

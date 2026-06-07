@@ -4,7 +4,7 @@
 > **Status:** Pre-launch, beta on Android via Expo Go, first church client imminent
 > **Last updated:** 2026-06-06 (Faith Walks extensions — gating, points, medals, leaderboard, missed-day cron)
 > **Live backend:** `https://church-app-backend-27hc.onrender.com/api`
-> **Latest migration applied:** `105_feedback_v2_align.sql`
+> **Latest migration applied:** `106_ios_waitlist.sql`
 > **Migration 097:** `097_groups_auto_tag.sql` — applied (additive cols for upcoming groups feature, not yet wired in services)
 > **Migration 099:** `099_bible_self_hosted.sql` — applied + seeded with 7 PD translations (~218k verses)
 > **Migration 100:** `100_first_customer_signup.sql` — applied. Adds tenants.country, invitations.cancelled_at, tenant_signup_completions dedupe table.
@@ -13,6 +13,12 @@
 > **Migration 103:** `103_group_meeting_fields.sql` — applied. Adds groups.meeting_day_of_week + meeting_time_start + meeting_frequency.
 > **Migration 104:** `104_feedback_triage.sql` — applied. Adds feedback.{screenshot_urls, device_info, category, triaged_at, triaged_by, triage_notes}. Expands priority to include 'critical'. Powers the "check the bug logs" manual triage workflow.
 > **Migration 105:** `105_feedback_v2_align.sql` — applied. Renames feedback.priority `medium`→`normal` + category values `frontend`→`mobile`/`admin`→`admin_web`/`unknown`→`uncategorized` to align with the mobile team's shipped Feedback v2 contract.
+> **Migration 106:** `106_ios_waitlist.sql` — applied. New `ios_waitlist` table — iOS users on /install submit their email; Zel exports as TestFlight-ready CSV to bulk-invite once iOS app ships.
+
+**iOS waitlist endpoints (mig 106):**
+- `POST /api/ios-waitlist` — PUBLIC, throttled 5/min/IP. Body: `{ email, source?, deviceInfo? }`. Idempotent — returns `{ joined: true }` whether or not the email was already on the list (don't expose existence on a public endpoint). Email lowercased + deduped server-side.
+- `GET /api/ios-waitlist/admin?status=pending|invited|all&limit=` — super-admin only. Returns `{ totalPending, totalInvited, count, items }`.
+- `GET /api/ios-waitlist/admin/export.csv?status=pending&markInvited=true` — super-admin only. Returns CSV with `First Name,Last Name,Email` header (TestFlight-ready format; first/last blank). By default returns only un-invited rows AND stamps `invited_at=now()` on every row in the export (so the same email isn't re-included next time). `?markInvited=false` for dry-run. `?status=all` for full re-export.
 
 This document supersedes EVERY prior `*_PROMPT.md`, `*_REPLY*.md`,
 `*_FIXES.md`, and `FRONTEND_HANDOFF*.md`. Going forward, ANY change to
