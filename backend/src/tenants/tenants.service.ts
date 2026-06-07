@@ -24,6 +24,7 @@ import { TenantSignupDto } from './dto/signup.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 import { getTierFeatures, TierFeatures, TIER_DISPLAY_NAMES, TIER_MONTHLY_PRICE_CENTS, TIER_YEARLY_PRICE_CENTS, TierName } from '../common/config/tier-features.config';
+import { ALL_PERMISSION_KEYS } from '../common/config/permissions.config';
 import { CacheService } from '../common/services/cache.service';
 import { StripeService } from '../stripe/stripe.service';
 import { EmailService } from '../common/services/email.service';
@@ -710,11 +711,32 @@ export class TenantsService {
       // membership is impossible by construction; the DO NOTHING guards
       // against accidentally demoting a higher role if this ever gets
       // re-entered via a code-path change.
+      //
+      // Permissions: the founding admin gets ALL 27 keys set to true.
+      // The admin dashboard's nav gates menu items on granular
+      // permission keys, not just role — so an empty {} (the old
+      // behavior) caused brand-new admins to see ONLY the dashboard
+      // tab. Setting every key explicitly avoids that.
+      const founderPermissions = Object.fromEntries(
+        ALL_PERMISSION_KEYS.map((k) => [k, true]),
+      );
       await queryRunner.query(
         `INSERT INTO public.tenant_memberships (tenant_id, user_id, role, permissions)
          VALUES ($1, $2, 'admin', $3::jsonb)
          ON CONFLICT (tenant_id, user_id) DO NOTHING`,
-        [tenantId, adminUserId, JSON.stringify({})],
+        [tenantId, adminUserId, JSON.stringify(founderPermissions)],
+      );
+
+      // Anchor the user's active tenant to the church they just
+      // created. getSession reads currentTenantId from
+      // users.last_accessed_tenant_id — without this row, a fresh
+      // signup's /auth/session returns currentTenantId: null and the
+      // dashboard has no idea which tenant is active. (The JWT's
+      // app_metadata.current_tenant_id is set below on the auth.users
+      // side; this is the public.users mirror that getSession reads.)
+      await queryRunner.query(
+        `UPDATE public.users SET last_accessed_tenant_id = $1 WHERE id = $2`,
+        [tenantId, adminUserId],
       );
 
       // Dedupe row (PK enforces idempotency on the webhook).
