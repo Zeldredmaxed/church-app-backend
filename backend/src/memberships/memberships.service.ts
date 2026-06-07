@@ -605,6 +605,7 @@ export class MembershipsService {
     cursor?: string,
     limit: number = 20,
     missingTagIds?: string[],
+    tagIds?: string[],
   ): Promise<{ members: TenantMemberDetail[]; nextCursor: string | null }> {
     const { queryRunner } = this.getRlsContext();
 
@@ -631,6 +632,22 @@ export class MembershipsService {
       params.push(capped);
       query += `
         AND NOT EXISTS (
+          SELECT 1 FROM public.member_tags mt
+          WHERE mt.user_id = tm.user_id
+            AND mt.tag_id = ANY($${params.length}::uuid[])
+        )`;
+    }
+
+    // ?tagIds=… — POSITIVE audience filter: member must have at
+    // least ONE of the given tags. EXISTS (any-match) by spec — the
+    // admin team's communications-targeting use case ("send to
+    // everyone tagged Men's Ministry OR Volunteers"). Capped at 20.
+    // Stacks AND-style with missingTagIds when both present.
+    if (tagIds && tagIds.length > 0) {
+      const cappedPos = tagIds.slice(0, 20);
+      params.push(cappedPos);
+      query += `
+        AND EXISTS (
           SELECT 1 FROM public.member_tags mt
           WHERE mt.user_id = tm.user_id
             AND mt.tag_id = ANY($${params.length}::uuid[])
