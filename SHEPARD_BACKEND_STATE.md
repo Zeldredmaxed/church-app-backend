@@ -4,13 +4,14 @@
 > **Status:** Pre-launch, beta on Android via Expo Go, first church client imminent
 > **Last updated:** 2026-06-06 (Faith Walks extensions — gating, points, medals, leaderboard, missed-day cron)
 > **Live backend:** `https://church-app-backend-27hc.onrender.com/api`
-> **Latest migration applied:** `103_group_meeting_fields.sql`
+> **Latest migration applied:** `104_feedback_triage.sql`
 > **Migration 097:** `097_groups_auto_tag.sql` — applied (additive cols for upcoming groups feature, not yet wired in services)
 > **Migration 099:** `099_bible_self_hosted.sql` — applied + seeded with 7 PD translations (~218k verses)
 > **Migration 100:** `100_first_customer_signup.sql` — applied. Adds tenants.country, invitations.cancelled_at, tenant_signup_completions dedupe table.
 > **Migration 101:** `101_member_import.sql` — applied. Adds tenant_memberships.imported_at/import_batch, member_imports audit table.
 > **Migration 102:** `102_system_message_templates.sql` — applied + seeded 15 system message templates. Adds message_templates.is_system + makes tenant_id nullable for shared system templates.
 > **Migration 103:** `103_group_meeting_fields.sql` — applied. Adds groups.meeting_day_of_week + meeting_time_start + meeting_frequency.
+> **Migration 104:** `104_feedback_triage.sql` — applied. Adds feedback.{screenshot_urls, device_info, category, triaged_at, triaged_by, triage_notes}. Expands priority to include 'critical'. Powers the "check the bug logs" manual triage workflow.
 
 This document supersedes EVERY prior `*_PROMPT.md`, `*_REPLY*.md`,
 `*_FIXES.md`, and `FRONTEND_HANDOFF*.md`. Going forward, ANY change to
@@ -927,6 +928,27 @@ Mobile/admin flow: `window.location = response.checkoutUrl`. After completion, S
 | `POST` | `/api/workflow-store/seed-official` | Seeds all 49 official templates (was 23; +26 in migration 102: 1 "Imported Members — Invite to Create Account" + 25 agent-generated at $2 each covering safety, weather, giving, engagement, admin themes). |
 
 **System message templates (migration 102).** `message_templates.tenant_id` is now nullable; rows with NULL `tenant_id` AND `is_system = true` are SHARED across all tenants. 15 starter templates pre-seeded (welcome, visitor thank-you, birthday, re-engagement, volunteer thank-you, donor thank-you, care follow-up, membership class, event reminder + 6 SMS variants). The workflow send_email / send_sms node's template picker should UNION system templates with tenant-owned templates so a brand-new tenant immediately has options instead of an empty dropdown. RLS policy on message_templates updated: SELECT visible if `is_system=true` OR `tenant_id matches`.
+
+## §2.16.5 Feedback + triage (migration 104)
+
+Bug reports / feature requests / workflow-node requests from mobile + admin pile up in `public.feedback`. Triaged manually for now via the cross-tenant `/feedback/triage` endpoints; future Paperclip "Triage Officer" agent automates the classification step.
+
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/api/feedback` | **Authenticated**, tenant-scoped. Body: `{ type: 'node_request' \| 'bug_report' \| 'feature_request', title, description, priority?, screenshotUrls?, deviceInfo? }`. priority can be `low \| medium \| high \| critical` (migration 104 added `critical`). `screenshotUrls` is up to 10 S3 URLs from the existing `/api/media` presigned-upload flow — mobile uploads each screenshot to S3 first, then passes URLs here. `deviceInfo` is free-form JSONB: `{ platform: 'ios'\|'android'\|'web', osVersion, appVersion, route, buildNumber? }`. |
+| `GET` | `/api/feedback?type=` | List for current tenant. |
+| `PATCH` | `/api/feedback/:id` | Update status (admin/pastor). |
+| `DELETE` | `/api/feedback/:id` | Hard delete (admin/pastor). |
+| `GET` | `/api/feedback/triage?status=&category=&priority=&limit=` | **Super-admin only (migration 104)**. Cross-tenant queue. Returns `{ totalUntriaged, count, items: [...] }`. Items include `tenantName`, `submittedByEmail`, `triagedByName`. Default filter: `status IN ('open','in_progress')`. Sort: priority (critical→low) then created_at ASC. `category=untriaged` returns rows where category IS NULL. `limit` clamped 1-500, default 100. |
+| `POST` | `/api/feedback/:id/triage` | **Super-admin only (migration 104)**. Body: `{ category?, priority?, status?, triageNotes? }` — at least one required. Stamps triaged_at + triaged_by. Returns updated row. |
+
+**Triage workflow.** When the platform owner says "check the bug logs":
+1. `GET /api/feedback/triage` (or direct DB query — service-role bypass justified) for everything open + not yet triaged
+2. For each row, read description + screenshots + deviceInfo, classify into:
+   - **category:** `frontend` (mobile UI bug) / `backend` (API bug) / `admin` (admin dashboard bug) / `unknown` (can't tell)
+   - **priority:** `critical` (data loss, money flow, login broken) → `high` (feature broken) → `medium` (degraded) → `low` (cosmetic)
+3. `POST /api/feedback/:id/triage` with the classification + notes
+4. Cross-team routing happens manually for now (paste the triage punch list to the appropriate team's Paperclip ticket / Claude session); Paperclip Triage Officer agent will automate this once activated.
 
 ## §2.17 Workflow executions
 
