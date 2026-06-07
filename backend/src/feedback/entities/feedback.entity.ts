@@ -22,9 +22,13 @@ export class Feedback {
   @Column({ type: 'text' })
   description: string;
 
-  /** Migration 104: 'critical' added to the existing low|medium|high set. */
-  @Column({ type: 'text', default: 'medium' })
-  priority: 'low' | 'medium' | 'high' | 'critical';
+  /**
+   * Migrations 104 + 105: low | normal | high | critical.
+   * Was low|medium|high in mig 104; mig 105 renamed medium→normal
+   * to match the mobile team's shipped Feedback v2 contract.
+   */
+  @Column({ type: 'text', default: 'normal' })
+  priority: 'low' | 'normal' | 'high' | 'critical';
 
   @Column({ type: 'text', default: 'open' })
   status: 'open' | 'in_progress' | 'completed' | 'closed';
@@ -51,12 +55,13 @@ export class Feedback {
   deviceInfo: Record<string, any>;
 
   /**
-   * Migration 104: classified during triage. NULL = not yet triaged.
-   * 'frontend' / 'backend' / 'admin' route to the matching
-   * engineering surface; 'unknown' means triaged but not classifiable.
+   * Migrations 104 + 105: classified during triage. NULL = not yet
+   * triaged. Values align with mobile team's bucket names from
+   * Feedback v2: 'mobile' / 'backend' / 'admin_web' / 'uncategorized'.
+   * (Mig 104 used frontend/admin/unknown; mig 105 renamed.)
    */
   @Column({ type: 'text', nullable: true })
-  category: 'frontend' | 'backend' | 'admin' | 'unknown' | null;
+  category: 'mobile' | 'backend' | 'admin_web' | 'uncategorized' | null;
 
   /** Migration 104: timestamp the item was triaged. NULL = not yet. */
   @Column({ type: 'timestamptz', name: 'triaged_at', nullable: true })

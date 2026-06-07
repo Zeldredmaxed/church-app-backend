@@ -4,7 +4,7 @@
 > **Status:** Pre-launch, beta on Android via Expo Go, first church client imminent
 > **Last updated:** 2026-06-06 (Faith Walks extensions — gating, points, medals, leaderboard, missed-day cron)
 > **Live backend:** `https://church-app-backend-27hc.onrender.com/api`
-> **Latest migration applied:** `104_feedback_triage.sql`
+> **Latest migration applied:** `105_feedback_v2_align.sql`
 > **Migration 097:** `097_groups_auto_tag.sql` — applied (additive cols for upcoming groups feature, not yet wired in services)
 > **Migration 099:** `099_bible_self_hosted.sql` — applied + seeded with 7 PD translations (~218k verses)
 > **Migration 100:** `100_first_customer_signup.sql` — applied. Adds tenants.country, invitations.cancelled_at, tenant_signup_completions dedupe table.
@@ -12,6 +12,7 @@
 > **Migration 102:** `102_system_message_templates.sql` — applied + seeded 15 system message templates. Adds message_templates.is_system + makes tenant_id nullable for shared system templates.
 > **Migration 103:** `103_group_meeting_fields.sql` — applied. Adds groups.meeting_day_of_week + meeting_time_start + meeting_frequency.
 > **Migration 104:** `104_feedback_triage.sql` — applied. Adds feedback.{screenshot_urls, device_info, category, triaged_at, triaged_by, triage_notes}. Expands priority to include 'critical'. Powers the "check the bug logs" manual triage workflow.
+> **Migration 105:** `105_feedback_v2_align.sql` — applied. Renames feedback.priority `medium`→`normal` + category values `frontend`→`mobile`/`admin`→`admin_web`/`unknown`→`uncategorized` to align with the mobile team's shipped Feedback v2 contract.
 
 This document supersedes EVERY prior `*_PROMPT.md`, `*_REPLY*.md`,
 `*_FIXES.md`, and `FRONTEND_HANDOFF*.md`. Going forward, ANY change to
@@ -935,12 +936,12 @@ Bug reports / feature requests / workflow-node requests from mobile + admin pile
 
 | Method | Path | Notes |
 |---|---|---|
-| `POST` | `/api/feedback` | **Authenticated**, tenant-scoped. Body: `{ type: 'node_request' \| 'bug_report' \| 'feature_request', title, description, priority?, screenshotUrls?, deviceInfo? }`. priority can be `low \| medium \| high \| critical` (migration 104 added `critical`). `screenshotUrls` is up to 10 S3 URLs from the existing `/api/media` presigned-upload flow — mobile uploads each screenshot to S3 first, then passes URLs here. `deviceInfo` is free-form JSONB: `{ platform: 'ios'\|'android'\|'web', osVersion, appVersion, route, buildNumber? }`. |
+| `POST` | `/api/feedback` | **Authenticated**, tenant-scoped. Body: `{ type: 'node_request' \| 'bug_report' \| 'feature_request', title, description, priority?, screenshots?, contextMeta? }`. priority enum: `low \| normal \| high \| critical` (mig 105 renamed `medium`→`normal`; default `normal`). `screenshots` is up to 10 S3 URLs from the existing `/api/media` presigned-upload flow (mobile UI caps at 3). `contextMeta` is free-form JSONB: `{ platform: 'ios'\|'android'\|'web', osVersion, appVersion, fromScreen, buildNumber? }`. **Aliases accepted on input** (mig 104 names): `screenshotUrls` (→ `screenshots`), `deviceInfo` (→ `contextMeta`) — service normalizes. **Both names emitted on read** so old clients keep working. |
 | `GET` | `/api/feedback?type=` | List for current tenant. |
 | `PATCH` | `/api/feedback/:id` | Update status (admin/pastor). |
 | `DELETE` | `/api/feedback/:id` | Hard delete (admin/pastor). |
-| `GET` | `/api/feedback/triage?status=&category=&priority=&limit=` | **Super-admin only (migration 104)**. Cross-tenant queue. Returns `{ totalUntriaged, count, items: [...] }`. Items include `tenantName`, `submittedByEmail`, `triagedByName`. Default filter: `status IN ('open','in_progress')`. Sort: priority (critical→low) then created_at ASC. `category=untriaged` returns rows where category IS NULL. `limit` clamped 1-500, default 100. |
-| `POST` | `/api/feedback/:id/triage` | **Super-admin only (migration 104)**. Body: `{ category?, priority?, status?, triageNotes? }` — at least one required. Stamps triaged_at + triaged_by. Returns updated row. |
+| `GET` | `/api/feedback/triage?status=&category=&priority=&limit=` | **Super-admin only (migrations 104 + 105)**. Cross-tenant queue. Returns `{ totalUntriaged, count, items: [...], bucketed: { mobile, backend, admin_web, uncategorized } }`. Items include `tenantName`, `submittedByEmail`, `triagedByName`. Default filter: `status IN ('open','in_progress')`. Sort: priority (`critical`→`high`→`normal`→`low`) then created_at ASC. `category` filter accepts `mobile\|backend\|admin_web\|uncategorized\|untriaged`. `priority` accepts `low\|normal\|high\|critical`. `limit` clamped 1-500, default 100. **Bucketing auto-derives category for untriaged rows** via heuristic: `contextMeta.fromScreen` starts with "Admin" → `admin_web`; description matches `/network\|server\|sync\|api\|backend\|timeout\|503\|502/` → `backend`; else → `mobile`. |
+| `POST` | `/api/feedback/:id/triage` | **Super-admin only (migrations 104 + 105)**. Body: `{ category?, priority?, status?, triageNotes? }` — at least one required. `category` enum: `mobile\|backend\|admin_web\|uncategorized`. `priority` enum: `low\|normal\|high\|critical`. Stamps triaged_at + triaged_by. Returns updated row. |
 
 **Triage workflow.** When the platform owner says "check the bug logs":
 1. `GET /api/feedback/triage` (or direct DB query — service-role bypass justified) for everything open + not yet triaged

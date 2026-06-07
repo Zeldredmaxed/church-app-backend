@@ -13,15 +13,15 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
  * mechanism — not in this DTO).
  */
 export class TriageFeedbackDto {
-  @ApiPropertyOptional({ enum: ['frontend', 'backend', 'admin', 'unknown'] })
+  @ApiPropertyOptional({ enum: ['mobile', 'backend', 'admin_web', 'uncategorized'] })
   @IsOptional()
-  @IsIn(['frontend', 'backend', 'admin', 'unknown'])
-  category?: 'frontend' | 'backend' | 'admin' | 'unknown';
+  @IsIn(['mobile', 'backend', 'admin_web', 'uncategorized'])
+  category?: 'mobile' | 'backend' | 'admin_web' | 'uncategorized';
 
-  @ApiPropertyOptional({ enum: ['low', 'medium', 'high', 'critical'] })
+  @ApiPropertyOptional({ enum: ['low', 'normal', 'high', 'critical'] })
   @IsOptional()
-  @IsIn(['low', 'medium', 'high', 'critical'])
-  priority?: 'low' | 'medium' | 'high' | 'critical';
+  @IsIn(['low', 'normal', 'high', 'critical'])
+  priority?: 'low' | 'normal' | 'high' | 'critical';
 
   @ApiPropertyOptional({ enum: ['open', 'in_progress', 'completed', 'closed'] })
   @IsOptional()

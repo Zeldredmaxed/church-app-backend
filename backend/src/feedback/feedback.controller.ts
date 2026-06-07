@@ -45,8 +45,8 @@ export class FeedbackController {
   @ApiResponse({ status: 200, description: '{ totalUntriaged, count, items: [...] }' })
   listForTriage(
     @Query('status') status?: 'open' | 'in_progress' | 'completed' | 'closed' | 'all',
-    @Query('category') category?: 'frontend' | 'backend' | 'admin' | 'unknown' | 'untriaged',
-    @Query('priority') priority?: 'low' | 'medium' | 'high' | 'critical',
+    @Query('category') category?: 'mobile' | 'backend' | 'admin_web' | 'uncategorized' | 'untriaged',
+    @Query('priority') priority?: 'low' | 'normal' | 'high' | 'critical',
     @Query('limit') limit?: string,
   ) {
     return this.feedbackService.listAllForTriage({

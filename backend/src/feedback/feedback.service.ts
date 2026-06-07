@@ -32,6 +32,13 @@ export class FeedbackService {
   }
 
   async createFeedback(tenantId: string, userId: string, dto: CreateFeedbackDto) {
+    // Migration 105: normalize the dual naming. Mobile sends
+    // `screenshots` + `contextMeta`; legacy admin client (mig 104)
+    // sent `screenshotUrls` + `deviceInfo`. Service accepts either,
+    // canonicalizes to one set of column values.
+    const screenshots = dto.screenshots ?? dto.screenshotUrls ?? [];
+    const contextMeta = dto.contextMeta ?? dto.deviceInfo ?? {};
+
     const [row] = await this.dataSource.query(
       `INSERT INTO public.feedback
          (type, title, description, priority, submitted_by, tenant_id,
@@ -42,16 +49,17 @@ export class FeedbackService {
         dto.type,
         dto.title,
         dto.description,
-        dto.priority ?? 'medium',
+        dto.priority ?? 'normal',
         userId,
         tenantId,
-        dto.screenshotUrls ?? [],
-        JSON.stringify(dto.deviceInfo ?? {}),
+        screenshots,
+        JSON.stringify(contextMeta),
       ],
     );
 
     this.logger.log(
-      `Feedback submitted: ${row.id} (${row.type}/${row.priority}) by ${userId} in tenant ${tenantId}`,
+      `Feedback submitted: ${row.id} (${row.type}/${row.priority}) by ${userId} in tenant ${tenantId}` +
+        (screenshots.length ? ` + ${screenshots.length} screenshots` : ''),
     );
     return this.mapRow(row);
   }
@@ -75,30 +83,37 @@ export class FeedbackService {
     if (rows.length === 0) throw new NotFoundException('Feedback not found');
   }
 
-  // ════════════════ Triage (migration 104, super-admin only) ════════════════
+  // ════════════════ Triage (migrations 104 + 105, super-admin only) ════════════════
 
   /**
    * Cross-tenant triage queue. Returns ALL feedback platform-wide,
-   * sorted by priority (critical → high → medium → low) then
-   * created_at ASC (oldest unhandled first).
+   * sorted by priority (critical → low) then created_at ASC.
    *
-   * SERVICE-ROLE BYPASS (documented per CLAUDE.md): this is the only
-   * place that intentionally crosses tenant boundaries — the
-   * super-admin (currently Zel; future Paperclip Triage Officer
-   * agent) needs to see every report regardless of which church it
-   * came from. Tenant_id is included in the response so the triager
-   * knows the source.
+   * Response shape (migration 105 — aligned with mobile team's
+   * suggested shape from the Feedback v2 brief):
+   *   {
+   *     totalUntriaged,           // count of rows w/ triaged_at IS NULL
+   *     count,                    // count in this response
+   *     items: FeedbackItem[],    // flat list (back-compat)
+   *     bucketed: {               // pre-categorized for cross-team handoff
+   *       mobile:        FeedbackItem[],
+   *       backend:       FeedbackItem[],
+   *       admin_web:     FeedbackItem[],
+   *       uncategorized: FeedbackItem[],
+   *     }
+   *   }
    *
-   * Filters:
-   *   - status (default: open + in_progress; pass 'all' to include closed/completed)
-   *   - category (frontend|backend|admin|unknown; pass 'untriaged' for category IS NULL)
-   *   - priority (low|medium|high|critical)
-   *   - limit (default 100, max 500)
+   * Bucketing rules:
+   *   - If row.category is set, use it directly.
+   *   - Otherwise auto-derive via the heuristic (see categorize() below).
+   *
+   * SERVICE-ROLE BYPASS (per CLAUDE.md): cross-tenant aggregate read.
+   * Guarded by SuperAdminGuard at the controller layer.
    */
   async listAllForTriage(filters: {
     status?: 'open' | 'in_progress' | 'completed' | 'closed' | 'all';
-    category?: 'frontend' | 'backend' | 'admin' | 'unknown' | 'untriaged';
-    priority?: 'low' | 'medium' | 'high' | 'critical';
+    category?: 'mobile' | 'backend' | 'admin_web' | 'uncategorized' | 'untriaged';
+    priority?: 'low' | 'normal' | 'high' | 'critical';
     limit?: number;
   } = {}) {
     const params: any[] = [];
@@ -141,7 +156,7 @@ export class FeedbackService {
         CASE f.priority
           WHEN 'critical' THEN 0
           WHEN 'high' THEN 1
-          WHEN 'medium' THEN 2
+          WHEN 'normal' THEN 2
           WHEN 'low' THEN 3
           ELSE 4
         END ASC,
@@ -154,26 +169,58 @@ export class FeedbackService {
       `SELECT COUNT(*)::int AS n FROM public.feedback WHERE triaged_at IS NULL AND status != 'closed'`,
     );
 
+    const items = rows.map((r: any) => ({
+      ...this.mapRow(r),
+      tenantName: r.tenant_name,
+      submittedByEmail: r.submitted_by_email,
+      triagedByName: r.triaged_by_name,
+    }));
+
+    // Bucket by category (auto-derive when NULL).
+    const bucketed: Record<'mobile' | 'backend' | 'admin_web' | 'uncategorized', any[]> = {
+      mobile: [],
+      backend: [],
+      admin_web: [],
+      uncategorized: [],
+    };
+    for (const item of items) {
+      const target = (item.category as keyof typeof bucketed | null) ?? this.categorize(item);
+      bucketed[target].push(item);
+    }
+
     return {
       totalUntriaged: totalUntriaged[0]?.n ?? 0,
-      count: rows.length,
-      items: rows.map((r: any) => ({
-        ...this.mapRow(r),
-        tenantName: r.tenant_name,
-        submittedByEmail: r.submitted_by_email,
-        triagedByName: r.triaged_by_name,
-      })),
+      count: items.length,
+      items,
+      bucketed,
     };
+  }
+
+  /**
+   * Auto-categorization heuristic for rows where category IS NULL
+   * (untriaged). Per the mobile team's brief:
+   *   - contextMeta.fromScreen starts with "Admin" → admin_web
+   *   - description mentions network/server/sync/api/backend → backend
+   *   - else → mobile (default — most users live in the mobile app)
+   * Returns the bucket name. Doesn't write to the row — pure read-time
+   * derivation. When I `POST /:id/triage` with the chosen category,
+   * THAT writes to the row.
+   */
+  private categorize(item: any): 'mobile' | 'backend' | 'admin_web' | 'uncategorized' {
+    const ctx = item.contextMeta ?? item.deviceInfo ?? {};
+    const fromScreen: string = ctx.fromScreen ?? ctx.route ?? '';
+    if (fromScreen.startsWith('Admin')) return 'admin_web';
+    const desc = (item.description ?? '').toLowerCase();
+    if (/network|server|sync|api|backend|database|500|timeout|503|502/i.test(desc)) {
+      return 'backend';
+    }
+    return 'mobile';
   }
 
   /**
    * Triage a single feedback item. Stamps triaged_at + triaged_by.
    * At least one of category/priority/status/triageNotes must be
    * supplied (otherwise the call is a no-op — reject).
-   *
-   * SERVICE-ROLE: no tenant_id filter on the UPDATE — by design,
-   * triage crosses tenant boundaries. Guarded by SuperAdminGuard at
-   * the controller layer.
    */
   async triageFeedback(id: string, triagerUserId: string, dto: TriageFeedbackDto) {
     const updates: string[] = ['triaged_at = now()', 'triaged_by = $2', 'updated_at = now()'];
@@ -196,7 +243,6 @@ export class FeedbackService {
       updates.push(`triage_notes = $${params.length}`);
     }
 
-    // Reject body-with-no-field calls (would silently no-op).
     if (params.length === 2) {
       throw new BadRequestException(
         'Triage body must include at least one of: category, priority, status, triageNotes',
@@ -216,8 +262,14 @@ export class FeedbackService {
     return this.mapRow(row);
   }
 
-  // ─── shared row mapper ───
+  /**
+   * Row mapper. Emits BOTH naming conventions on read so old admin
+   * clients reading `screenshotUrls`/`deviceInfo` keep working while
+   * the mobile team's shipped client reads `screenshots`/`contextMeta`.
+   */
   private mapRow(r: any) {
+    const screenshots: string[] = r.screenshot_urls ?? [];
+    const contextMeta: Record<string, any> = r.device_info ?? {};
     return {
       id: r.id,
       type: r.type,
@@ -228,8 +280,12 @@ export class FeedbackService {
       submittedBy: r.submitted_by,
       submittedByName: r.submitted_by_name ?? null,
       tenantId: r.tenant_id,
-      screenshotUrls: r.screenshot_urls ?? [],
-      deviceInfo: r.device_info ?? {},
+      // Mobile v2 names (canonical):
+      screenshots,
+      contextMeta,
+      // Legacy aliases (mig 104) — kept for any consumer still on the old names:
+      screenshotUrls: screenshots,
+      deviceInfo: contextMeta,
       category: r.category ?? null,
       triagedAt: r.triaged_at ?? null,
       triagedBy: r.triaged_by ?? null,
