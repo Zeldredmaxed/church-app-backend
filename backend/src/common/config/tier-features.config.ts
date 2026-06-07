@@ -157,9 +157,9 @@ export const TIER_DISPLAY_NAMES: Record<TierName, string> = {
  * though it isn't upgrade-able from anywhere (it's the entry tier).
  */
 export const TIER_MONTHLY_PRICE_CENTS: Record<TierName, number> = {
-  standard: 2900,
-  premium: 7900,
-  enterprise: 19900,
+  standard: 3900,
+  premium: 9900,
+  enterprise: 24900,
 };
 
 /**
