@@ -22,6 +22,8 @@ import { CreateTenantDto } from './dto/create-tenant.dto';
 import { RegisterChurchDto } from './dto/register-church.dto';
 import { TenantSignupDto } from './dto/signup.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
+import { UpdateBrandingDto } from './dto/update-branding.dto';
+import { ConfigService } from '@nestjs/config';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 import { getTierFeatures, TierFeatures, TIER_DISPLAY_NAMES, TIER_MONTHLY_PRICE_CENTS, TIER_YEARLY_PRICE_CENTS, TierName } from '../common/config/tier-features.config';
 import { ALL_PERMISSION_KEYS } from '../common/config/permissions.config';
@@ -41,6 +43,7 @@ export class TenantsService {
     @Inject(forwardRef(() => StripeService))
     private readonly stripe: StripeService,
     private readonly email: EmailService,
+    private readonly config: ConfigService,
   ) {
     this.supabase = supabaseAdmin.client;
   }
@@ -361,6 +364,18 @@ export class TenantsService {
       };
     }
 
+    // Migration 109: Enterprise custom branding fields. Server-side
+    // tier gate — if the tenant isn't on Enterprise, all six new
+    // fields surface as null in the response even if values exist
+    // in the row. A downgrade can't keep custom branding live.
+    const isEnterprise = tenant.tier === 'enterprise';
+    const brandPrimary = isEnterprise ? tenant.brandPrimary : null;
+    const brandSecondary = isEnterprise ? tenant.brandSecondary : null;
+    const brandPillColor = isEnterprise ? tenant.brandPillColor : null;
+    const brandDisplayName = isEnterprise ? tenant.brandDisplayName : null;
+    const brandLogoUrl = isEnterprise ? tenant.brandLogoUrl : null;
+    const brandWelcomeMessage = isEnterprise ? tenant.brandWelcomeMessage : null;
+
     return {
       tenant: {
         id: tenant.id,
@@ -372,6 +387,13 @@ export class TenantsService {
         parentTenantId: tenant.parentTenantId,
         brandColor: tenant.brandColor,
         isGuest: tenant.isGuest,
+        // Enterprise branding (mig 109) — null for non-Enterprise tenants
+        brandPrimary,
+        brandSecondary,
+        brandPillColor,
+        brandDisplayName,
+        brandLogoUrl,
+        brandWelcomeMessage,
       },
       features,
       ...(campusInfo ? { campus: campusInfo } : {}),
@@ -928,6 +950,110 @@ export class TenantsService {
     );
     if (!row) throw new NotFoundException('Tenant not found');
     return row as Tenant;
+  }
+
+  /**
+   * Migration 109: Enterprise custom branding (PATCH /api/tenants/:id/branding).
+   *
+   * Gates (in order):
+   *   1. Caller must be owner/admin/pastor of THIS tenant (DB role check)
+   *   2. Tenant must be on Enterprise tier
+   *      (returns 403 with code BRANDING_REQUIRES_ENTERPRISE)
+   *   3. brandLogoUrl, if provided, must be hosted on our S3 bucket
+   *      (returns 400 with code INVALID_LOGO_URL)
+   *
+   * Field semantics: undefined = leave unchanged, null = clear/reset.
+   */
+  async updateBranding(
+    tenantId: string,
+    userId: string,
+    dto: UpdateBrandingDto,
+  ): Promise<Tenant> {
+    const { queryRunner } = this.getRlsContext();
+
+    // Live role check (stale-JWT defense). Owner auto-passes guards
+    // upstream, but the live check also accepts owner/admin/pastor.
+    const [membership] = await queryRunner.query(
+      `SELECT role FROM public.tenant_memberships
+       WHERE tenant_id = $1 AND user_id = $2 AND role IN ('owner','admin','pastor')
+       LIMIT 1`,
+      [tenantId, userId],
+    );
+    if (!membership) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'INSUFFICIENT_ROLE',
+        message: 'You are not an owner, admin, or pastor of this tenant',
+      });
+    }
+
+    // Enterprise-tier gate.
+    const [tenantRow] = await queryRunner.query(
+      `SELECT tier FROM public.tenants WHERE id = $1`,
+      [tenantId],
+    );
+    if (!tenantRow) throw new NotFoundException('Tenant not found');
+    if (tenantRow.tier !== 'enterprise') {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'BRANDING_REQUIRES_ENTERPRISE',
+        message: 'Custom branding is an Enterprise tier feature. Upgrade to unlock.',
+      });
+    }
+
+    // Logo URL host check — must be from our S3 bucket (mig 109).
+    // Prevents the branding field from being used as a link-spam vector.
+    if (dto.brandLogoUrl != null) {
+      const allowedBucket = this.config.get<string>('S3_BUCKET', 'church-app-media-uploads');
+      let host = '';
+      try {
+        host = new URL(dto.brandLogoUrl).host;
+      } catch {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'INVALID_LOGO_URL',
+          message: 'brandLogoUrl must be a valid URL hosted on our media bucket',
+        });
+      }
+      const ok = host.startsWith(`${allowedBucket}.s3.`) && host.endsWith('.amazonaws.com');
+      if (!ok) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'INVALID_LOGO_URL',
+          message: `brandLogoUrl must be hosted on ${allowedBucket}.s3.<region>.amazonaws.com`,
+        });
+      }
+    }
+
+    // Build the UPDATE. undefined → skip, null → SET col = NULL.
+    const updates: string[] = [];
+    const params: any[] = [];
+    let i = 1;
+    const push = (col: string, val: any) => {
+      updates.push(`${col} = $${i++}`);
+      params.push(val);
+    };
+    if (dto.brandPrimary !== undefined)        push('brand_primary',         dto.brandPrimary);
+    if (dto.brandSecondary !== undefined)      push('brand_secondary',       dto.brandSecondary);
+    if (dto.brandPillColor !== undefined)      push('brand_pill_color',      dto.brandPillColor);
+    if (dto.brandDisplayName !== undefined)    push('brand_display_name',    dto.brandDisplayName);
+    if (dto.brandLogoUrl !== undefined)        push('brand_logo_url',        dto.brandLogoUrl);
+    if (dto.brandWelcomeMessage !== undefined) push('brand_welcome_message', dto.brandWelcomeMessage);
+
+    if (updates.length === 0) {
+      return this.findOne(tenantId);
+    }
+
+    params.push(tenantId);
+    const [updated] = await queryRunner.query(
+      `UPDATE public.tenants SET ${updates.join(', ')}
+       WHERE id = $${i}
+       RETURNING *`,
+      params,
+    );
+    if (!updated) throw new NotFoundException('Tenant not found');
+    this.logger.log(`updateBranding: tenant ${tenantId} branding updated by ${userId} (fields: ${updates.length})`);
+    return updated as Tenant;
   }
 }
 

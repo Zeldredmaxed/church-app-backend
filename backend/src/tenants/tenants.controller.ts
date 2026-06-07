@@ -22,6 +22,7 @@ import { CreateTenantDto } from './dto/create-tenant.dto';
 import { RegisterChurchDto } from './dto/register-church.dto';
 import { TenantSignupDto } from './dto/signup.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
+import { UpdateBrandingDto } from './dto/update-branding.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { SuperAdminGuard } from '../common/guards/super-admin.guard';
 import { RoleGuard, RequiresRole } from '../common/guards/role.guard';
@@ -107,6 +108,48 @@ export class TenantsController {
       throw new ForbiddenException('You can only update your own tenant');
     }
     return this.tenantsService.updateTenant(id, user.sub, dto);
+  }
+
+  /**
+   * PATCH /api/tenants/:id/branding — Enterprise custom branding
+   * (migration 109). Owner/admin/pastor of THIS tenant only.
+   * Tier-gated to Enterprise (service-layer check returns 403
+   * with code BRANDING_REQUIRES_ENTERPRISE for lower tiers).
+   *
+   * All body fields optional. `null` clears/resets a field;
+   * `undefined` leaves it unchanged.
+   *
+   * Returns the same shape as GET /api/tenants/:id/features under
+   * the `tenant` key (the response is wrapped to match what the
+   * mobile team consumes for branding refresh).
+   */
+  @Patch(':id/branding')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RoleGuard)
+  @UseInterceptors(RlsContextInterceptor)
+  @RequiresRole('admin', 'pastor')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update Enterprise branding (owner/admin/pastor, Enterprise tier only)' })
+  @ApiResponse({ status: 200, description: '{ tenant: <features-shape> }' })
+  @ApiResponse({ status: 400, description: 'INVALID_HEX | INVALID_DISPLAY_NAME | INVALID_WELCOME | INVALID_LOGO_URL' })
+  @ApiResponse({ status: 403, description: 'BRANDING_REQUIRES_ENTERPRISE | INSUFFICIENT_ROLE' })
+  async updateBranding(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateBrandingDto,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    const callerTenantId = user.app_metadata?.current_tenant_id;
+    if (!callerTenantId) {
+      throw new BadRequestException('No active tenant context');
+    }
+    if (callerTenantId !== id) {
+      throw new ForbiddenException('You can only update your own tenant');
+    }
+    await this.tenantsService.updateBranding(id, user.sub, dto);
+    // Return the same shape mobile reads on every refresh so the
+    // client can update its local branding cache from this response
+    // without an extra round-trip.
+    return this.tenantsService.getFeatures(id);
   }
 
   /**

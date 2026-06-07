@@ -93,6 +93,36 @@ export class Tenant {
   @Column({ type: 'text', nullable: true, name: 'brand_color' })
   brandColor: string | null;
 
+  // ─── Migration 109: Enterprise custom branding ───
+  // These six fields are Enterprise-tier only. NULL by default.
+  // Server-side tier gate in GET /tenants/:id/features nulls them
+  // out in the response when tier != 'enterprise' (so a downgrade
+  // can't keep custom branding live).
+
+  /** Primary brand color (#RRGGBB). Drives accent/button/active palette in the mobile app. */
+  @Column({ type: 'varchar', length: 7, nullable: true, name: 'brand_primary' })
+  brandPrimary: string | null;
+
+  /** Secondary brand color (#RRGGBB). Subtle dividers + info chips. Mobile derives one if null. */
+  @Column({ type: 'varchar', length: 7, nullable: true, name: 'brand_secondary' })
+  brandSecondary: string | null;
+
+  /** Override color for the church-name pill (#RRGGBB). Falls back to brandPrimary if null. */
+  @Column({ type: 'varchar', length: 7, nullable: true, name: 'brand_pill_color' })
+  brandPillColor: string | null;
+
+  /** Replaces "Shepard" in the mobile app's top-left header. 2-80 chars. */
+  @Column({ type: 'varchar', length: 80, nullable: true, name: 'brand_display_name' })
+  brandDisplayName: string | null;
+
+  /** S3 URL for a ~40×40 logo next to the display name in the header. */
+  @Column({ type: 'text', nullable: true, name: 'brand_logo_url' })
+  brandLogoUrl: string | null;
+
+  /** Optional tagline shown on the mobile home screen above verse-of-the-day. ≤200 chars. */
+  @Column({ type: 'varchar', length: 200, nullable: true, name: 'brand_welcome_message' })
+  brandWelcomeMessage: string | null;
+
   /**
    * Monthly church-wide giving goal in cents (e.g. 500_000 = $5,000).
    * Drives the giving-progress widget on dashboards. NULL = no goal set.
