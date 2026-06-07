@@ -9,18 +9,23 @@ import {
   Query,
   Res,
   ParseUUIDPipe,
+  UploadedFile,
   UseGuards,
   UseInterceptors,
   HttpCode,
   HttpStatus,
+  BadRequestException,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { MembershipsService } from './memberships.service';
+import { MemberImportService } from './member-import.service';
 import { CreateMembershipDto } from './dto/create-membership.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { UpdatePermissionsDto } from './dto/update-permissions.dto';
 import { GetMembersDto } from './dto/get-members.dto';
+import { ImportMembersDto } from './dto/import-members.dto';
 import { SelfJoinDto, SwitchChurchDto } from './dto/self-join.dto';
 import { assertUrlTenantMatchesJwt } from '../common/guards/tenant-clamp.helper';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -37,7 +42,10 @@ import { Response } from 'express';
 @Controller()
 @UseGuards(JwtAuthGuard)
 export class MembershipsController {
-  constructor(private readonly membershipsService: MembershipsService) {}
+  constructor(
+    private readonly membershipsService: MembershipsService,
+    private readonly memberImport: MemberImportService,
+  ) {}
 
   @Get('memberships')
   @UseInterceptors(RlsContextInterceptor)
@@ -121,6 +129,52 @@ export class MembershipsController {
   ) {
     assertUrlTenantMatchesJwt(tenantId, user);
     return this.membershipsService.getMemberKpis(tenantId);
+  }
+
+  /**
+   * Bulk member import from a CSV (migration 101). admin/pastor only,
+   * throttled 3/hour to prevent both abuse and accidental double-uploads.
+   *
+   * Behavior (per the user spec):
+   *   - PROFILE ONLY: auth.users row created with email_confirm=false +
+   *     no password. Imported members CANNOT log in until invited.
+   *   - NO emails sent at import time. Pastor controls timing via a
+   *     workflow triggered on member_tagged for the assigned tag
+   *     (default: "Imported - Pending Invite").
+   *   - Idempotent on email — re-uploading the same CSV updates
+   *     profile fields but doesn't double-create.
+   *   - Each row is its own transaction; bad rows surface in the
+   *     errors array but don't poison the whole import.
+   */
+  @Post('tenants/:tenantId/members/import-csv')
+  @UseGuards(RoleGuard)
+  @RequiresRole('admin', 'pastor')
+  @Throttle({ default: { ttl: 3600000, limit: 3 } })
+  @UseInterceptors(FileInterceptor('file', {
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB cap, matches service-layer check
+  }))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Import members from a Tithely/Breeze CSV file (admin/pastor only, 3/hour)' })
+  @ApiResponse({ status: 200, description: '{ importId, totalRows, created, updated, skipped, errors }' })
+  @ApiResponse({ status: 400, description: 'Invalid CSV, missing required fields, or > 5000 rows' })
+  async importMembersCsv(
+    @Param('tenantId', ParseUUIDPipe) tenantId: string,
+    @UploadedFile() file: { originalname?: string; buffer: Buffer; size: number } | undefined,
+    @Body() dto: ImportMembersDto,
+    @CurrentUser() user: SupabaseJwtPayload,
+  ) {
+    assertUrlTenantMatchesJwt(tenantId, user);
+    if (!file) {
+      throw new BadRequestException('No file uploaded. Send the CSV as multipart `file` field.');
+    }
+    return this.memberImport.importCsv({
+      tenantId,
+      importedByUserId: user.sub,
+      source: dto.source,
+      filename: file.originalname ?? null,
+      csvBuffer: file.buffer,
+      assignTagName: dto.assignTag ?? 'Imported - Pending Invite',
+    });
   }
 
   @Get('tenants/:tenantId/members/export')

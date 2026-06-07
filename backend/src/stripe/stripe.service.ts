@@ -510,6 +510,56 @@ export class StripeService {
   }
 
   /**
+   * One-time payment Checkout session for a marketplace template
+   * install (migration 102). $2 per template per the user spec.
+   *
+   * Distinguished from subscription Checkout via `mode: 'payment'`
+   * (not subscription) and metadata.flow === 'marketplace_install'.
+   * The webhook handler picks up the completion event and performs
+   * the actual install — payment-first pattern, never trust the
+   * redirect.
+   */
+  async createMarketplaceInstallSession(params: {
+    tenantId: string;
+    templateId: string;
+    templateName: string;
+    priceCents: number;
+    userId: string;
+    successUrl: string;
+    cancelUrl: string;
+  }): Promise<Stripe.Checkout.Session> {
+    const stripe = this.ensureStripe();
+    return stripe.checkout.sessions.create(
+      {
+        mode: 'payment',
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency: 'usd',
+              unit_amount: params.priceCents,
+              product_data: {
+                name: `Shepard Workflow: ${params.templateName}`,
+                description: 'Pre-built workflow template install',
+              },
+            },
+          },
+        ],
+        success_url: params.successUrl,
+        cancel_url: params.cancelUrl,
+        client_reference_id: params.tenantId,
+        metadata: {
+          flow: 'marketplace_install',
+          tenantId: params.tenantId,
+          templateId: params.templateId,
+          userId: params.userId,
+        },
+      },
+      { idempotencyKey: `mkt-install:${params.tenantId}:${params.templateId}:${params.userId}` },
+    );
+  }
+
+  /**
    * Verifies a Stripe webhook signature and returns the parsed event.
    * Throws Stripe.errors.StripeSignatureVerificationError on failure.
    */

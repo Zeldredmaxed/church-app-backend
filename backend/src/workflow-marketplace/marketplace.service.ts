@@ -1,13 +1,18 @@
-import { Injectable, Logger, NotFoundException, ForbiddenException, ConflictException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, ForbiddenException, ConflictException, Inject, forwardRef } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { createHash } from 'crypto';
 import { OFFICIAL_TEMPLATES } from './official-templates';
+import { StripeService } from '../stripe/stripe.service';
 
 @Injectable()
 export class MarketplaceService {
   private readonly logger = new Logger(MarketplaceService.name);
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    @Inject(forwardRef(() => StripeService))
+    private readonly stripe: StripeService,
+  ) {}
 
   /* ───── Browse Templates ───── */
 
@@ -271,6 +276,74 @@ export class MarketplaceService {
   }
 
   /* ───── Install Template ───── */
+
+  /**
+   * Public-facing install entry point. Gates on price (migration 102):
+   *   - priceCents === 0 → install immediately, return workflow
+   *   - priceCents > 0   → return Stripe Checkout URL for the user to
+   *     pay; on checkout.session.completed webhook with
+   *     metadata.flow === 'marketplace_install', the actual install
+   *     happens via installTemplate() below.
+   *
+   * Already-installed check: if a workflow_template_installs row
+   * exists for this (tenant, template), short-circuit and return
+   * the existing workflow (idempotent re-install).
+   */
+  async startInstall(
+    tenantId: string,
+    templateId: string,
+    userId: string,
+    publicSiteUrl: string,
+  ): Promise<any> {
+    const [template] = await this.dataSource.query(
+      `SELECT * FROM public.workflow_templates WHERE id = $1 AND is_published = true`,
+      [templateId],
+    );
+    if (!template) throw new NotFoundException('Template not found');
+
+    // Already installed? Short-circuit.
+    const [existingInstall] = await this.dataSource.query(
+      `SELECT workflow_id FROM public.workflow_template_installs
+       WHERE template_id = $1 AND tenant_id = $2`,
+      [templateId, tenantId],
+    );
+    if (existingInstall) {
+      const workflow = await this.loadWorkflowForResponse(tenantId, existingInstall.workflow_id);
+      return {
+        installed: true,
+        workflowId: existingInstall.workflow_id,
+        templateId,
+        name: template.name,
+        workflow,
+      };
+    }
+
+    // Paid template: redirect to Stripe Checkout. The webhook
+    // handler calls installTemplate() after payment succeeds.
+    if (template.price_cents > 0) {
+      const successUrl = `${publicSiteUrl.replace(/\/$/, '')}/marketplace/installed?templateId=${templateId}`;
+      const cancelUrl  = `${publicSiteUrl.replace(/\/$/, '')}/marketplace/${templateId}?cancelled=1`;
+      const session = await this.stripe.createMarketplaceInstallSession({
+        tenantId,
+        templateId,
+        templateName: template.name,
+        priceCents: template.price_cents,
+        userId,
+        successUrl,
+        cancelUrl,
+      });
+      return {
+        requiresPayment: true,
+        checkoutUrl: session.url!,
+        priceCents: template.price_cents,
+        templateId,
+        templateName: template.name,
+      };
+    }
+
+    // Free template — install immediately.
+    return this.installTemplate(tenantId, templateId, userId);
+  }
 
   async installTemplate(tenantId: string, templateId: string, userId: string) {
     const [template] = await this.dataSource.query(

@@ -4,10 +4,12 @@
 > **Status:** Pre-launch, beta on Android via Expo Go, first church client imminent
 > **Last updated:** 2026-06-06 (Faith Walks extensions — gating, points, medals, leaderboard, missed-day cron)
 > **Live backend:** `https://church-app-backend-27hc.onrender.com/api`
-> **Latest migration applied:** `100_first_customer_signup.sql`
+> **Latest migration applied:** `102_system_message_templates.sql`
 > **Migration 097:** `097_groups_auto_tag.sql` — applied (additive cols for upcoming groups feature, not yet wired in services)
 > **Migration 099:** `099_bible_self_hosted.sql` — applied + seeded with 7 PD translations (~218k verses)
 > **Migration 100:** `100_first_customer_signup.sql` — applied. Adds tenants.country, invitations.cancelled_at, tenant_signup_completions dedupe table.
+> **Migration 101:** `101_member_import.sql` — applied. Adds tenant_memberships.imported_at/import_batch, member_imports audit table.
+> **Migration 102:** `102_system_message_templates.sql` — applied + seeded 15 system message templates. Adds message_templates.is_system + makes tenant_id nullable for shared system templates.
 
 This document supersedes EVERY prior `*_PROMPT.md`, `*_REPLY*.md`,
 `*_FIXES.md`, and `FRONTEND_HANDOFF*.md`. Going forward, ANY change to
@@ -718,7 +720,8 @@ Other reports endpoints:
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/api/tenants/:tenantId/members?cursor=&limit=&missingTagIds=<uuid>,<uuid>` | `?missingTagIds=` returns members missing ALL listed tags ("newcomers not yet welcomed" filter). |
-| `POST` | `/api/tenants/:tenantId/members/import` | Bulk CSV import. |
+| `POST` | `/api/tenants/:tenantId/members/import` | Legacy JSON-body bulk import. Body: `{ members: [{ email, fullName?, phone?, role? }] }`. |
+| `POST` | `/api/tenants/:tenantId/members/import-csv` | **Migration 101**, admin/pastor, multipart. Drag-drop import from Tithely/Breeze/ChurchTeams/Planning Center. Body: multipart `file` (CSV ≤10MB, ≤5000 rows) + `source` field + optional `assignTag` (default `"Imported - Pending Invite"`). PROFILE-ONLY: creates auth.users with `email_confirm=false` (can't log in until invited) + public.users + tenant_memberships stamped with `imported_at` + `import_batch`. Auto-assigns the tag for workflow targeting. NO emails sent — pastor controls timing via marketplace template `"Imported Members — Invite to Create Account"`. Returns `{ importId, totalRows, created, updated, skipped, errors[{row, reason, email?}] }`. Throttled 3/hour. |
 | `GET` | `/api/tenants/:tenantId/members/export` | CSV. Throttled 5/hour + audit row. |
 | `GET` | `/api/members/:userId/profile` | 360° view. |
 | `PUT` | `/api/members/:userId/journey` | Spiritual journey edits. |
@@ -889,15 +892,17 @@ Mobile/admin flow: `window.location = response.checkoutUrl`. After completion, S
 | `PUT` | `/api/streams/:id` | Update title/startsAt/endsAt/thumbnailUrl/isLive. |
 | `DELETE` | `/api/streams/:id` | Tears down the Mux live stream too — old `streamKey` stops working. |
 
-## §2.16 Admin Workflow Store (Enterprise)
+## §2.16 Workflow Marketplace + System Templates (migration 102)
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/api/workflow-store` | Browse marketplace. |
+| `GET` | `/api/workflow-store` | Browse marketplace (filterable by category/search/isOfficial). |
 | `POST` | `/api/workflow-store/publish` | Publish your church's workflow. |
-| `POST` | `/api/workflow-store/:id/install` | Install a template. |
+| `POST` | `/api/workflow-store/:id/install` | **Migration 102 — paid-install gate.** Free templates (priceCents=0) install immediately and return `{ installed: true, workflowId, workflow }`. Paid templates return `{ requiresPayment: true, checkoutUrl, priceCents }` — frontend redirects to Stripe Checkout (one-time payment). The actual install happens on `checkout.session.completed` webhook (metadata.flow=`marketplace_install`), idempotent. |
 | `POST` | `/api/workflow-store/:id/rate` | |
-| `POST` | `/api/workflow-store/seed-official` | Seed 22 official templates. |
+| `POST` | `/api/workflow-store/seed-official` | Seeds all 49 official templates (was 23; +26 in migration 102: 1 "Imported Members — Invite to Create Account" + 25 agent-generated at $2 each covering safety, weather, giving, engagement, admin themes). |
+
+**System message templates (migration 102).** `message_templates.tenant_id` is now nullable; rows with NULL `tenant_id` AND `is_system = true` are SHARED across all tenants. 15 starter templates pre-seeded (welcome, visitor thank-you, birthday, re-engagement, volunteer thank-you, donor thank-you, care follow-up, membership class, event reminder + 6 SMS variants). The workflow send_email / send_sms node's template picker should UNION system templates with tenant-owned templates so a brand-new tenant immediately has options instead of an empty dropdown. RLS policy on message_templates updated: SELECT visible if `is_system=true` OR `tenant_id matches`.
 
 ## §2.17 Workflow executions
 

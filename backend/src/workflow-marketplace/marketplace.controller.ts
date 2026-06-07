@@ -10,6 +10,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { MarketplaceService } from './marketplace.service';
 import { PublishTemplateDto } from './dto/publish-template.dto';
@@ -29,7 +30,10 @@ const TEMPLATE_CATEGORIES = [
 @ApiTags('Workflow Marketplace')
 @Controller('workflow-store')
 export class MarketplaceController {
-  constructor(private readonly marketplaceService: MarketplaceService) {}
+  constructor(
+    private readonly marketplaceService: MarketplaceService,
+    private readonly config: ConfigService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: 'Browse published workflow templates' })
@@ -121,14 +125,23 @@ export class MarketplaceController {
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(RlsContextInterceptor)
-  @ApiOperation({ summary: 'Install (buy) a template into your church' })
-  @ApiResponse({ status: 201, description: 'Template installed, workflow created' })
+  @ApiOperation({
+    summary: 'Install a template into your church (free or paid)',
+    description:
+      'Free templates (priceCents=0) install immediately and return ' +
+      '{ installed: true, workflowId, workflow }. Paid templates ' +
+      'return { requiresPayment: true, checkoutUrl, priceCents } — ' +
+      'redirect the user to Stripe Checkout; the actual install ' +
+      'happens on the checkout.session.completed webhook.',
+  })
+  @ApiResponse({ status: 200, description: 'Free: { installed, workflow }; Paid: { requiresPayment, checkoutUrl }' })
   async install(
     @CurrentUser() user: SupabaseJwtPayload,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     const tenantId = user.app_metadata?.current_tenant_id!;
-    return this.marketplaceService.installTemplate(tenantId, id, user.sub);
+    const publicSiteUrl = this.config.get<string>('PUBLIC_SITE_URL') ?? 'https://shepard.love';
+    return this.marketplaceService.startInstall(tenantId, id, user.sub, publicSiteUrl);
   }
 
   @Post(':id/rate')

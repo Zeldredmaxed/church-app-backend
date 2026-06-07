@@ -17,6 +17,7 @@ import { Request } from 'express';
 import { DataSource } from 'typeorm';
 import { StripeService } from './stripe.service';
 import { TenantsService } from '../tenants/tenants.service';
+import { MarketplaceService } from '../workflow-marketplace/marketplace.service';
 import { Transaction } from '../giving/entities/transaction.entity';
 import { FundraiserDonation } from '../fundraisers/entities/fundraiser-donation.entity';
 import { Tenant } from '../tenants/entities/tenant.entity';
@@ -34,6 +35,8 @@ export class StripeWebhookController {
     private readonly config: ConfigService,
     @Inject(forwardRef(() => TenantsService))
     private readonly tenantsService: TenantsService,
+    @Inject(forwardRef(() => MarketplaceService))
+    private readonly marketplaceService: MarketplaceService,
   ) {}
 
   @Post('stripe')
@@ -180,12 +183,17 @@ export class StripeWebhookController {
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session;
 
-        // Dispatch by metadata.flow (migration 100).
-        //   'new_tenant_signup' → public paid signup → materialize tenant + admin
-        //   undefined           → existing plan-upgrade flow (back-compat)
+        // Dispatch by metadata.flow.
+        //   'new_tenant_signup' (mig 100)   → materialize tenant + admin
+        //   'marketplace_install' (mig 102) → install workflow template
+        //   undefined                       → plan-upgrade flow (back-compat)
         const flow = session.metadata?.flow;
         if (flow === 'new_tenant_signup') {
           await this.handleNewTenantSignupCompletion(session);
+          break;
+        }
+        if (flow === 'marketplace_install') {
+          await this.handleMarketplaceInstallCompletion(session);
           break;
         }
 
@@ -435,6 +443,40 @@ export class StripeWebhookController {
       // run the create path again.
       this.logger.error(
         `new_tenant_signup webhook FAILED for session ${session.id}: ${err.message}`,
+      );
+      throw err;
+    }
+  }
+
+  /**
+   * Handler for checkout.session.completed when metadata.flow ===
+   * 'marketplace_install' (migration 102). Installs the paid workflow
+   * template into the buyer's tenant. Idempotent — re-running the
+   * install for an already-installed (tenant, template) returns the
+   * existing workflow row via ON CONFLICT on workflow_template_installs.
+   */
+  private async handleMarketplaceInstallCompletion(
+    session: Stripe.Checkout.Session,
+  ): Promise<void> {
+    const m = session.metadata ?? {};
+    const tenantId = m.tenantId as string | undefined;
+    const templateId = m.templateId as string | undefined;
+    const userId = m.userId as string | undefined;
+
+    if (!tenantId || !templateId || !userId) {
+      const msg = `marketplace_install webhook missing metadata (session ${session.id}): tenantId=${tenantId} templateId=${templateId} userId=${userId}`;
+      this.logger.error(msg);
+      throw new Error(msg);
+    }
+
+    try {
+      const result = await this.marketplaceService.installTemplate(tenantId, templateId, userId);
+      this.logger.log(
+        `marketplace_install webhook: installed template ${templateId} for tenant ${tenantId} → workflow ${result.workflowId}`,
+      );
+    } catch (err: any) {
+      this.logger.error(
+        `marketplace_install webhook FAILED for session ${session.id}: ${err.message}`,
       );
       throw err;
     }

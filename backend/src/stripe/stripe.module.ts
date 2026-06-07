@@ -8,6 +8,7 @@ import { RlsContextInterceptor } from '../common/interceptors/rls-context.interc
 import { RoleGuard } from '../common/guards/role.guard';
 import { AuditModule } from '../audit/audit.module';
 import { TenantsModule } from '../tenants/tenants.module';
+import { MarketplaceModule } from '../workflow-marketplace/marketplace.module';
 
 /**
  * StripeModule — Stripe Connect onboarding + plan-upgrade checkout +
@@ -22,7 +23,7 @@ import { TenantsModule } from '../tenants/tenants.module';
  * is the canonical NestJS pattern for this.
  */
 @Module({
-  imports: [AuditModule, forwardRef(() => TenantsModule)],
+  imports: [AuditModule, forwardRef(() => TenantsModule), forwardRef(() => MarketplaceModule)],
   controllers: [
     StripeConnectController,
     StripeCheckoutController,
