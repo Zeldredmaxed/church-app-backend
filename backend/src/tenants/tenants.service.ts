@@ -862,21 +862,37 @@ export class TenantsService {
     const { queryRunner } = this.getRlsContext();
 
     // Live DB role check — defense against a stale JWT carrying an
-    // admin/pastor role that was revoked in the meantime. The RLS
-    // policy on tenants.UPDATE also gates on role via subquery, so
-    // this is belt-and-suspenders, but it gives a cleaner 403 error
-    // than the RLS-driven "0 rows affected" path that surfaces as
-    // NotFoundException.
+    // owner/admin/pastor role that was revoked in the meantime.
     const [membership] = await queryRunner.query(
       `SELECT role FROM public.tenant_memberships
-       WHERE tenant_id = $1 AND user_id = $2 AND role IN ('admin','pastor')
+       WHERE tenant_id = $1 AND user_id = $2 AND role IN ('owner','admin','pastor')
        LIMIT 1`,
       [tenantId, userId],
     );
     if (!membership) {
       throw new ForbiddenException(
-        'You are not an admin or pastor of this tenant',
+        'You are not an owner, admin, or pastor of this tenant',
       );
+    }
+
+    // Migration 108: allowCrossTenantFeed is OWNER-only AND
+    // ENTERPRISE-tier-only. Enforce both gates BEFORE accepting the
+    // value into the update list.
+    if (dto.allowCrossTenantFeed !== undefined) {
+      if (membership.role !== 'owner') {
+        throw new ForbiddenException(
+          'Only the church owner can change cross-tenant feed visibility',
+        );
+      }
+      const [tenantRow] = await queryRunner.query(
+        `SELECT tier FROM public.tenants WHERE id = $1`,
+        [tenantId],
+      );
+      if (tenantRow?.tier !== 'enterprise') {
+        throw new ForbiddenException(
+          'Cross-tenant feed control is an Enterprise tier feature. Upgrade to unlock.',
+        );
+      }
     }
 
     const updates: string[] = [];
@@ -896,6 +912,7 @@ export class TenantsService {
     if (dto.brandColor !== undefined) push('brand_color', dto.brandColor);
     if (dto.timezone !== undefined) push('timezone', dto.timezone);
     if (dto.monthlyGivingGoalCents !== undefined) push('monthly_giving_goal_cents', dto.monthlyGivingGoalCents);
+    if (dto.allowCrossTenantFeed !== undefined) push('allow_cross_tenant_feed', dto.allowCrossTenantFeed);
 
     if (updates.length === 0) {
       // Nothing to update — return current state rather than error.

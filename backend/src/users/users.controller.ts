@@ -90,6 +90,24 @@ export class UsersController {
     return this.usersService.updateMe(user.sub, dto);
   }
 
+  /**
+   * Migration 108: read the user's feed pref + the tenant/tier gates
+   * that actually decide what their feed shows. Frontend uses this
+   * to render the right toggle state (enabled, disabled-by-user,
+   * disabled-by-admin, or requires-enterprise-tier).
+   */
+  @Get('me/feed-preferences')
+  @ApiOperation({ summary: 'Resolve effective global-feed visibility (own pref + tenant policy + tier)' })
+  @ApiResponse({
+    status: 200,
+    description:
+      '{ showGlobalFeed, effectiveShowGlobalFeed, tenantAllowsGlobalFeed, tierSupportsGlobalFeed, reason }',
+  })
+  getFeedPreferences(@CurrentUser() user: SupabaseJwtPayload) {
+    const currentTenantId = user.app_metadata?.current_tenant_id ?? null;
+    return this.usersService.getFeedPreferences(user.sub, currentTenantId);
+  }
+
   @Delete('me')
   @Throttle({ default: { ttl: 86400000, limit: 3 } })
   @HttpCode(HttpStatus.OK)

@@ -86,6 +86,8 @@ export class UsersService {
     'tshirtSize', 'dietaryRestrictions',
     'newsletterOptIn', 'smsOptIn', 'photoReleaseConsent',
     'birthdayVisible', 'anniversaryVisible',
+    // Migration 108
+    'showGlobalFeed',
   ] as const;
 
   /**
@@ -141,6 +143,61 @@ export class UsersService {
       createdAt: row.created_at,
       birthday: row.birthday_visible === true ? monthDay(row.date_of_birth) : null,
       anniversary: row.anniversary_visible === true ? monthDay(row.anniversary) : null,
+    };
+  }
+
+  /**
+   * Migration 108: Returns the user's feed preference + the
+   * tenant-/tier-derived gates that actually decide what they see.
+   * Drives the UI's "your administrator has disabled this" /
+   * "requires Enterprise tier" disabled-toggle state.
+   *
+   * Effective rule:
+   *   effectiveShowGlobalFeed = showGlobalFeed
+   *                          AND tenantAllowsGlobalFeed
+   *                          AND tierSupportsGlobalFeed
+   */
+  async getFeedPreferences(userId: string, currentTenantId: string | null): Promise<{
+    showGlobalFeed: boolean;
+    effectiveShowGlobalFeed: boolean;
+    tenantAllowsGlobalFeed: boolean;
+    tierSupportsGlobalFeed: boolean;
+    reason: 'enabled' | 'disabled_by_user' | 'disabled_by_admin' | 'requires_enterprise_tier' | 'no_tenant_context';
+  }> {
+    const [u] = await this.dataSource.query(
+      `SELECT show_global_feed FROM public.users WHERE id = $1`,
+      [userId],
+    );
+    const showGlobalFeed = !!u?.show_global_feed;
+
+    if (!currentTenantId) {
+      return {
+        showGlobalFeed,
+        effectiveShowGlobalFeed: false,
+        tenantAllowsGlobalFeed: false,
+        tierSupportsGlobalFeed: false,
+        reason: 'no_tenant_context',
+      };
+    }
+
+    const [t] = await this.dataSource.query(
+      `SELECT allow_cross_tenant_feed, tier FROM public.tenants WHERE id = $1`,
+      [currentTenantId],
+    );
+    const tenantAllowsGlobalFeed = !!t?.allow_cross_tenant_feed;
+    const tierSupportsGlobalFeed = t?.tier === 'enterprise';
+
+    let reason: 'enabled' | 'disabled_by_user' | 'disabled_by_admin' | 'requires_enterprise_tier' = 'enabled';
+    if (!tierSupportsGlobalFeed) reason = 'requires_enterprise_tier';
+    else if (!tenantAllowsGlobalFeed) reason = 'disabled_by_admin';
+    else if (!showGlobalFeed) reason = 'disabled_by_user';
+
+    return {
+      showGlobalFeed,
+      effectiveShowGlobalFeed: showGlobalFeed && tenantAllowsGlobalFeed && tierSupportsGlobalFeed,
+      tenantAllowsGlobalFeed,
+      tierSupportsGlobalFeed,
+      reason,
     };
   }
 

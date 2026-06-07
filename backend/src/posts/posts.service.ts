@@ -345,7 +345,7 @@ export class PostsService {
    * The compound index idx_posts_tenant_created_desc covers this query.
    */
   async getPosts(query: GetPostsDto, userId: string): Promise<PaginatedPosts> {
-    const { queryRunner } = this.getRlsContext();
+    const { queryRunner, currentTenantId } = this.getRlsContext();
     const limit = query.limit ?? 20;
     const offset = query.offset ?? 0;
 
@@ -360,6 +360,30 @@ export class PostsService {
     if (query.mediaType) {
       params.push(query.mediaType);
       mediaTypeFilter = `AND p.media_type = $${params.length}`;
+    }
+
+    // Migration 108: cross-tenant feed gate.
+    // Effective access = user.show_global_feed
+    //                  AND tenant.allow_cross_tenant_feed
+    //                  AND tenant.tier = 'enterprise'
+    // If any layer is false → restrict feed to user's current tenant.
+    // Resolved with a single SQL round-trip; result drives whether
+    // we tack on AND p.tenant_id = $N below.
+    const [feedGate] = (await queryRunner.query(
+      `SELECT
+         (u.show_global_feed
+          AND t.allow_cross_tenant_feed
+          AND t.tier = 'enterprise') AS effective_global,
+         t.id AS tenant_id
+       FROM public.users u
+       LEFT JOIN public.tenants t ON t.id = $2
+       WHERE u.id = $1`,
+      [userId, currentTenantId],
+    )) as Array<{ effective_global: boolean | null; tenant_id: string | null }>;
+    let tenantFilter = '';
+    if (!feedGate?.effective_global && currentTenantId) {
+      params.push(currentTenantId);
+      tenantFilter = `AND p.tenant_id = $${params.length}`;
     }
 
     // Apple/Google UGC requirement: a user must not see content from
@@ -379,7 +403,7 @@ export class PostsService {
       visibility: 'public' | 'private';
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
-      u_church_id: string | null; u_church_name: string | null; u_church_brand_color: string | null;
+      p_tenant_id: string | null; p_tenant_name: string | null; p_tenant_brand_color: string | null;
       sb_id: string | null; sb_name: string | null; sb_description: string | null;
       sb_icon: string | null; sb_tier: string | null; sb_category: string | null; sb_color: string | null;
       like_count: string; comment_count: string;
@@ -392,9 +416,9 @@ export class PostsService {
          u.id         AS u_id,
          u.full_name  AS u_full_name,
          u.avatar_url AS u_avatar_url,
-         ut.id        AS u_church_id,
-         ut.name      AS u_church_name,
-         ut.brand_color AS u_church_brand_color,
+         pt.id        AS p_tenant_id,
+         pt.name      AS p_tenant_name,
+         pt.brand_color AS p_tenant_brand_color,
          sb.id        AS sb_id,
          sb.name      AS sb_name,
          sb.description AS sb_description,
@@ -408,17 +432,18 @@ export class PostsService {
          EXISTS(SELECT 1 FROM public.post_saves WHERE post_id = p.id AND user_id = $1) AS is_saved_by_me
        FROM public.posts p
        LEFT JOIN public.users u ON u.id = p.author_id
-       LEFT JOIN public.tenants ut ON ut.id = u.last_accessed_tenant_id
+       LEFT JOIN public.tenants pt ON pt.id = p.tenant_id
        LEFT JOIN public.badges sb ON sb.id = p.shared_badge_id
-       WHERE p.is_archived = false ${authorFilter} ${mediaTypeFilter} ${blockFilter}
+       WHERE p.is_archived = false ${authorFilter} ${mediaTypeFilter} ${blockFilter} ${tenantFilter}
        ORDER BY p.created_at DESC
        LIMIT $2 OFFSET $3`,
       params,
     );
 
-    // Count query mirrors the feed query — same block filter so the page
-    // count matches what the user will actually see. userId is bound to
-    // $1 so the block subquery can reference it.
+    // Count query mirrors the feed query — same block filter + same
+    // tenant gate so the page count matches what the user will
+    // actually see. userId is bound to $1 so the block subquery can
+    // reference it.
     const countParams: unknown[] = [userId];
     let countAuthorFilter = '';
     if (query.authorId) {
@@ -430,9 +455,14 @@ export class PostsService {
       countParams.push(query.mediaType);
       countMediaTypeFilter = `AND media_type = $${countParams.length}`;
     }
+    let countTenantFilter = '';
+    if (!feedGate?.effective_global && currentTenantId) {
+      countParams.push(currentTenantId);
+      countTenantFilter = `AND tenant_id = $${countParams.length}`;
+    }
     const [{ total }]: [{ total: string }] = await queryRunner.query(
       `SELECT COUNT(*)::int AS total FROM public.posts
-       WHERE is_archived = false ${countAuthorFilter} ${countMediaTypeFilter}
+       WHERE is_archived = false ${countAuthorFilter} ${countMediaTypeFilter} ${countTenantFilter}
          AND author_id NOT IN (
            SELECT blocked_id FROM public.user_blocks WHERE blocker_id = $1
            UNION
@@ -472,8 +502,8 @@ export class PostsService {
             id: r.u_id,
             fullName: r.u_full_name,
             avatarUrl: r.u_avatar_url,
-            church: r.u_church_id
-              ? { id: r.u_church_id, name: r.u_church_name!, brandColor: r.u_church_brand_color }
+            church: r.p_tenant_id
+              ? { id: r.p_tenant_id, name: r.p_tenant_name!, brandColor: r.p_tenant_brand_color }
               : null,
           }
         : null,
@@ -502,9 +532,9 @@ export class PostsService {
          u.id         AS u_id,
          u.full_name  AS u_full_name,
          u.avatar_url AS u_avatar_url,
-         ut.id        AS u_church_id,
-         ut.name      AS u_church_name,
-         ut.brand_color AS u_church_brand_color,
+         pt.id        AS p_tenant_id,
+         pt.name      AS p_tenant_name,
+         pt.brand_color AS p_tenant_brand_color,
          sb.id        AS sb_id,
          sb.name      AS sb_name,
          sb.description AS sb_description,
@@ -518,7 +548,7 @@ export class PostsService {
          EXISTS(SELECT 1 FROM public.post_saves WHERE post_id = p.id AND user_id = $2) AS is_saved_by_me
        FROM public.posts p
        LEFT JOIN public.users u ON u.id = p.author_id
-       LEFT JOIN public.tenants ut ON ut.id = u.last_accessed_tenant_id
+       LEFT JOIN public.tenants pt ON pt.id = p.tenant_id
        LEFT JOIN public.badges sb ON sb.id = p.shared_badge_id
        WHERE p.id = $1
          AND (p.is_archived = false OR p.author_id = $2)`,
@@ -561,8 +591,8 @@ export class PostsService {
             id: r.u_id,
             fullName: r.u_full_name,
             avatarUrl: r.u_avatar_url,
-            church: r.u_church_id
-              ? { id: r.u_church_id, name: r.u_church_name!, brandColor: r.u_church_brand_color }
+            church: r.p_tenant_id
+              ? { id: r.p_tenant_id, name: r.p_tenant_name!, brandColor: r.p_tenant_brand_color }
               : null,
           }
         : null,
@@ -716,7 +746,7 @@ export class PostsService {
       visibility: 'public' | 'private';
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
-      u_church_id: string | null; u_church_name: string | null; u_church_brand_color: string | null;
+      p_tenant_id: string | null; p_tenant_name: string | null; p_tenant_brand_color: string | null;
       sb_id: string | null; sb_name: string | null; sb_description: string | null;
       sb_icon: string | null; sb_tier: string | null; sb_category: string | null; sb_color: string | null;
       like_count: string; comment_count: string;
@@ -729,9 +759,9 @@ export class PostsService {
          u.id         AS u_id,
          u.full_name  AS u_full_name,
          u.avatar_url AS u_avatar_url,
-         ut.id        AS u_church_id,
-         ut.name      AS u_church_name,
-         ut.brand_color AS u_church_brand_color,
+         pt.id        AS p_tenant_id,
+         pt.name      AS p_tenant_name,
+         pt.brand_color AS p_tenant_brand_color,
          sb.id        AS sb_id,
          sb.name      AS sb_name,
          sb.description AS sb_description,
@@ -745,7 +775,7 @@ export class PostsService {
        FROM public.post_saves ps
        JOIN public.posts p ON p.id = ps.post_id
        LEFT JOIN public.users u ON u.id = p.author_id
-       LEFT JOIN public.tenants ut ON ut.id = u.last_accessed_tenant_id
+       LEFT JOIN public.tenants pt ON pt.id = p.tenant_id
        LEFT JOIN public.badges sb ON sb.id = p.shared_badge_id
        WHERE ps.user_id = $1 AND p.is_archived = false
        ORDER BY ps.created_at DESC
@@ -792,8 +822,8 @@ export class PostsService {
             id: r.u_id,
             fullName: r.u_full_name,
             avatarUrl: r.u_avatar_url,
-            church: r.u_church_id
-              ? { id: r.u_church_id, name: r.u_church_name!, brandColor: r.u_church_brand_color }
+            church: r.p_tenant_id
+              ? { id: r.p_tenant_id, name: r.p_tenant_name!, brandColor: r.p_tenant_brand_color }
               : null,
           }
         : null,
@@ -925,7 +955,7 @@ export class PostsService {
       visibility: 'public' | 'private';
       created_at: Date; updated_at: Date;
       u_id: string | null; u_full_name: string | null; u_avatar_url: string | null;
-      u_church_id: string | null; u_church_name: string | null; u_church_brand_color: string | null;
+      p_tenant_id: string | null; p_tenant_name: string | null; p_tenant_brand_color: string | null;
       sb_id: string | null; sb_name: string | null; sb_description: string | null;
       sb_icon: string | null; sb_tier: string | null; sb_category: string | null; sb_color: string | null;
       like_count: string; comment_count: string;
@@ -990,8 +1020,8 @@ export class PostsService {
             id: r.u_id,
             fullName: r.u_full_name,
             avatarUrl: r.u_avatar_url,
-            church: r.u_church_id
-              ? { id: r.u_church_id, name: r.u_church_name!, brandColor: r.u_church_brand_color }
+            church: r.p_tenant_id
+              ? { id: r.p_tenant_id, name: r.p_tenant_name!, brandColor: r.p_tenant_brand_color }
               : null,
           }
         : null,

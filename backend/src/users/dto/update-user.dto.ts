@@ -163,4 +163,15 @@ export class UpdateUserDto {
 
   @ApiPropertyOptional() @IsOptional() @IsBoolean()
   anniversaryVisible?: boolean;
+
+  // ─── Feed preferences (migration 108) ───
+  /**
+   * Show posts from all churches in the feed (opt-in). Default false
+   * = only this church's posts. Effective state ALSO requires:
+   *   - Tenant on Enterprise tier
+   *   - Tenant's owner has not disabled cross-tenant feed
+   * See GET /api/users/me/feed-preferences for the resolved state.
+   */
+  @ApiPropertyOptional() @IsOptional() @IsBoolean()
+  showGlobalFeed?: boolean;
 }

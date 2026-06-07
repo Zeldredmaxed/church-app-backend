@@ -157,6 +157,15 @@ export class User {
   @Column({ type: 'boolean', nullable: true, name: 'anniversary_visible' })
   anniversaryVisible: boolean | null;
 
+  /**
+   * Migration 108: opt-in cross-church feed. Default false (this
+   * church only). Effective state ALSO requires the tenant to be
+   * on Enterprise tier AND the owner not to have disabled the
+   * tenant-wide flag.
+   */
+  @Column({ type: 'boolean', name: 'show_global_feed', default: false })
+  showGlobalFeed: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }

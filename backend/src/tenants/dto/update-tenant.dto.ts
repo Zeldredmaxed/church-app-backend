@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsInt,
   IsObject,
   IsOptional,
@@ -78,4 +79,16 @@ export class UpdateTenantDto {
   @Min(0)
   @Max(10_000_000_000)
   monthlyGivingGoalCents?: number;
+
+  /**
+   * Migration 108: tenant-wide kill-switch for the cross-tenant feed
+   * feature. Owner-only (RoleGuard auto-passes 'owner') AND
+   * ENTERPRISE-tier-only (service-layer 402 PaymentRequired on
+   * lower tiers if this field is sent). When false, no user on this
+   * tenant can see other churches' posts regardless of their
+   * personal showGlobalFeed pref.
+   */
+  @IsOptional()
+  @IsBoolean()
+  allowCrossTenantFeed?: boolean;
 }

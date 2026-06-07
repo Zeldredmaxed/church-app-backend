@@ -103,6 +103,15 @@ export class Tenant {
   monthlyGivingGoalCents: number | null;
 
   /**
+   * Migration 108: tenant-wide kill-switch for cross-tenant feed.
+   * Default true (enabled). Only meaningful when tier='enterprise' —
+   * non-enterprise tenants short-circuit the feature regardless of
+   * this value. Owner-only editable via PATCH /api/tenants/:id.
+   */
+  @Column({ type: 'boolean', name: 'allow_cross_tenant_feed', default: true })
+  allowCrossTenantFeed: boolean;
+
+  /**
    * Marks the single "no church home" tenant. A signed-up user who hasn't
    * joined any real church belongs here so the rest of the app's
    * tenant-required paths still work; church-only routes refuse to serve
