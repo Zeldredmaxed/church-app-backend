@@ -706,23 +706,29 @@ export class TenantsService {
       );
       tenantId = tenantRow.id;
 
-      // Founding admin membership. DO NOTHING (not DO UPDATE) — the
-      // tenant was just created on the line above so a pre-existing
-      // membership is impossible by construction; the DO NOTHING guards
-      // against accidentally demoting a higher role if this ever gets
-      // re-entered via a code-path change.
+      // Founding-owner membership (migration 107). The signup creator
+      // is the church account holder — gets role='owner' which sits
+      // above admin in the hierarchy. Owner auto-passes every
+      // RoleGuard + PermissionsGuard check by design, so they can't
+      // ever be locked out of their own church account.
       //
-      // Permissions: the founding admin gets ALL 27 keys set to true.
-      // The admin dashboard's nav gates menu items on granular
-      // permission keys, not just role — so an empty {} (the old
-      // behavior) caused brand-new admins to see ONLY the dashboard
-      // tab. Setting every key explicitly avoids that.
+      // DO NOTHING (not DO UPDATE) — the tenant was just created on
+      // the line above so a pre-existing membership is impossible by
+      // construction; the DO NOTHING guards against accidentally
+      // demoting a higher role if this ever gets re-entered via a
+      // code-path change.
+      //
+      // Permissions are still populated explicitly (all 27 keys true)
+      // even though owner bypasses PermissionsGuard — so if/when an
+      // owner is transferred to a different user, the new owner can
+      // be demoted to 'admin' without losing access (their permissions
+      // JSONB still grants everything).
       const founderPermissions = Object.fromEntries(
         ALL_PERMISSION_KEYS.map((k) => [k, true]),
       );
       await queryRunner.query(
         `INSERT INTO public.tenant_memberships (tenant_id, user_id, role, permissions)
-         VALUES ($1, $2, 'admin', $3::jsonb)
+         VALUES ($1, $2, 'owner', $3::jsonb)
          ON CONFLICT (tenant_id, user_id) DO NOTHING`,
         [tenantId, adminUserId, JSON.stringify(founderPermissions)],
       );

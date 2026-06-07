@@ -1039,7 +1039,7 @@ export class MembershipsService {
 export interface TenantMemberDetail {
   userId: string;
   tenantId: string;
-  role: 'admin' | 'pastor' | 'accountant' | 'worship_leader' | 'member';
+  role: 'owner' | 'admin' | 'pastor' | 'accountant' | 'worship_leader' | 'member';
   email: string;
   fullName: string | null;
   avatarUrl: string | null;
@@ -1049,7 +1049,7 @@ export interface TenantMemberDetail {
 export interface MembershipWithTenant {
   userId: string;
   tenantId: string;
-  role: 'admin' | 'pastor' | 'accountant' | 'worship_leader' | 'member';
+  role: 'owner' | 'admin' | 'pastor' | 'accountant' | 'worship_leader' | 'member';
   isCurrent: boolean;
   tenant: {
     id: string;

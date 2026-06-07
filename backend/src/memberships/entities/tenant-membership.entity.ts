@@ -14,8 +14,16 @@ export class TenantMembership {
   @PrimaryColumn('uuid', { name: 'tenant_id' })
   tenantId: string;
 
+  /**
+   * Migration 107: 'owner' is the church account holder (created by
+   * signup, single per tenant — enforced via partial unique index).
+   * Owner sits above admin and auto-passes every RoleGuard +
+   * PermissionsGuard check.
+   * 'moderator' is also a valid DB value (legacy) but unused in
+   * the entity union for now — add here if surfaced in code paths.
+   */
   @Column({ type: 'text' })
-  role: 'admin' | 'pastor' | 'accountant' | 'worship_leader' | 'member';
+  role: 'owner' | 'admin' | 'pastor' | 'accountant' | 'worship_leader' | 'member';
 
   /** Granular permission overrides stored as JSONB. */
   @Column({ type: 'jsonb', default: {} })

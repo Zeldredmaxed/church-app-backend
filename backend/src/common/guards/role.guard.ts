@@ -47,7 +47,18 @@ export class RoleGuard implements CanActivate {
       [user.sub, tenantId],
     );
 
-    if (!membership || !requiredRoles.includes(membership.role)) {
+    // Migration 107: 'owner' is the highest tier (church account
+    // holder). Auto-passes ANY @RequiresRole(...) check regardless
+    // of which roles are listed — owner sits above the entire
+    // hierarchy by design. No need to add 'owner' to every existing
+    // decorator across the codebase.
+    if (!membership) {
+      throw new ForbiddenException('You do not have permission to perform this action');
+    }
+    if (membership.role === 'owner') {
+      return true;
+    }
+    if (!requiredRoles.includes(membership.role)) {
       throw new ForbiddenException('You do not have permission to perform this action');
     }
 

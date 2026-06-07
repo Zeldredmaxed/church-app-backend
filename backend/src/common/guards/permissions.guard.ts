@@ -71,8 +71,10 @@ export class PermissionsGuard implements CanActivate {
       throw new ForbiddenException('Not a member of this tenant');
     }
 
-    // Admins bypass all permission checks
-    if (membership.role === 'admin') {
+    // Owners (migration 107) + admins bypass all permission checks.
+    // Owner is the church account holder — always has every
+    // permission, can't be locked out.
+    if (membership.role === 'owner' || membership.role === 'admin') {
       return true;
     }
 
