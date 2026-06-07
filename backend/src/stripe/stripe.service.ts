@@ -491,11 +491,15 @@ export class StripeService {
         cancel_url: params.cancelUrl,
         // CRITICAL: capture a card even at 100% off (6-month coupon).
         payment_method_collection: 'always',
-        // Yearly: disable typed promo codes so a 6-month coupon
-        // can't accidentally apply to a yearly invoice (would
-        // discount the entire year). Monthly: keep promo codes
-        // enabled — that's how LAUNCH-6FREE works.
-        allow_promotion_codes: params.billingInterval === 'yearly' ? false : true,
+        // Promo codes enabled for BOTH monthly + yearly. Yearly's
+        // 2-months-free promo is now a user-entered coupon
+        // (advertised via banner on the pricing page) instead of
+        // baked into the price — trust-the-user model. Risk: a
+        // yearly subscriber applying LAUNCH-6FREE (100%/6mo) would
+        // get $X-ish free on the upfront invoice. Mitigation lives
+        // outside this code (Stripe Dashboard: restrict the coupon
+        // via max_redemptions, or rotate it after launch week).
+        allow_promotion_codes: true,
         metadata: {
           flow: 'new_tenant_signup',
           churchName: params.signupMetadata.churchName,

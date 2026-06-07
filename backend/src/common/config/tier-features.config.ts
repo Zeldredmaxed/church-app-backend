@@ -163,16 +163,16 @@ export const TIER_MONTHLY_PRICE_CENTS: Record<TierName, number> = {
 };
 
 /**
- * Yearly subscription price = ×10 monthly (2 months free baked in).
- * Matches the site's yearly display. NO coupons applied — the
- * Stripe Checkout session for yearly signups disables typed promo
- * codes so a 6-month-coupon can't accidentally discount a yearly
- * invoice.
+ * Yearly subscription price = ×12 monthly (full sticker price).
+ * The 2-months-free promo is now a USER-ENTERED coupon (e.g.
+ * `ANNUAL-2FREE` at ~16.67% off) advertised via a banner on the
+ * pricing page — opt-in, not auto-applied. Promo codes are
+ * re-enabled on yearly checkout.
  */
 export const TIER_YEARLY_PRICE_CENTS: Record<TierName, number> = {
-  standard: 39000,    // $390/yr
-  premium: 99000,     // $990/yr
-  enterprise: 249000, // $2,490/yr
+  standard: 46800,    // $468/yr  ($39 × 12)
+  premium: 118800,    // $1,188/yr ($99 × 12)
+  enterprise: 298800, // $2,988/yr ($249 × 12)
 };
 
 /**

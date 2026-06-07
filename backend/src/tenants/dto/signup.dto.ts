@@ -72,9 +72,9 @@ export class TenantSignupDto {
 
   /**
    * Billing interval. Optional — defaults to monthly.
-   * Yearly price = ×10 monthly (2 months free baked in) and the
-   * Stripe Checkout session disables typed promo codes so 6-month
-   * coupons can't accidentally apply to a yearly invoice.
+   * Yearly price = ×12 monthly (full sticker). The 2-months-free
+   * yearly promo is opt-in via a user-entered coupon (advertised
+   * on the marketing site banner), not baked into the price.
    */
   @IsOptional()
   @IsIn(['monthly', 'yearly'])
