@@ -4,12 +4,13 @@
 > **Status:** Pre-launch, beta on Android via Expo Go, first church client imminent
 > **Last updated:** 2026-06-06 (Faith Walks extensions — gating, points, medals, leaderboard, missed-day cron)
 > **Live backend:** `https://church-app-backend-27hc.onrender.com/api`
-> **Latest migration applied:** `102_system_message_templates.sql`
+> **Latest migration applied:** `103_group_meeting_fields.sql`
 > **Migration 097:** `097_groups_auto_tag.sql` — applied (additive cols for upcoming groups feature, not yet wired in services)
 > **Migration 099:** `099_bible_self_hosted.sql` — applied + seeded with 7 PD translations (~218k verses)
 > **Migration 100:** `100_first_customer_signup.sql` — applied. Adds tenants.country, invitations.cancelled_at, tenant_signup_completions dedupe table.
 > **Migration 101:** `101_member_import.sql` — applied. Adds tenant_memberships.imported_at/import_batch, member_imports audit table.
 > **Migration 102:** `102_system_message_templates.sql` — applied + seeded 15 system message templates. Adds message_templates.is_system + makes tenant_id nullable for shared system templates.
+> **Migration 103:** `103_group_meeting_fields.sql` — applied. Adds groups.meeting_day_of_week + meeting_time_start + meeting_frequency.
 
 This document supersedes EVERY prior `*_PROMPT.md`, `*_REPLY*.md`,
 `*_FIXES.md`, and `FRONTEND_HANDOFF*.md`. Going forward, ANY change to
@@ -456,7 +457,28 @@ Translations: `kjv, web, asv, bbe, darby, dra, wbt, ylt`. **ESV is NOT available
 | `GET` | `/api/prayers/kpis` | `{ activeCount, answeredThisMonth, prayingMembersLast7d }` for the Care tile. |
 | `POST` | `/api/prayers/:id/pray` | Toggle. |
 | `GET/POST/PUT/DELETE` | `/api/groups[...]` | `?type=small_group\|discipleship\|ministry\|class\|other` filter on list. |
+
+**Group shape (migrations 097 + 103):**
+```ts
+{ id, tenantId, name, description, imageUrl, memberCount,
+  isMember, pendingRequestStatus, createdAt,
+  // mig 097
+  autoTagId,           // UUID|null. Linked tag — auto-assigned on addMember, auto-removed on removeMember.
+  // mig 103
+  meetingDayOfWeek,    // 0-6 (0=Sun) | null
+  meetingTimeStart,    // "HH:MM" | null
+  meetingFrequency,    // 'weekly'|'biweekly'|'monthly' | null
+  growthStatus,        // 'growing'|'stable'|'declining' | null (null until group is ≥30 days old)
+  growthPct,           // ±% as integer | null
+  growthWindow,        // 'last_30_days' | null
+}
+```
+
+Create/update DTOs accept `autoTagId`, `meetingDayOfWeek`, `meetingTimeStart` (HH:MM 24-hour), `meetingFrequency`. UPDATE: explicit `null` clears the field; `undefined` leaves it.
+
+`POST /api/groups/:id/members { userId }` response includes **`tagAssigned: { id, name } | null`** so mobile can show "Member added · Tag granted" confirmation. `DELETE /:id/members/:userId` symmetrically returns `tagRemoved: { id, name } | null`.
 | `POST` | `/api/volunteer/opportunities/:id/signup` | Gated on `volunteer` profile-completeness set. |
+| `DELETE` | `/api/volunteer/opportunities/:id/signup` | **Migration 103** — member-facing withdraw. Idempotent: `{ withdrawn: true }` whether or not previously signed up. Emits `volunteer.withdrew` audit row. |
 | `POST` | `/api/leaderboard/app-open` | Fire-and-forget streak ping. |
 | `POST` | `/api/badges/check` | Returns rich AchievementModal payload. 60s cache per user. |
 
@@ -660,13 +682,14 @@ Settings: `manage_settings`
 
 Existing `@Permissions(...)` enforcement covers `manage_finance` and `manage_members` (per pre-100 work). Broader per-controller enforcement sweep across the other 25 keys is incremental — most controllers today gate via `@RequiresRole('admin','pastor')` which excludes non-admin roles entirely. Granular permission gating becomes load-bearing when a tenant has non-admin staff roles (accountant, etc.) that need partial access. Track this work as a follow-up; do not block first-customer launch on it.
 
-### Invitations (migration 100)
+### Invitations (migration 100 + 103)
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/invitations` | admin/pastor: list pending invitations for current tenant. Each row carries `isExpired`. |
+| `GET` | `/api/invitations` | admin/pastor: list pending invitations for current tenant. **Migration 103 fix**: filters `cancelled_at IS NULL` so cancelled invites no longer leak into the "pending" list. Each row carries `isExpired` + `cancelledAt`. |
 | `POST` | `/api/invitations` | admin/pastor: create + send invitation. Body: `{ email, role }`. Email delivered via Resend (subject "{InviterName} invited you to join {Church} on Shepard"). Accept link: `${PUBLIC_SITE_URL}/invite?token=...`. Token expires in 24h. |
-| `POST` | `/api/invitations/:token/accept` | Authenticated invitee: accept by token. Validates email-match, expires_at, accepted_at, and `cancelled_at` (new in 100 — cancelled invites return 410 Gone). On success: creates `tenant_memberships` row + marks invitation accepted. Invitee must call `/auth/switch-tenant` + `/auth/refresh` to activate the new context. |
+| `POST` | `/api/invitations/:token/accept` | **Authenticated** invitee (existing Shepard account): accept by token. Validates email-match, expires_at, accepted_at, and `cancelled_at` (returns 410 Gone for cancelled). On success: creates `tenant_memberships` row + marks invitation accepted. Returns **`{ message, tenantId, role }`** — client should call `/auth/switch-tenant` + `/auth/refresh` with the returned `tenantId` to activate the new context. |
+| `POST` | `/api/invitations/:token/signup-and-accept` | **PUBLIC (migration 103)** — for brand-new invitees with no Shepard account. Body: `{ password (min 8), fullName? }`. Email locked to the invitation's email (caller cannot redirect). Creates Supabase auth user with `email_confirm=true` + materializes membership + accepts invitation atomically. Returns `{ user: { id, email }, tenantId, role, session: { access_token, refresh_token, expires_at } }` — frontend immediately logs the user in using `session` (no second `/auth/login` call needed). Throttled 5/min/IP. 409 if account already exists for the email. 410 if cancelled/expired. |
 | `DELETE` | `/api/invitations/:id` | **admin/pastor (migration 100)**: soft-cancel pending invite via `cancelled_at`. Returns `{ cancelled: true }`. Idempotent. Cancelled invites become unusable for accept but are preserved for audit. |
 
 

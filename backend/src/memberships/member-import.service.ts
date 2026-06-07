@@ -50,6 +50,7 @@ export class MemberImportService {
    */
   async importCsv(args: {
     tenantId: string;
+    /** UUID of the admin who uploaded the CSV — stamped on member_imports + assigned_by on member_tags. */
     importedByUserId: string;
     source: 'tithely' | 'breeze' | 'churchteams' | 'planning_center' | 'generic';
     filename: string | null;
@@ -129,6 +130,7 @@ export class MemberImportService {
 
         const result = await this.upsertMember({
           tenantId: args.tenantId,
+          importedByUserId: args.importedByUserId,
           importBatchId,
           tagId,
           email: norm.email,
@@ -226,6 +228,8 @@ export class MemberImportService {
    */
   private async upsertMember(args: {
     tenantId: string;
+    /** UUID of admin who triggered this import — used as assigned_by on member_tags. */
+    importedByUserId: string;
     importBatchId: string;
     tagId: string;
     email: string;
@@ -310,12 +314,14 @@ export class MemberImportService {
       result = 'updated';
     }
 
-    // Assign the import-pending tag (idempotent via PK).
+    // Assign the import-pending tag (idempotent via PK). assigned_by
+    // is the admin who triggered the import (previously was the
+    // import_batch UUID as a placeholder — wrong FK semantics).
     await this.dataSource.query(
       `INSERT INTO public.member_tags (tag_id, user_id, assigned_by)
        VALUES ($1, $2, $3)
        ON CONFLICT (tag_id, user_id) DO NOTHING`,
-      [args.tagId, userId, args.importBatchId /* placeholder; tag-assigner is the import batch */],
+      [args.tagId, userId, args.importedByUserId],
     );
 
     return result;

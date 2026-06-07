@@ -82,9 +82,16 @@ export class GroupsService {
   ) {
     const { queryRunner } = this.getRlsContext();
     const params: any[] = [userId, limit + 1];
+    // Growth window: 30 days. Compares current member_count against
+    // count - net new (so "new" = members added in window, "removed"
+    // is unrecoverable per group_members schema today — we approximate
+    // via the audit log if it ever matters; for now, growthPct uses
+    // additions only, which is the right signal for "is this group
+    // growing?")
     let sql = `
       SELECT g.*,
         (SELECT COUNT(*)::int FROM public.group_members WHERE group_id = g.id) AS member_count,
+        (SELECT COUNT(*)::int FROM public.group_members WHERE group_id = g.id AND joined_at >= now() - INTERVAL '30 days') AS members_joined_recent,
         EXISTS(SELECT 1 FROM public.group_members WHERE group_id = g.id AND user_id = $1) AS is_member
       FROM public.groups g
     `;
@@ -116,6 +123,7 @@ export class GroupsService {
     const rows = await queryRunner.query(
       `SELECT g.*,
         (SELECT COUNT(*)::int FROM public.group_members WHERE group_id = g.id) AS member_count,
+        (SELECT COUNT(*)::int FROM public.group_members WHERE group_id = g.id AND joined_at >= now() - INTERVAL '30 days') AS members_joined_recent,
         EXISTS(SELECT 1 FROM public.group_members WHERE group_id = g.id AND user_id = $2) AS is_member,
         (SELECT status FROM public.group_join_requests
           WHERE group_id = g.id AND user_id = $2 AND status = 'pending'
@@ -141,6 +149,11 @@ export class GroupsService {
       description: dto.description ?? null,
       imageUrl: dto.imageUrl ?? null,
       createdBy: userId,
+      // Migration 097 + 103: optional linked tag + meeting fields.
+      autoTagId: dto.autoTagId ?? null,
+      meetingDayOfWeek: dto.meetingDayOfWeek ?? null,
+      meetingTimeStart: dto.meetingTimeStart ?? null,
+      meetingFrequency: dto.meetingFrequency ?? null,
     });
     const saved = await queryRunner.manager.save(Group, group);
 
@@ -236,7 +249,28 @@ export class GroupsService {
       [groupId, targetUserId, callerId],
     );
 
-    const [group] = await queryRunner.query(`SELECT name FROM public.groups WHERE id = $1`, [groupId]);
+    // Auto-assign the linked tag (migration 097 wiring). The tag
+    // grants tag-gated content access. Idempotent: ON CONFLICT DO
+    // NOTHING — if the member already has the tag, that's fine.
+    const [group] = await queryRunner.query(
+      `SELECT name, auto_tag_id FROM public.groups WHERE id = $1`,
+      [groupId],
+    );
+    let tagAssigned: { id: string; name: string } | null = null;
+    if (group?.auto_tag_id) {
+      await queryRunner.query(
+        `INSERT INTO public.member_tags (tag_id, user_id, assigned_by)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (tag_id, user_id) DO NOTHING`,
+        [group.auto_tag_id, targetUserId, callerId],
+      );
+      const [tagRow] = await queryRunner.query(
+        `SELECT id, name FROM public.tags WHERE id = $1`,
+        [group.auto_tag_id],
+      );
+      if (tagRow) tagAssigned = { id: tagRow.id, name: tagRow.name };
+    }
+
     const actorName = await this.resolveName(callerId);
     const targetName = await this.resolveName(targetUserId);
     await this.audit.log({
@@ -245,10 +279,12 @@ export class GroupsService {
       resourceId: groupId,
       targetUserId,
       summary: `${actorName} added ${targetName} to group "${group?.name ?? ''}"`,
-      metadata: { groupName: group?.name },
+      metadata: { groupName: group?.name, tagAssigned: tagAssigned?.name ?? null },
     });
 
-    return { added: true };
+    // Response includes any tag granted so mobile can show
+    // "Member added · Tag granted" confirmation per the mobile ticket.
+    return { added: true, tagAssigned };
   }
 
   async removeMember(groupId: string, targetUserId: string, callerId: string) {
@@ -261,7 +297,27 @@ export class GroupsService {
     );
     if (!rows.length) throw new NotFoundException('User is not a member of this group');
 
-    const [group] = await queryRunner.query(`SELECT name FROM public.groups WHERE id = $1`, [groupId]);
+    // Mirror addMember: if the group has a linked tag, remove it from
+    // the user's tags on group-remove. Member loses the tag-gated
+    // content access they had as part of the group.
+    const [group] = await queryRunner.query(
+      `SELECT name, auto_tag_id FROM public.groups WHERE id = $1`,
+      [groupId],
+    );
+    let tagRemoved: { id: string; name: string } | null = null;
+    if (group?.auto_tag_id) {
+      await queryRunner.query(
+        `DELETE FROM public.member_tags
+         WHERE tag_id = $1 AND user_id = $2`,
+        [group.auto_tag_id, targetUserId],
+      );
+      const [tagRow] = await queryRunner.query(
+        `SELECT id, name FROM public.tags WHERE id = $1`,
+        [group.auto_tag_id],
+      );
+      if (tagRow) tagRemoved = { id: tagRow.id, name: tagRow.name };
+    }
+
     const actorName = await this.resolveName(callerId);
     const targetName = await this.resolveName(targetUserId);
     await this.audit.log({
@@ -270,10 +326,10 @@ export class GroupsService {
       resourceId: groupId,
       targetUserId,
       summary: `${actorName} removed ${targetName} from group "${group?.name ?? ''}"`,
-      metadata: { groupName: group?.name },
+      metadata: { groupName: group?.name, tagRemoved: tagRemoved?.name ?? null },
     });
 
-    return { removed: true };
+    return { removed: true, tagRemoved };
   }
 
   async leaveGroup(groupId: string, userId: string) {
@@ -494,6 +550,24 @@ export class GroupsService {
       params.push(dto.imageUrl);
       sets.push(`image_url = $${params.length}`);
     }
+    // Migration 097 + 103. Explicit null clears the column (lets admin
+    // unlink the tag / clear the meeting time). undefined = no change.
+    if (dto.autoTagId !== undefined) {
+      params.push(dto.autoTagId);
+      sets.push(`auto_tag_id = $${params.length}`);
+    }
+    if (dto.meetingDayOfWeek !== undefined) {
+      params.push(dto.meetingDayOfWeek);
+      sets.push(`meeting_day_of_week = $${params.length}`);
+    }
+    if (dto.meetingTimeStart !== undefined) {
+      params.push(dto.meetingTimeStart);
+      sets.push(`meeting_time_start = $${params.length}`);
+    }
+    if (dto.meetingFrequency !== undefined) {
+      params.push(dto.meetingFrequency);
+      sets.push(`meeting_frequency = $${params.length}`);
+    }
 
     if (sets.length === 0) {
       throw new BadRequestException('No fields to update');
@@ -587,16 +661,57 @@ export class GroupsService {
   }
 
   private mapGroup(r: any) {
+    const memberCount = Number(r.member_count ?? 0);
+    const recentJoins = Number(r.members_joined_recent ?? 0);
+
+    // Growth status (mobile mig 103): hide until the group is older
+    // than the window. Within the window, classify by recentJoins
+    // as a % of CURRENT roster. Without remove-events, declining is
+    // approximated as "very few new + small group" but is mostly
+    // signalled by stable/none status; honest signal > fabricated.
+    let growthStatus: 'growing' | 'stable' | 'declining' | null = null;
+    let growthPct: number | null = null;
+    let growthWindow: 'last_30_days' | 'last_90_days' | null = null;
+    if (r.created_at) {
+      const ageDays = Math.floor((Date.now() - new Date(r.created_at).getTime()) / 86_400_000);
+      if (ageDays >= 30) {
+        growthWindow = 'last_30_days';
+        const denom = Math.max(memberCount - recentJoins, 1); // starting roster (approx)
+        growthPct = Math.round((recentJoins / denom) * 100);
+        if (growthPct >= 10) growthStatus = 'growing';
+        else if (growthPct === 0 && memberCount < 5) growthStatus = 'declining';
+        else growthStatus = 'stable';
+      }
+    }
+
+    // Meeting time normalization (mig 103). TIME column returns
+    // 'HH:MM:SS' from node-postgres; trim to 'HH:MM' for display.
+    const meetingTimeStart = r.meeting_time_start
+      ? String(r.meeting_time_start).slice(0, 5)
+      : null;
+
     return {
       id: r.id,
       tenantId: r.tenant_id,
       name: r.name,
       description: r.description,
       imageUrl: r.image_url,
-      memberCount: Number(r.member_count ?? 0),
+      memberCount,
       isMember: r.is_member === true || r.is_member === 't',
       pendingRequestStatus: r.pending_request_status ?? null,
       createdAt: r.created_at,
+      // Migration 097: linked tag id (null if admin hasn't set one).
+      autoTagId: r.auto_tag_id ?? null,
+      // Migration 103: real meeting time fields. NULL when not set —
+      // mobile hides the "Mondays · 7:00 PM" chip in that case.
+      meetingDayOfWeek: r.meeting_day_of_week == null ? null : Number(r.meeting_day_of_week),
+      meetingTimeStart,
+      meetingFrequency: r.meeting_frequency ?? null,
+      // Migration 103: real growth signal. NULL while the group is
+      // younger than the window — mobile hides the badge in that case.
+      growthStatus,
+      growthPct,
+      growthWindow,
     };
   }
 

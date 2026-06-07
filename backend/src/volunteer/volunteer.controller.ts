@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Query, ParseUUIDPipe, UseGuards, UseInterceptors, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Param, Query, ParseUUIDPipe, UseGuards, UseInterceptors, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { VolunteerService } from './volunteer.service';
@@ -70,6 +70,20 @@ export class VolunteerController {
   @ApiOperation({ summary: 'Sign up for a volunteer opportunity' })
   signup(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: SupabaseJwtPayload) {
     return this.volunteerService.signup(id, user.sub);
+  }
+
+  /**
+   * Member-facing withdraw — symmetric to POST signup. Idempotent
+   * (returns `{ withdrawn: true }` whether or not the caller was
+   * previously signed up). Audit row is emitted so the volunteer
+   * coordinator can see the change in the queue.
+   */
+  @Delete('opportunities/:id/signup')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Withdraw the caller\'s signup from a volunteer opportunity' })
+  @ApiResponse({ status: 200, description: '{ withdrawn: true }' })
+  withdraw(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: SupabaseJwtPayload) {
+    return this.volunteerService.withdrawSignup(id, user.sub);
   }
 
   @Get('hours/pending')

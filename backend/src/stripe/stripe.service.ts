@@ -525,13 +525,31 @@ export class StripeService {
     templateName: string;
     priceCents: number;
     userId: string;
+    /** Buyer's email so Stripe can pre-fill + customer-reuse. */
+    buyerEmail: string;
     successUrl: string;
     cancelUrl: string;
   }): Promise<Stripe.Checkout.Session> {
     const stripe = this.ensureStripe();
+
+    // Search for an existing Stripe Customer for this email and
+    // reuse it — without this, every paid install spawns a fresh
+    // Customer row for the same human (Stripe dashboard pollution +
+    // breaks saved-payment-method reuse on later installs).
+    let customerId: string | undefined;
+    try {
+      const existing = await stripe.customers.list({ email: params.buyerEmail, limit: 1 });
+      customerId = existing.data[0]?.id;
+    } catch (err: any) {
+      this.logger.warn(`Stripe customer lookup failed for ${params.buyerEmail}: ${err.message}`);
+    }
+
     return stripe.checkout.sessions.create(
       {
         mode: 'payment',
+        ...(customerId
+          ? { customer: customerId }
+          : { customer_email: params.buyerEmail }),
         line_items: [
           {
             quantity: 1,

@@ -321,6 +321,15 @@ export class MarketplaceService {
     // Paid template: redirect to Stripe Checkout. The webhook
     // handler calls installTemplate() after payment succeeds.
     if (template.price_cents > 0) {
+      // Lookup buyer email for Stripe customer reuse (avoids spawning
+      // a fresh Stripe Customer per install — was a deferred gap from
+      // migration 102 review).
+      const [buyer] = await this.dataSource.query(
+        `SELECT email FROM public.users WHERE id = $1`,
+        [userId],
+      );
+      const buyerEmail = buyer?.email ?? '';
+
       const successUrl = `${publicSiteUrl.replace(/\/$/, '')}/marketplace/installed?templateId=${templateId}`;
       const cancelUrl  = `${publicSiteUrl.replace(/\/$/, '')}/marketplace/${templateId}?cancelled=1`;
       const session = await this.stripe.createMarketplaceInstallSession({
@@ -329,6 +338,7 @@ export class MarketplaceService {
         templateName: template.name,
         priceCents: template.price_cents,
         userId,
+        buyerEmail,
         successUrl,
         cancelUrl,
       });

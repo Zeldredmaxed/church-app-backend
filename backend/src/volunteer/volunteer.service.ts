@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { rlsStorage } from '../common/storage/rls.storage';
 import { LogHoursDto } from './dto/log-hours.dto';
@@ -7,6 +7,8 @@ import { ProfileCompletenessService } from '../users/profile-completeness.servic
 
 @Injectable()
 export class VolunteerService {
+  private readonly logger = new Logger(VolunteerService.name);
+
   constructor(
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
@@ -70,6 +72,38 @@ export class VolunteerService {
       [opportunityId, userId],
     );
     return { message: 'Signed up successfully' };
+  }
+
+  /**
+   * Member-facing withdraw — symmetric to signup() above. Idempotent:
+   * returns `{ withdrawn: true }` whether or not the caller was
+   * previously signed up. Audit row lets the coordinator see the
+   * change in the queue.
+   */
+  async withdrawSignup(opportunityId: string, userId: string): Promise<{ withdrawn: true }> {
+    const { queryRunner } = this.getRlsContext();
+    const result = await queryRunner.query(
+      `DELETE FROM public.volunteer_signups
+       WHERE opportunity_id = $1 AND user_id = $2
+       RETURNING opportunity_id`,
+      [opportunityId, userId],
+    );
+    // result is an array of deleted rows; empty array = "wasn't
+    // signed up" → still return success (idempotent for client retry).
+    if (result.length > 0) {
+      try {
+        await this.audit.log({
+          action: 'volunteer.withdrew',
+          resourceType: 'volunteer_opportunity',
+          resourceId: opportunityId,
+          summary: 'Volunteer withdrew from opportunity',
+          metadata: { opportunityId, userId },
+        });
+      } catch (err: any) {
+        this.logger.warn(`volunteer.withdrew audit log failed: ${err.message}`);
+      }
+    }
+    return { withdrawn: true };
   }
 
   /**

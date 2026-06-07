@@ -94,6 +94,15 @@ export class Tenant {
   brandColor: string | null;
 
   /**
+   * Monthly church-wide giving goal in cents (e.g. 500_000 = $5,000).
+   * Drives the giving-progress widget on dashboards. NULL = no goal set.
+   * Column existed in the DB long before this entity field was added;
+   * settable via PATCH /api/tenants/:id (migration 100).
+   */
+  @Column({ type: 'bigint', nullable: true, name: 'monthly_giving_goal_cents' })
+  monthlyGivingGoalCents: number | null;
+
+  /**
    * Marks the single "no church home" tenant. A signed-up user who hasn't
    * joined any real church belongs here so the rest of the app's
    * tenant-required paths still work; church-only routes refuse to serve

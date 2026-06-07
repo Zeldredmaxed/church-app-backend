@@ -16,9 +16,11 @@ import { Invitation } from './entities/invitation.entity';
 import { TenantMembership } from '../memberships/entities/tenant-membership.entity';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { CreateInvitationDto } from './dto/create-invitation.dto';
+import { SignupAndAcceptInvitationDto } from './dto/signup-and-accept.dto';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
 import { AuditService } from '../audit/audit.service';
 import { EmailService } from '../common/services/email.service';
+import { SupabaseAdminService } from '../common/services/supabase-admin.service';
 
 const INVITATION_TTL_HOURS = 24;
 
@@ -31,6 +33,7 @@ export class InvitationsService {
     private readonly audit: AuditService,
     private readonly email: EmailService,
     private readonly config: ConfigService,
+    private readonly supabaseAdmin: SupabaseAdminService,
   ) {}
 
   /**
@@ -332,6 +335,156 @@ export class InvitationsService {
         'to activate your new church context.',
       tenantId: invitation.tenantId,
       role: invitation.role,
+    };
+  }
+
+  /**
+   * PUBLIC variant of acceptInvitation for brand-new invitees who
+   * don't yet have a Shepard account. Validates the invitation token,
+   * creates the Supabase auth user with the email locked to the
+   * invitation's email (caller cannot redirect the invite to a
+   * different address), accepts the membership, and returns Supabase
+   * session tokens for an immediate logged-in state.
+   *
+   * SERVICE-ROLE per design: the invitee has no JWT yet, so we
+   * can't use the request queryRunner. dataSource bypasses RLS;
+   * tenant_id is taken from the trusted invitation row, never from
+   * the request body.
+   */
+  async signupAndAcceptInvitation(
+    token: string,
+    dto: SignupAndAcceptInvitationDto,
+  ): Promise<{
+    user: { id: string; email: string };
+    tenantId: string;
+    role: string;
+    session: { access_token: string; refresh_token: string; expires_at: number | null } | null;
+  }> {
+    // Look up invitation via service role (RLS bypass — invitee has no JWT).
+    const invitation = await this.dataSource.manager.findOne(Invitation, {
+      where: { token },
+    });
+    if (!invitation) throw new NotFoundException('Invitation not found or already used');
+    if (invitation.acceptedAt !== null) {
+      throw new ConflictException('This invitation has already been accepted');
+    }
+    if (invitation.cancelledAt !== null) {
+      throw new GoneException('This invitation was cancelled by an admin.');
+    }
+    if (invitation.expiresAt < new Date()) {
+      throw new GoneException('This invitation has expired. Ask for a new one.');
+    }
+
+    const inviteEmail = invitation.email.toLowerCase();
+
+    // Reject if an auth user with this email already exists — they
+    // should use POST /:token/accept after logging in instead. We
+    // detect via direct SQL (NOT listUsers) — same pagination lesson
+    // as completeSignup.
+    const [existing] = await this.dataSource.query(
+      `SELECT id FROM auth.users WHERE lower(email) = lower($1) LIMIT 1`,
+      [inviteEmail],
+    );
+    if (existing) {
+      throw new ConflictException(
+        'An account with this email already exists. Log in and then accept the invitation.',
+      );
+    }
+
+    // Create the Supabase auth user. email_confirm=true: paying invited
+    // members shouldn't bounce through email confirmation since the
+    // invite link IS the confirmation step.
+    const fullName =
+      dto.fullName?.trim() ||
+      inviteEmail.split('@')[0].replace(/[._-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+    const { data: createdUser, error: createErr } =
+      await this.supabaseAdmin.client.auth.admin.createUser({
+        email: inviteEmail,
+        password: dto.password,
+        email_confirm: true,
+        user_metadata: {
+          full_name: fullName,
+          invited: true,
+          invited_to_tenant_id: invitation.tenantId,
+        },
+        app_metadata: {
+          current_tenant_id: invitation.tenantId,
+        },
+      });
+    if (createErr || !createdUser?.user) {
+      throw new InternalServerErrorException(
+        `Failed to create account: ${createErr?.message ?? 'unknown error'}`,
+      );
+    }
+    const newUserId = createdUser.user.id;
+
+    // Materialize membership + accept the invitation, atomically.
+    await this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `INSERT INTO public.users (id, email, full_name)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (id) DO UPDATE SET full_name = COALESCE(EXCLUDED.full_name, public.users.full_name)`,
+        [newUserId, inviteEmail, fullName],
+      );
+      await manager.query(
+        `INSERT INTO public.tenant_memberships (tenant_id, user_id, role, permissions)
+         VALUES ($1, $2, $3, '{}'::jsonb)
+         ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
+        [invitation.tenantId, newUserId, invitation.role],
+      );
+      await manager.query(
+        `UPDATE public.invitations SET accepted_at = now() WHERE id = $1 AND accepted_at IS NULL`,
+        [invitation.id],
+      );
+    });
+
+    // Sign the new user in immediately so the client can land logged-in.
+    // signInWithPassword via the admin client returns tokens; we
+    // expose the access/refresh pair to the caller.
+    let session: { access_token: string; refresh_token: string; expires_at: number | null } | null = null;
+    try {
+      const { data: signedIn, error: signInErr } =
+        await this.supabaseAdmin.client.auth.signInWithPassword({
+          email: inviteEmail,
+          password: dto.password,
+        });
+      if (signInErr) {
+        this.logger.warn(`signupAndAcceptInvitation: post-create signIn failed for ${inviteEmail}: ${signInErr.message}`);
+      } else if (signedIn?.session) {
+        session = {
+          access_token: signedIn.session.access_token,
+          refresh_token: signedIn.session.refresh_token,
+          expires_at: signedIn.session.expires_at ?? null,
+        };
+      }
+    } catch (err: any) {
+      this.logger.warn(`signupAndAcceptInvitation: signIn exception for ${inviteEmail}: ${err.message}`);
+    }
+
+    try {
+      await this.audit.log({
+        action: 'invitation.signed_up_and_accepted',
+        resourceType: 'user',
+        resourceId: invitation.id,
+        targetUserId: newUserId,
+        summary: `New account created from invitation for ${inviteEmail}`,
+        metadata: {
+          invitationId: invitation.id,
+          email: inviteEmail,
+          role: invitation.role,
+          tenantId: invitation.tenantId,
+        },
+      });
+    } catch (err: any) {
+      this.logger.warn(`signupAndAcceptInvitation: audit log failed: ${err.message}`);
+    }
+
+    return {
+      user: { id: newUserId, email: inviteEmail },
+      tenantId: invitation.tenantId,
+      role: invitation.role,
+      session,
     };
   }
 
