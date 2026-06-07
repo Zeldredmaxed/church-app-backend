@@ -23,7 +23,7 @@ import { RegisterChurchDto } from './dto/register-church.dto';
 import { TenantSignupDto } from './dto/signup.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
 import { SupabaseJwtPayload } from '../common/types/jwt-payload.type';
-import { getTierFeatures, TierFeatures, TIER_DISPLAY_NAMES, TIER_MONTHLY_PRICE_CENTS, TierName } from '../common/config/tier-features.config';
+import { getTierFeatures, TierFeatures, TIER_DISPLAY_NAMES, TIER_MONTHLY_PRICE_CENTS, TIER_YEARLY_PRICE_CENTS, TierName } from '../common/config/tier-features.config';
 import { CacheService } from '../common/services/cache.service';
 import { StripeService } from '../stripe/stripe.service';
 import { EmailService } from '../common/services/email.service';
@@ -524,7 +524,10 @@ export class TenantsService {
     // path idempotently via direct SQL — that's where the lookup belongs.
 
     const tier = dto.tier;
-    const amountCents = TIER_MONTHLY_PRICE_CENTS[tier];
+    const billingInterval = dto.billingInterval ?? 'monthly';
+    const amountCents = billingInterval === 'yearly'
+      ? TIER_YEARLY_PRICE_CENTS[tier]
+      : TIER_MONTHLY_PRICE_CENTS[tier];
     const tierLabel = TIER_DISPLAY_NAMES[tier];
 
     // success_url → admin dashboard (where the magic-link consumer lives)
@@ -536,9 +539,11 @@ export class TenantsService {
     // double-tap / network retry within the human-attempt window
     // returns the same Checkout session instead of creating a second
     // one. Keyed on the inputs that should uniquely identify ONE
-    // intent (admin email + tier + church name).
+    // intent (admin email + tier + billing interval + church name).
+    // billingInterval included so a monthly attempt and a subsequent
+    // yearly attempt don't collide on the same cached session.
     const idempotencyKey = createHash('sha256')
-      .update(`signup:${dto.adminEmail.toLowerCase()}:${tier}:${dto.churchName}`)
+      .update(`signup:${dto.adminEmail.toLowerCase()}:${tier}:${billingInterval}:${dto.churchName}`)
       .digest('hex')
       .slice(0, 40);
 
@@ -546,6 +551,7 @@ export class TenantsService {
       tier,
       amountCents,
       tierLabel,
+      billingInterval,
       successUrl,
       cancelUrl,
       adminEmail: dto.adminEmail,
@@ -554,6 +560,7 @@ export class TenantsService {
         adminFullName: dto.adminFullName,
         adminEmail: dto.adminEmail,
         tier,
+        billingInterval,
         addressStreet: dto.address.street,
         addressCity: dto.address.city,
         addressState: dto.address.state,

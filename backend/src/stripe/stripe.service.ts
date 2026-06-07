@@ -419,6 +419,12 @@ export class StripeService {
     tier: 'standard' | 'premium' | 'enterprise';
     amountCents: number;
     tierLabel: string;
+    /**
+     * 'monthly' (default behavior — unchanged from before) or 'yearly'.
+     * Yearly disables typed promo codes so a 6-month coupon
+     * (LAUNCH-6FREE etc.) can't accidentally discount a full year.
+     */
+    billingInterval: 'monthly' | 'yearly';
     successUrl: string;
     cancelUrl: string;
     adminEmail: string;
@@ -433,6 +439,7 @@ export class StripeService {
       adminFullName: string;
       adminEmail: string;
       tier: string;
+      billingInterval: 'monthly' | 'yearly';
       addressStreet: string;
       addressCity: string;
       addressState: string;
@@ -474,7 +481,7 @@ export class StripeService {
             quantity: 1,
             price_data: {
               currency: 'usd',
-              recurring: { interval: 'month' },
+              recurring: { interval: params.billingInterval === 'yearly' ? 'year' : 'month' },
               unit_amount: params.amountCents,
               product_data: { name: `Shepard ${params.tierLabel} Plan` },
             },
@@ -484,13 +491,18 @@ export class StripeService {
         cancel_url: params.cancelUrl,
         // CRITICAL: capture a card even at 100% off (6-month coupon).
         payment_method_collection: 'always',
-        allow_promotion_codes: true,
+        // Yearly: disable typed promo codes so a 6-month coupon
+        // can't accidentally apply to a yearly invoice (would
+        // discount the entire year). Monthly: keep promo codes
+        // enabled — that's how LAUNCH-6FREE works.
+        allow_promotion_codes: params.billingInterval === 'yearly' ? false : true,
         metadata: {
           flow: 'new_tenant_signup',
           churchName: params.signupMetadata.churchName,
           adminFullName: params.signupMetadata.adminFullName,
           adminEmail: params.signupMetadata.adminEmail,
           tier: params.signupMetadata.tier,
+          billingInterval: params.signupMetadata.billingInterval,
           addressStreet: params.signupMetadata.addressStreet,
           addressCity: params.signupMetadata.addressCity,
           addressState: params.signupMetadata.addressState,
@@ -502,6 +514,7 @@ export class StripeService {
             flow: 'new_tenant_signup',
             churchName: params.signupMetadata.churchName,
             tier: params.signupMetadata.tier,
+            billingInterval: params.signupMetadata.billingInterval,
           },
         },
       },

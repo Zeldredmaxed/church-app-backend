@@ -70,6 +70,16 @@ export class TenantSignupDto {
   @IsIn(['standard', 'premium', 'enterprise'])
   tier!: 'standard' | 'premium' | 'enterprise';
 
+  /**
+   * Billing interval. Optional — defaults to monthly.
+   * Yearly price = ×10 monthly (2 months free baked in) and the
+   * Stripe Checkout session disables typed promo codes so 6-month
+   * coupons can't accidentally apply to a yearly invoice.
+   */
+  @IsOptional()
+  @IsIn(['monthly', 'yearly'])
+  billingInterval?: 'monthly' | 'yearly';
+
   @ValidateNested()
   @Type(() => SignupAddressDto)
   address!: SignupAddressDto;

@@ -163,6 +163,19 @@ export const TIER_MONTHLY_PRICE_CENTS: Record<TierName, number> = {
 };
 
 /**
+ * Yearly subscription price = ×10 monthly (2 months free baked in).
+ * Matches the site's yearly display. NO coupons applied — the
+ * Stripe Checkout session for yearly signups disables typed promo
+ * codes so a 6-month-coupon can't accidentally discount a yearly
+ * invoice.
+ */
+export const TIER_YEARLY_PRICE_CENTS: Record<TierName, number> = {
+  standard: 39000,    // $390/yr
+  premium: 99000,     // $990/yr
+  enterprise: 249000, // $2,490/yr
+};
+
+/**
  * Ordinal rank used by upgrade-flow code to refuse downgrades and
  * already-on-tier requests. Higher number = higher tier.
  */
